@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext, useMemo } from 'react';
+import React, { useState, useEffect, createContext, useContext, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { 
   Package, Users, ShoppingCart, Plus, Search, Edit2, Trash2, Check, X, 
@@ -6,7 +6,7 @@ import {
   Euro, ArrowUpRight, ArrowDownRight, Menu, Bell, LogOut, 
   MapPin, Sprout, Sun, AlertTriangle, CheckCircle, 
   Phone, Mail, Receipt, Layers, Loader2, User, Lock, Eye as EyeIcon, EyeOff,
-  Wallet, TrendingUp, Send, FileDown, AlertCircle,
+  Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown
 } from 'lucide-react';
@@ -18,20 +18,39 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ==================== ROOTFLOW LOGO CON ERP ====================
-const RootFlowLogo = ({ size = 40, showERP = true }) => (
+// ==================== DATOS DE EMPRESA ====================
+const EMPRESA = {
+  nombre: 'ROOTFLOW HYDROPONICS SL',
+  direccion: 'C. Nueva, 16, P6',
+  cp: '28231',
+  ciudad: 'Las Rozas de Madrid, Madrid',
+  telefono: '+34 638 161 990',
+  email: 'info@rootflow.es',
+  web: 'www.rootflow.es',
+  cif: 'B12345678'
+};
+
+// ==================== ROOTFLOW LOGO OFICIAL ====================
+const RootFlowLogo = ({ size = 40, showERP = true, variant = 'color' }) => (
   <div className="relative">
-    <svg width={size} height={size} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="50" cy="50" r="48" fill="#F97316"/>
-      <path d="M50 18 C32 36, 26 54, 50 78 C74 54, 68 36, 50 18" fill="#22C55E"/>
-      <path d="M50 78 L50 88" stroke="#22C55E" strokeWidth="4" strokeLinecap="round"/>
-      <path d="M50 88 C44 93, 38 91, 35 95" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-      <path d="M50 88 C56 93, 62 91, 65 95" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
-      <path d="M50 28 L50 68" stroke="rgba(255,255,255,0.5)" strokeWidth="2"/>
-      <path d="M50 38 C44 44, 40 41, 36 45" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
-      <path d="M50 38 C56 44, 60 41, 64 45" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
-      <path d="M50 50 C42 57, 37 53, 32 58" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
-      <path d="M50 50 C58 57, 63 53, 68 58" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
+    <svg width={size} height={size * 1.4} viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
+      {/* Fondo verde en forma de cápsula */}
+      <rect x="5" y="5" width="90" height="130" rx="45" fill="#1B5E3B"/>
+      {/* Planta/Microgreens blanca */}
+      <g fill="white">
+        {/* Hoja central */}
+        <path d="M50 45 L50 95 L48 95 L48 45 Z"/>
+        <path d="M50 35 Q50 55, 50 75 Q45 55, 50 35"/>
+        {/* Hojas laterales izquierda */}
+        <path d="M50 70 Q30 50, 25 65 Q35 55, 50 70"/>
+        <path d="M50 85 Q20 70, 15 90 Q30 75, 50 85"/>
+        {/* Hojas laterales derecha */}
+        <path d="M50 70 Q70 50, 75 65 Q65 55, 50 70"/>
+        <path d="M50 85 Q80 70, 85 90 Q70 75, 50 85"/>
+        {/* Brotes adicionales */}
+        <path d="M50 60 Q35 40, 30 50 Q40 42, 50 60"/>
+        <path d="M50 60 Q65 40, 70 50 Q60 42, 50 60"/>
+      </g>
     </svg>
     {showERP && <span className="absolute -bottom-1 -right-1 bg-neutral-900 text-white text-[8px] font-black px-1.5 py-0.5 rounded">ERP</span>}
   </div>
@@ -39,15 +58,29 @@ const RootFlowLogo = ({ size = 40, showERP = true }) => (
 
 const RootFlowLogoFull = ({ showERP = true }) => (
   <div className="flex items-center gap-3">
-    <RootFlowLogo size={44} showERP={showERP} />
+    <RootFlowLogo size={32} showERP={showERP} />
     <div>
-      <h1 className="font-black text-xl tracking-tight">
-        <span className="text-neutral-900">Root</span>
-        <span className="text-orange-500">Flow</span>
-      </h1>
-      <p className="text-[10px] text-neutral-400 tracking-widest uppercase">Microgreens Madrid</p>
+      <h1 className="font-black text-lg tracking-tight text-white">RootFlow</h1>
+      <p className="text-[9px] text-neutral-400 tracking-wider uppercase">Hydroponics</p>
     </div>
   </div>
+);
+
+// Logo para facturas (sin badge ERP)
+const RootFlowLogoFactura = () => (
+  <svg width="60" height="84" viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
+    <rect x="5" y="5" width="90" height="130" rx="45" fill="#1B5E3B"/>
+    <g fill="white">
+      <path d="M50 45 L50 95 L48 95 L48 45 Z"/>
+      <path d="M50 35 Q50 55, 50 75 Q45 55, 50 35"/>
+      <path d="M50 70 Q30 50, 25 65 Q35 55, 50 70"/>
+      <path d="M50 85 Q20 70, 15 90 Q30 75, 50 85"/>
+      <path d="M50 70 Q70 50, 75 65 Q65 55, 50 70"/>
+      <path d="M50 85 Q80 70, 85 90 Q70 75, 50 85"/>
+      <path d="M50 60 Q35 40, 30 50 Q40 42, 50 60"/>
+      <path d="M50 60 Q65 40, 70 50 Q60 42, 50 60"/>
+    </g>
+  </svg>
 );
 
 // ==================== AUTH CONTEXT ====================
@@ -118,17 +151,29 @@ const AuthProvider = ({ children }) => {
 const useRealtime = (table) => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
-      const { data: d } = await supabase.from(table).select('*').order('created_at', { ascending: false });
-      setData(d || []);
+      try {
+        const { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+        if (e) {
+          console.warn(`Error cargando ${table}:`, e.message);
+          setError(e);
+          setData([]);
+        } else {
+          setData(d || []);
+        }
+      } catch (err) {
+        console.warn(`Error en ${table}:`, err);
+        setData([]);
+      }
       setLoading(false);
     };
     fetchData();
 
     const subscription = supabase
-      .channel(`${table}_realtime`)
+      .channel(`${table}_realtime_${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
         if (payload.eventType === 'INSERT') setData(prev => [payload.new, ...prev]);
         else if (payload.eventType === 'UPDATE') setData(prev => prev.map(item => item.id === payload.new.id ? payload.new : item));
@@ -139,7 +184,7 @@ const useRealtime = (table) => {
     return () => subscription.unsubscribe();
   }, [table]);
 
-  return { data, loading, setData };
+  return { data, loading, setData, error };
 };
 
 // ==================== HELPERS ====================
@@ -582,7 +627,6 @@ const MainApp = () => {
   const { data: facturas } = useRealtime('facturas');
   const { data: gastos } = useRealtime('gastos');
   const { data: lotes } = useRealtime('lotes');
-  const { data: alertas } = useRealtime('alertas');
 
   const loading = l1 || l2 || l3;
 
@@ -772,7 +816,18 @@ const MainApp = () => {
   };
 
   const PedidoForm = ({ pedido, onSave, onCancel }) => {
-    // Verificar que hay clientes y productos
+    const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
+    
+    const [form, setForm] = useState({ 
+      cliente_id: pedido?.cliente_id || (clientes.length > 0 ? clientes[0].id : null), 
+      fecha: pedido?.fecha || new Date().toISOString().split('T')[0], 
+      fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], 
+      estado: pedido?.estado || 'pendiente', 
+      items: existingItems.length > 0 ? existingItems : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []), 
+      notas: pedido?.notas || '' 
+    });
+
+    // Verificar que hay clientes y productos DESPUÉS de los hooks
     if (clientes.length === 0) {
       return (
         <div className="text-center py-8">
@@ -795,15 +850,6 @@ const MainApp = () => {
       );
     }
 
-    const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
-    const [form, setForm] = useState({ 
-      cliente_id: pedido?.cliente_id || clientes[0].id, 
-      fecha: pedido?.fecha || new Date().toISOString().split('T')[0], 
-      fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], 
-      estado: pedido?.estado || 'pendiente', 
-      items: existingItems.length > 0 ? existingItems : [{ producto_id: productos[0].id, cantidad: 1 }], 
-      notas: pedido?.notas || '' 
-    });
     const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0].id, cantidad: 1 }]});
     const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
     const updateItem = (idx, field, value) => { const newItems = [...form.items]; newItems[idx] = {...newItems[idx], [field]: value}; setForm({...form, items: newItems}); };
@@ -821,7 +867,7 @@ const MainApp = () => {
           <Input label="Entrega" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
         </div>
         <div>
-          <div className="flex justify-between mb-2"><label className="text-sm font-semibold text-neutral-700">Productos</label><button onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button></div>
+          <div className="flex justify-between mb-2"><label className="text-sm font-semibold text-neutral-700">Productos</label><button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button></div>
           <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
             {form.items.map((item, idx) => {
               const prod = productos.find(p => p.id === item.producto_id);
@@ -832,7 +878,7 @@ const MainApp = () => {
                   </select>
                   <input type="number" value={item.cantidad} onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} className="w-20 px-3 py-2 rounded-lg border text-sm text-center" min="1" />
                   <span className="text-sm font-semibold w-24 text-right">{formatCurrency((prod?.precio || 0) * item.cantidad)}</span>
-                  {form.items.length > 1 && <button onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>}
+                  {form.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>}
                 </div>
               );
             })}
@@ -1238,39 +1284,261 @@ const MainApp = () => {
     );
   };
 
-  const renderFacturacion = () => (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between"><div><h1 className="text-3xl font-black text-neutral-900">Facturación</h1><p className="text-neutral-500 font-medium">{facturas.length} registros</p></div></div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
-        <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
-        <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
-        <StatCard icon={AlertCircle} label="Vencidas" value={facturas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+  // Componente para ver factura
+  const FacturaPreview = ({ factura, cliente, pedidoItemsList, onClose }) => {
+    const items = pedidoItemsList.filter(i => i.pedido_id === factura.pedido_id);
+    
+    const handlePrint = () => {
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Factura ${factura.id}</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+            body { padding: 40px; background: white; color: #333; }
+            .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+            .logo-section { display: flex; align-items: center; gap: 15px; }
+            .logo { width: 50px; height: 70px; background: #1B5E3B; border-radius: 25px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; }
+            .logo svg { width: 40px; height: 40px; }
+            .company-name { font-size: 24px; font-weight: 800; color: #1B5E3B; }
+            .company-sub { font-size: 11px; color: #666; }
+            .factura-num { text-align: right; }
+            .factura-num h1 { font-size: 28px; color: #1B5E3B; margin-bottom: 5px; }
+            .factura-num p { color: #666; font-size: 13px; }
+            .addresses { display: flex; justify-content: space-between; margin-bottom: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
+            .address h3 { font-size: 12px; color: #999; text-transform: uppercase; margin-bottom: 8px; }
+            .address p { font-size: 13px; line-height: 1.6; }
+            .address strong { font-weight: 600; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th { background: #1B5E3B; color: white; padding: 12px 15px; text-align: left; font-size: 12px; text-transform: uppercase; }
+            td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 13px; }
+            .text-right { text-align: right; }
+            .totals { margin-left: auto; width: 300px; }
+            .totals-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+            .totals-row.total { border-top: 2px solid #1B5E3B; border-bottom: none; padding-top: 15px; font-size: 18px; font-weight: 800; color: #1B5E3B; }
+            .footer { margin-top: 60px; text-align: center; color: #999; font-size: 11px; }
+            .footer p { margin: 3px 0; }
+            @media print { body { padding: 20px; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo-section">
+              <div class="logo">
+                <svg viewBox="0 0 40 40" fill="white"><path d="M20 5 L20 25 M20 10 Q10 5, 8 12 Q14 8, 20 15 M20 10 Q30 5, 32 12 Q26 8, 20 15 M20 18 Q8 12, 5 22 Q12 15, 20 22 M20 18 Q32 12, 35 22 Q28 15, 20 22"/></svg>
+              </div>
+              <div>
+                <div class="company-name">RootFlow</div>
+                <div class="company-sub">HYDROPONICS</div>
+              </div>
+            </div>
+            <div class="factura-num">
+              <h1>FACTURA</h1>
+              <p><strong>${factura.id}</strong></p>
+              <p>Fecha: ${formatDate(factura.fecha)}</p>
+              <p>Vencimiento: ${formatDate(factura.fecha_vencimiento)}</p>
+            </div>
+          </div>
+          
+          <div class="addresses">
+            <div class="address">
+              <h3>Datos del emisor</h3>
+              <p><strong>${EMPRESA.nombre}</strong></p>
+              <p>${EMPRESA.direccion}</p>
+              <p>${EMPRESA.cp} ${EMPRESA.ciudad}</p>
+              <p>Tel: ${EMPRESA.telefono}</p>
+              <p>Email: ${EMPRESA.email}</p>
+            </div>
+            <div class="address">
+              <h3>Datos del cliente</h3>
+              <p><strong>${cliente?.nombre || 'Cliente'}</strong></p>
+              <p>${cliente?.direccion || ''}</p>
+              <p>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}</p>
+              <p>CIF: ${cliente?.cif || '-'}</p>
+              <p>Email: ${cliente?.email || ''}</p>
+            </div>
+          </div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Descripción</th>
+                <th class="text-right">Cantidad</th>
+                <th class="text-right">Precio Unit.</th>
+                <th class="text-right">Importe</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map(item => {
+                const prod = productos.find(p => p.id === item.producto_id);
+                return `<tr>
+                  <td>${prod?.nombre || 'Producto'}</td>
+                  <td class="text-right">${item.cantidad}</td>
+                  <td class="text-right">${formatCurrency(item.precio_unitario)}</td>
+                  <td class="text-right">${formatCurrency(item.subtotal)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          
+          <div class="totals">
+            <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(factura.subtotal)}</span></div>
+            ${factura.descuento_aplicado > 0 ? `<div class="totals-row"><span>Descuento</span><span>-${formatCurrency(factura.descuento_aplicado)}</span></div>` : ''}
+            <div class="totals-row"><span>Base Imponible</span><span>${formatCurrency(factura.base_imponible)}</span></div>
+            <div class="totals-row"><span>IVA (21%)</span><span>${formatCurrency(factura.iva)}</span></div>
+            <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(factura.total)}</span></div>
+          </div>
+          
+          <div class="footer">
+            <p><strong>${EMPRESA.nombre}</strong> · CIF: ${EMPRESA.cif}</p>
+            <p>${EMPRESA.direccion}, ${EMPRESA.cp} ${EMPRESA.ciudad}</p>
+            <p>${EMPRESA.telefono} · ${EMPRESA.email} · ${EMPRESA.web}</p>
+          </div>
+        </body>
+        </html>
+      `);
+      printWindow.document.close();
+      setTimeout(() => { printWindow.print(); }, 500);
+    };
+
+    return (
+      <Modal title={`Factura ${factura.id}`} onClose={onClose} size="max-w-4xl">
+        <div className="bg-white p-6 rounded-lg">
+          {/* Header */}
+          <div className="flex justify-between items-start mb-8 pb-6 border-b">
+            <div className="flex items-center gap-4">
+              <RootFlowLogoFactura />
+              <div>
+                <h2 className="text-xl font-bold text-green-800">RootFlow</h2>
+                <p className="text-xs text-neutral-500 uppercase tracking-wider">Hydroponics</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <h1 className="text-3xl font-black text-green-800">FACTURA</h1>
+              <p className="text-lg font-bold">{factura.id}</p>
+              <p className="text-sm text-neutral-500">Fecha: {formatDate(factura.fecha)}</p>
+              <p className="text-sm text-neutral-500">Vencimiento: {formatDate(factura.fecha_vencimiento)}</p>
+            </div>
+          </div>
+          
+          {/* Direcciones */}
+          <div className="grid grid-cols-2 gap-8 mb-8">
+            <div className="p-4 bg-neutral-50 rounded-lg">
+              <h3 className="text-xs font-bold text-neutral-400 uppercase mb-2">Emisor</h3>
+              <p className="font-bold text-neutral-900">{EMPRESA.nombre}</p>
+              <p className="text-sm text-neutral-600">{EMPRESA.direccion}</p>
+              <p className="text-sm text-neutral-600">{EMPRESA.cp} {EMPRESA.ciudad}</p>
+              <p className="text-sm text-neutral-600">{EMPRESA.telefono}</p>
+              <p className="text-sm text-neutral-600">{EMPRESA.email}</p>
+            </div>
+            <div className="p-4 bg-neutral-50 rounded-lg">
+              <h3 className="text-xs font-bold text-neutral-400 uppercase mb-2">Cliente</h3>
+              <p className="font-bold text-neutral-900">{cliente?.nombre}</p>
+              <p className="text-sm text-neutral-600">{cliente?.direccion}</p>
+              <p className="text-sm text-neutral-600">{cliente?.codigo_postal} {cliente?.ciudad}</p>
+              <p className="text-sm text-neutral-600">CIF: {cliente?.cif || '-'}</p>
+              <p className="text-sm text-neutral-600">{cliente?.email}</p>
+            </div>
+          </div>
+          
+          {/* Items */}
+          <table className="w-full mb-6">
+            <thead className="bg-green-800 text-white">
+              <tr>
+                <th className="text-left px-4 py-3 text-sm">Descripción</th>
+                <th className="text-right px-4 py-3 text-sm">Cantidad</th>
+                <th className="text-right px-4 py-3 text-sm">Precio Unit.</th>
+                <th className="text-right px-4 py-3 text-sm">Importe</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => {
+                const prod = productos.find(p => p.id === item.producto_id);
+                return (
+                  <tr key={idx} className="border-b">
+                    <td className="px-4 py-3">{prod?.nombre}</td>
+                    <td className="px-4 py-3 text-right">{item.cantidad}</td>
+                    <td className="px-4 py-3 text-right">{formatCurrency(item.precio_unitario)}</td>
+                    <td className="px-4 py-3 text-right font-semibold">{formatCurrency(item.subtotal)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          
+          {/* Totales */}
+          <div className="flex justify-end">
+            <div className="w-72">
+              <div className="flex justify-between py-2 border-b"><span>Subtotal</span><span>{formatCurrency(factura.subtotal)}</span></div>
+              {factura.descuento_aplicado > 0 && <div className="flex justify-between py-2 border-b text-green-600"><span>Descuento</span><span>-{formatCurrency(factura.descuento_aplicado)}</span></div>}
+              <div className="flex justify-between py-2 border-b"><span>Base Imponible</span><span>{formatCurrency(factura.base_imponible)}</span></div>
+              <div className="flex justify-between py-2 border-b"><span>IVA (21%)</span><span>{formatCurrency(factura.iva)}</span></div>
+              <div className="flex justify-between py-3 text-xl font-black text-green-800 border-t-2 border-green-800"><span>TOTAL</span><span>{formatCurrency(factura.total)}</span></div>
+            </div>
+          </div>
+          
+          {/* Acciones */}
+          <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
+            <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+            <Button onClick={handlePrint}><Printer size={18} /> Imprimir / PDF</Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
+  const renderFacturacion = () => {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between"><div><h1 className="text-3xl font-black text-neutral-900">Facturación</h1><p className="text-neutral-500 font-medium">{facturas.length} registros</p></div></div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
+          <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={AlertCircle} label="Vencidas" value={facturas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+        </div>
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Factura</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {facturas.map(factura => {
+                const cliente = clientes.find(c => c.id === factura.cliente_id);
+                const config = estadoFacturaConfig[factura.estado];
+                return (
+                  <tr key={factura.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p></td>
+                    <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
+                    <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
+                    <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
+                    <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-1">
+                        <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
+                        {factura.estado === 'pendiente' && <button onClick={() => supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagada"><Check size={16} /></button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {facturas.length === 0 && <EmptyState icon={Receipt} title="No hay facturas" description="Las facturas se generan al crear pedidos" />}
+        </Card>
+        
+        {/* Modal de factura */}
+        {selectedFactura && (
+          <FacturaPreview 
+            factura={selectedFactura} 
+            cliente={clientes.find(c => c.id === selectedFactura.cliente_id)} 
+            pedidoItemsList={pedidoItems}
+            onClose={() => setSelectedFactura(null)} 
+          />
+        )}
       </div>
-      <Card className="overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Factura</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
-          <tbody>
-            {facturas.map(factura => {
-              const cliente = clientes.find(c => c.id === factura.cliente_id);
-              const config = estadoFacturaConfig[factura.estado];
-              return (
-                <tr key={factura.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                  <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p></td>
-                  <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
-                  <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
-                  <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
-                  <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
-                  <td className="px-5 py-4"><div className="flex justify-end gap-1">{factura.estado === 'pendiente' && <button onClick={() => supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}</div></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {facturas.length === 0 && <EmptyState icon={Receipt} title="No hay facturas" description="Las facturas se generan al crear pedidos" />}
-      </Card>
-    </div>
-  );
+    );
+  };
 
   const renderGastos = () => {
     const exportColumns = [{ header: 'Fecha', accessor: g => formatDate(g.fecha) },{ header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },{ header: 'Concepto', accessor: g => g.concepto },{ header: 'Proveedor', accessor: g => g.proveedor },{ header: 'Importe', accessor: g => g.importe },{ header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' }];
