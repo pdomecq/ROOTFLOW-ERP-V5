@@ -1,0 +1,1317 @@
+import React, { useState, useEffect, createContext, useContext, useMemo } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import { 
+  Package, Users, ShoppingCart, Plus, Search, Edit2, Trash2, Check, X, 
+  Eye, FileText, Truck, Clock, Leaf, Building2, UtensilsCrossed, BarChart3, 
+  Euro, ArrowUpRight, ArrowDownRight, Menu, Bell, LogOut, 
+  MapPin, Sprout, Sun, AlertTriangle, CheckCircle, 
+  Phone, Mail, Receipt, Layers, Loader2, User, Lock, Eye as EyeIcon, EyeOff,
+  Wallet, TrendingUp, Send, FileDown, AlertCircle,
+  CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
+  Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown
+} from 'lucide-react';
+import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import * as XLSX from 'xlsx';
+
+// ==================== SUPABASE CONFIG ====================
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ==================== ROOTFLOW LOGO CON ERP ====================
+const RootFlowLogo = ({ size = 40, showERP = true }) => (
+  <div className="relative">
+    <svg width={size} height={size} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="50" cy="50" r="48" fill="#F97316"/>
+      <path d="M50 18 C32 36, 26 54, 50 78 C74 54, 68 36, 50 18" fill="#22C55E"/>
+      <path d="M50 78 L50 88" stroke="#22C55E" strokeWidth="4" strokeLinecap="round"/>
+      <path d="M50 88 C44 93, 38 91, 35 95" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
+      <path d="M50 88 C56 93, 62 91, 65 95" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" fill="none"/>
+      <path d="M50 28 L50 68" stroke="rgba(255,255,255,0.5)" strokeWidth="2"/>
+      <path d="M50 38 C44 44, 40 41, 36 45" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
+      <path d="M50 38 C56 44, 60 41, 64 45" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
+      <path d="M50 50 C42 57, 37 53, 32 58" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
+      <path d="M50 50 C58 57, 63 53, 68 58" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" fill="none"/>
+    </svg>
+    {showERP && <span className="absolute -bottom-1 -right-1 bg-neutral-900 text-white text-[8px] font-black px-1.5 py-0.5 rounded">ERP</span>}
+  </div>
+);
+
+const RootFlowLogoFull = ({ showERP = true }) => (
+  <div className="flex items-center gap-3">
+    <RootFlowLogo size={44} showERP={showERP} />
+    <div>
+      <h1 className="font-black text-xl tracking-tight">
+        <span className="text-neutral-900">Root</span>
+        <span className="text-orange-500">Flow</span>
+      </h1>
+      <p className="text-[10px] text-neutral-400 tracking-widest uppercase">Microgreens Madrid</p>
+    </div>
+  </div>
+);
+
+// ==================== AUTH CONTEXT ====================
+const AuthContext = createContext({});
+export const useAuth = () => useContext(AuthContext);
+
+const ALLOWED_DOMAIN = 'rootflow.es';
+
+const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchUserProfile(session.user.id);
+      setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) fetchUserProfile(session.user.id);
+      else setUserProfile(null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchUserProfile = async (userId) => {
+    const { data } = await supabase.from('usuarios').select('*').eq('id', userId).single();
+    setUserProfile(data);
+  };
+
+  const validateEmail = (email) => {
+    const domain = email.split('@')[1];
+    return domain === ALLOWED_DOMAIN;
+  };
+
+  const signIn = async (email, password) => {
+    if (!validateEmail(email)) {
+      return { data: null, error: { message: `Solo se permiten emails de @${ALLOWED_DOMAIN}` } };
+    }
+    return await supabase.auth.signInWithPassword({ email, password });
+  };
+
+  const signUp = async (email, password, nombre) => {
+    if (!validateEmail(email)) {
+      return { data: null, error: { message: `Solo se permiten emails de @${ALLOWED_DOMAIN}` } };
+    }
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (data?.user && !error) {
+      await supabase.from('usuarios').insert({ id: data.user.id, email, nombre, rol: 'socio' });
+    }
+    return { data, error };
+  };
+
+  const signOut = () => supabase.auth.signOut();
+
+  return (
+    <AuthContext.Provider value={{ user, userProfile, loading, signIn, signUp, signOut, supabase }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+// ==================== REALTIME HOOK ====================
+const useRealtime = (table) => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const { data: d } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      setData(d || []);
+      setLoading(false);
+    };
+    fetchData();
+
+    const subscription = supabase
+      .channel(`${table}_realtime`)
+      .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+        if (payload.eventType === 'INSERT') setData(prev => [payload.new, ...prev]);
+        else if (payload.eventType === 'UPDATE') setData(prev => prev.map(item => item.id === payload.new.id ? payload.new : item));
+        else if (payload.eventType === 'DELETE') setData(prev => prev.filter(item => item.id !== payload.old.id));
+      })
+      .subscribe();
+
+    return () => subscription.unsubscribe();
+  }, [table]);
+
+  return { data, loading, setData };
+};
+
+// ==================== HELPERS ====================
+const formatCurrency = (n) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
+const formatDate = (d) => d ? new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+const formatDateShort = (d) => d ? new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }) : '-';
+
+const CHART_COLORS = ['#F97316', '#22C55E', '#3B82F6', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F59E0B'];
+
+// Coordenadas aproximadas por código postal de Madrid
+const MADRID_CP_COORDS = {
+  '28001': { lat: 40.4234, lng: -3.6883, name: 'Salamanca' },
+  '28002': { lat: 40.4398, lng: -3.6773, name: 'Guindalera' },
+  '28003': { lat: 40.4412, lng: -3.7058, name: 'Trafalgar' },
+  '28004': { lat: 40.4262, lng: -3.7012, name: 'Justicia' },
+  '28005': { lat: 40.4089, lng: -3.7123, name: 'La Latina' },
+  '28006': { lat: 40.4356, lng: -3.6812, name: 'Recoletos' },
+  '28007': { lat: 40.4089, lng: -3.6723, name: 'Ibiza' },
+  '28008': { lat: 40.4234, lng: -3.7189, name: 'Argüelles' },
+  '28009': { lat: 40.4189, lng: -3.6723, name: 'Retiro' },
+  '28010': { lat: 40.4312, lng: -3.7012, name: 'Alonso Martínez' },
+  '28013': { lat: 40.4189, lng: -3.7089, name: 'Gran Vía' },
+  '28014': { lat: 40.4156, lng: -3.6956, name: 'Cortes' },
+  '28015': { lat: 40.4289, lng: -3.7123, name: 'Universidad' },
+  '28016': { lat: 40.4512, lng: -3.6789, name: 'Hispanoamérica' },
+  '28020': { lat: 40.4589, lng: -3.6923, name: 'Castillejos' },
+  '28023': { lat: 40.4712, lng: -3.7856, name: 'Aravaca' },
+  '28033': { lat: 40.4789, lng: -3.6423, name: 'Pinar del Rey' },
+  '28036': { lat: 40.4623, lng: -3.6889, name: 'Nueva España' },
+  '28043': { lat: 40.4623, lng: -3.6523, name: 'Piovera' },
+  '28046': { lat: 40.4689, lng: -3.6956, name: 'AZCA' },
+  '28053': { lat: 40.3756, lng: -3.6523, name: 'Mercamadrid' },
+};
+
+const getCoordsByCP = (cp) => MADRID_CP_COORDS[cp] || { lat: 40.4168, lng: -3.7038, name: 'Madrid Centro' };
+
+// ==================== EXPORT TO EXCEL ====================
+const exportToExcel = (data, filename, columns) => {
+  const exportData = data.map(item => {
+    const row = {};
+    columns.forEach(col => { row[col.header] = col.accessor(item); });
+    return row;
+  });
+  const ws = XLSX.utils.json_to_sheet(exportData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Datos');
+  ws['!cols'] = columns.map(col => ({ wch: Math.max(col.header.length, 15) }));
+  XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+};
+
+// ==================== CONFIGS ====================
+const estadoConfig = {
+  pendiente: { label: "Pendiente", color: "bg-amber-100 text-amber-700 border-amber-200", icon: Clock },
+  en_preparacion: { label: "Preparando", color: "bg-blue-100 text-blue-700 border-blue-200", icon: Package },
+  enviado: { label: "Enviado", color: "bg-purple-100 text-purple-700 border-purple-200", icon: Truck },
+  entregado: { label: "Entregado", color: "bg-green-100 text-green-700 border-green-200", icon: Check },
+  cancelado: { label: "Cancelado", color: "bg-red-100 text-red-700 border-red-200", icon: X },
+};
+
+const estadoFacturaConfig = {
+  pendiente: { label: "Pendiente", color: "bg-amber-100 text-amber-700" },
+  pagada: { label: "Pagada", color: "bg-green-100 text-green-700" },
+  vencida: { label: "Vencida", color: "bg-red-100 text-red-700" },
+  cancelada: { label: "Cancelada", color: "bg-neutral-100 text-neutral-700" },
+};
+
+const estadoLoteConfig = {
+  sembrado: { label: "Sembrado", color: "bg-amber-100 text-amber-700", icon: Sprout },
+  creciendo: { label: "Creciendo", color: "bg-green-100 text-green-700", icon: Sun },
+  cosechado: { label: "Cosechado", color: "bg-blue-100 text-blue-700", icon: Check },
+  descartado: { label: "Descartado", color: "bg-red-100 text-red-700", icon: X },
+};
+
+const estadoLeadConfig = {
+  nuevo: { label: "Nuevo", color: "bg-blue-100 text-blue-700", icon: Star },
+  contactado: { label: "Contactado", color: "bg-purple-100 text-purple-700", icon: Phone },
+  interesado: { label: "Interesado", color: "bg-amber-100 text-amber-700", icon: Target },
+  negociando: { label: "Negociando", color: "bg-orange-100 text-orange-700", icon: TrendingUp },
+  ganado: { label: "Ganado", color: "bg-green-100 text-green-700", icon: Check },
+  perdido: { label: "Perdido", color: "bg-red-100 text-red-700", icon: X },
+};
+
+const tipoClienteConfig = {
+  mercamadrid: { label: "Mercamadrid", icon: Building2, color: "text-orange-600 bg-orange-50 border-orange-200" },
+  hotel: { label: "Hotel", icon: Building2, color: "text-blue-600 bg-blue-50 border-blue-200" },
+  restaurante: { label: "Restaurante", icon: UtensilsCrossed, color: "text-green-600 bg-green-50 border-green-200" },
+  catering: { label: "Catering", icon: Truck, color: "text-purple-600 bg-purple-50 border-purple-200" },
+  tienda: { label: "Tienda", icon: Package, color: "text-pink-600 bg-pink-50 border-pink-200" },
+  otro: { label: "Otro", icon: MoreVertical, color: "text-neutral-600 bg-neutral-50 border-neutral-200" },
+};
+
+const zonaConfig = {
+  norte: { label: "Norte", color: "bg-sky-100 text-sky-700" },
+  centro: { label: "Centro", color: "bg-violet-100 text-violet-700" },
+  sur: { label: "Sur", color: "bg-rose-100 text-rose-700" },
+};
+
+const origenLeadConfig = {
+  web: { label: "Web", color: "bg-blue-100 text-blue-700" },
+  referido: { label: "Referido", color: "bg-green-100 text-green-700" },
+  feria: { label: "Feria", color: "bg-purple-100 text-purple-700" },
+  llamada: { label: "Llamada", color: "bg-amber-100 text-amber-700" },
+  email: { label: "Email", color: "bg-sky-100 text-sky-700" },
+  redes: { label: "Redes", color: "bg-pink-100 text-pink-700" },
+  importado: { label: "Importado", color: "bg-orange-100 text-orange-700" },
+  otro: { label: "Otro", color: "bg-neutral-100 text-neutral-700" },
+};
+
+const categoriasGasto = {
+  semillas: { label: "Semillas", icon: Sprout, color: "bg-green-100 text-green-700" },
+  sustratos: { label: "Sustratos", icon: Layers, color: "bg-amber-100 text-amber-700" },
+  envases: { label: "Envases", icon: Package, color: "bg-blue-100 text-blue-700" },
+  transporte: { label: "Transporte", icon: Truck, color: "bg-purple-100 text-purple-700" },
+  luz: { label: "Electricidad", icon: Zap, color: "bg-yellow-100 text-yellow-700" },
+  agua: { label: "Agua", icon: Layers, color: "bg-cyan-100 text-cyan-700" },
+  alquiler: { label: "Alquiler", icon: Building2, color: "bg-neutral-100 text-neutral-700" },
+  personal: { label: "Personal", icon: Users, color: "bg-pink-100 text-pink-700" },
+  marketing: { label: "Marketing", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700" },
+  otros: { label: "Otros", icon: MoreVertical, color: "bg-gray-100 text-gray-700" },
+};
+
+// ==================== UI COMPONENTS ====================
+const Card = ({ children, className = "", onClick }) => (
+  <div onClick={onClick} className={`bg-white rounded-2xl border border-neutral-200 shadow-sm ${className}`}>
+    {children}
+  </div>
+);
+
+const Button = ({ children, variant = "primary", size = "md", className = "", ...props }) => {
+  const variants = {
+    primary: "bg-orange-500 text-white hover:bg-orange-600 hover:shadow-lg hover:shadow-orange-500/25",
+    secondary: "bg-white border border-neutral-300 text-neutral-700 hover:bg-neutral-50",
+    ghost: "text-neutral-600 hover:bg-neutral-100",
+    danger: "bg-red-500 text-white hover:bg-red-600",
+    success: "bg-green-500 text-white hover:bg-green-600",
+  };
+  const sizes = { sm: "px-3 py-1.5 text-sm", md: "px-4 py-2.5", lg: "px-6 py-3 text-lg" };
+  return (
+    <button className={`font-semibold rounded-xl transition-all duration-200 flex items-center justify-center gap-2 ${variants[variant]} ${sizes[size]} ${className}`} {...props}>
+      {children}
+    </button>
+  );
+};
+
+const Input = ({ label, icon: Icon, className = "", ...props }) => (
+  <div className={className}>
+    {label && <label className="block text-sm font-semibold text-neutral-700 mb-1.5">{label}</label>}
+    <div className="relative">
+      {Icon && <Icon size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />}
+      <input className={`w-full ${Icon ? 'pl-10' : 'pl-4'} pr-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none transition-all bg-white`} {...props} />
+    </div>
+  </div>
+);
+
+const Select = ({ label, options, className = "", ...props }) => (
+  <div className={className}>
+    {label && <label className="block text-sm font-semibold text-neutral-700 mb-1.5">{label}</label>}
+    <select className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none bg-white" {...props}>
+      {options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+    </select>
+  </div>
+);
+
+const Badge = ({ children, variant = "default", className = "" }) => {
+  const variants = {
+    default: "bg-neutral-100 text-neutral-700",
+    success: "bg-green-100 text-green-700",
+    warning: "bg-amber-100 text-amber-700",
+    danger: "bg-red-100 text-red-700",
+    info: "bg-blue-100 text-blue-700",
+    orange: "bg-orange-100 text-orange-700",
+  };
+  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${variants[variant]} ${className}`}>{children}</span>;
+};
+
+const StatCard = ({ icon: Icon, label, value, subvalue, trend, color, onClick }) => (
+  <Card className={`p-5 hover:shadow-md transition-all cursor-pointer ${onClick ? 'hover:-translate-y-1' : ''}`} onClick={onClick}>
+    <div className="flex items-start justify-between">
+      <div className={`p-3 rounded-xl ${color}`}><Icon size={22} /></div>
+      {trend !== undefined && (
+        <div className={`flex items-center gap-1 text-sm font-bold ${trend >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+          {trend >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}{Math.abs(trend)}%
+        </div>
+      )}
+    </div>
+    <div className="mt-4">
+      <p className="text-2xl font-black text-neutral-900">{value}</p>
+      <p className="text-neutral-500 text-sm mt-0.5 font-medium">{label}</p>
+      {subvalue && <p className="text-xs text-neutral-400 mt-1">{subvalue}</p>}
+    </div>
+  </Card>
+);
+
+const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+    <div className={`bg-white rounded-2xl shadow-2xl w-full ${size} max-h-[90vh] overflow-hidden`} onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between p-5 border-b border-neutral-200">
+        <h3 className="text-xl font-bold text-neutral-900">{title}</h3>
+        <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-xl"><X size={20} /></button>
+      </div>
+      <div className="p-5 overflow-y-auto max-h-[calc(90vh-80px)]">{children}</div>
+    </div>
+  </div>
+);
+
+const LoadingScreen = () => (
+  <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+    <div className="flex flex-col items-center gap-4">
+      <RootFlowLogo size={80} />
+      <div className="flex items-center gap-2">
+        <Loader2 size={24} className="animate-spin text-orange-500" />
+        <span className="text-neutral-600 font-semibold">Cargando...</span>
+      </div>
+    </div>
+  </div>
+);
+
+const EmptyState = ({ icon: Icon, title, description, action }) => (
+  <div className="flex flex-col items-center justify-center py-12 text-center">
+    <div className="w-16 h-16 rounded-2xl bg-neutral-100 flex items-center justify-center mb-4"><Icon size={32} className="text-neutral-400" /></div>
+    <h3 className="text-lg font-bold text-neutral-800 mb-1">{title}</h3>
+    <p className="text-neutral-500 text-sm mb-4 max-w-sm">{description}</p>
+    {action}
+  </div>
+);
+
+// ==================== VIEW SWITCHER ====================
+const ViewSwitcher = ({ view, setView, onExport, showMap = false, onMapToggle }) => (
+  <div className="flex items-center gap-2">
+    <div className="flex items-center bg-neutral-100 rounded-xl p-1">
+      <button onClick={() => setView('grid')} className={`p-2 rounded-lg transition-all ${view === 'grid' ? 'bg-white shadow-sm text-orange-600' : 'text-neutral-500 hover:text-neutral-700'}`} title="Cuadrícula"><LayoutGrid size={18} /></button>
+      <button onClick={() => setView('list')} className={`p-2 rounded-lg transition-all ${view === 'list' ? 'bg-white shadow-sm text-orange-600' : 'text-neutral-500 hover:text-neutral-700'}`} title="Lista"><List size={18} /></button>
+      <button onClick={() => setView('table')} className={`p-2 rounded-lg transition-all ${view === 'table' ? 'bg-white shadow-sm text-orange-600' : 'text-neutral-500 hover:text-neutral-700'}`} title="Tabla"><Table size={18} /></button>
+      {showMap && <button onClick={onMapToggle} className={`p-2 rounded-lg transition-all ${view === 'map' ? 'bg-white shadow-sm text-orange-600' : 'text-neutral-500 hover:text-neutral-700'}`} title="Mapa"><Map size={18} /></button>}
+    </div>
+    <Button variant="secondary" size="sm" onClick={onExport}><FileSpreadsheet size={16} /> Excel</Button>
+  </div>
+);
+
+// ==================== MAP COMPONENT ====================
+const MapView = ({ items, type = 'clientes' }) => {
+  const groupedByCP = useMemo(() => {
+    const groups = {};
+    items.forEach(item => {
+      const cp = item.codigo_postal || '28013';
+      if (!groups[cp]) groups[cp] = { items: [], coords: getCoordsByCP(cp) };
+      groups[cp].items.push(item);
+    });
+    return groups;
+  }, [items]);
+
+  const totalItems = items.length;
+  const cpList = Object.keys(groupedByCP);
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-neutral-900">Mapa de {type === 'clientes' ? 'Clientes' : 'Leads'}</h3>
+            <p className="text-sm text-neutral-500">{totalItems} {type} en {cpList.length} zonas</p>
+          </div>
+          <Badge variant="orange"><MapPin size={14} /> Por Código Postal</Badge>
+        </div>
+        
+        {/* Mapa visual simplificado */}
+        <div className="relative bg-gradient-to-br from-green-50 to-blue-50 rounded-xl h-96 overflow-hidden border-2 border-neutral-200">
+          {/* Grid de Madrid */}
+          <div className="absolute inset-0 p-4">
+            <div className="grid grid-cols-4 grid-rows-4 h-full gap-2">
+              {Object.entries(groupedByCP).map(([cp, data]) => {
+                const size = Math.min(60, 20 + data.items.length * 10);
+                const color = type === 'clientes' ? 'bg-orange-500' : 'bg-green-500';
+                return (
+                  <div key={cp} className="relative flex items-center justify-center group cursor-pointer" style={{ gridColumn: Math.ceil(Math.random() * 4), gridRow: Math.ceil(Math.random() * 4) }}>
+                    <div className={`${color} rounded-full flex items-center justify-center text-white font-bold shadow-lg transition-transform hover:scale-110`} style={{ width: size, height: size }}>
+                      {data.items.length}
+                    </div>
+                    <div className="absolute bottom-full mb-2 bg-neutral-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                      <p className="font-bold">{cp} - {data.coords.name}</p>
+                      <p>{data.items.length} {type}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Leyenda */}
+          <div className="absolute bottom-4 left-4 bg-white/90 backdrop-blur rounded-lg p-3 shadow">
+            <p className="text-xs font-bold text-neutral-700 mb-2">Leyenda</p>
+            <div className="flex items-center gap-2 text-xs">
+              <div className={`w-4 h-4 rounded-full ${type === 'clientes' ? 'bg-orange-500' : 'bg-green-500'}`}></div>
+              <span>= {type}</span>
+            </div>
+            <p className="text-[10px] text-neutral-400 mt-1">Tamaño = cantidad</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Lista de zonas */}
+      <Card className="overflow-hidden">
+        <div className="p-4 border-b border-neutral-100">
+          <h4 className="font-bold text-neutral-900">Distribución por Código Postal</h4>
+        </div>
+        <div className="divide-y divide-neutral-100">
+          {Object.entries(groupedByCP).sort((a, b) => b[1].items.length - a[1].items.length).map(([cp, data]) => (
+            <div key={cp} className="p-4 flex items-center justify-between hover:bg-neutral-50">
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-lg ${type === 'clientes' ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600'} flex items-center justify-center font-bold`}>
+                  {data.items.length}
+                </div>
+                <div>
+                  <p className="font-semibold text-neutral-900">{cp} - {data.coords.name}</p>
+                  <p className="text-xs text-neutral-500">{data.items.map(i => i.nombre).slice(0, 3).join(', ')}{data.items.length > 3 ? '...' : ''}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-bold text-neutral-700">{((data.items.length / totalItems) * 100).toFixed(0)}%</p>
+                <div className="w-20 h-2 bg-neutral-200 rounded-full overflow-hidden">
+                  <div className={`h-full ${type === 'clientes' ? 'bg-orange-500' : 'bg-green-500'}`} style={{ width: `${(data.items.length / totalItems) * 100}%` }}></div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+// ==================== LOGIN PAGE ====================
+const LoginPage = () => {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [nombre, setNombre] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const { signIn, signUp } = useAuth();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setSuccess('');
+    
+    if (isLogin) {
+      const { error } = await signIn(email, password);
+      if (error) setError(error.message);
+    } else {
+      if (!nombre.trim()) { setError('El nombre es obligatorio'); setLoading(false); return; }
+      const { error } = await signUp(email, password, nombre);
+      if (error) setError(error.message);
+      else { setSuccess('¡Cuenta creada! Revisa tu email.'); setIsLogin(true); }
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-neutral-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4"><RootFlowLogo size={80} /></div>
+          <h1 className="text-3xl font-black"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1>
+          <p className="text-neutral-400 mt-1 font-medium">Sistema de Gestión ERP</p>
+        </div>
+
+        <Card className="p-8">
+          <h2 className="text-2xl font-bold text-neutral-900 mb-1">{isLogin ? 'Iniciar Sesión' : 'Crear Cuenta'}</h2>
+          <p className="text-neutral-500 mb-6">{isLogin ? 'Accede a tu panel' : 'Únete al equipo'}</p>
+
+          {error && <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm flex items-center gap-2"><AlertTriangle size={16} />{error}</div>}
+          {success && <div className="mb-4 p-3 rounded-xl bg-green-50 border border-green-200 text-green-600 text-sm flex items-center gap-2"><CheckCircle size={16} />{success}</div>}
+
+          <div className="mb-4 p-3 rounded-xl bg-orange-50 border border-orange-200 text-orange-700 text-sm flex items-center gap-2">
+            <Mail size={16} />
+            <span>Solo emails <strong>@rootflow.es</strong></span>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {!isLogin && <Input label="Nombre" icon={User} value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Tu nombre" />}
+            <Input label="Email corporativo" icon={Mail} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@rootflow.es" required />
+            <div>
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Contraseña</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
+                  className="w-full pl-10 pr-12 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+                  placeholder="••••••••" required minLength={6} />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600">
+                  {showPassword ? <EyeOff size={18} /> : <EyeIcon size={18} />}
+                </button>
+              </div>
+            </div>
+            <Button type="submit" disabled={loading} className="w-full">
+              {loading ? <><Loader2 size={20} className="animate-spin" />Procesando...</> : (isLogin ? 'Entrar' : 'Crear Cuenta')}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button onClick={() => { setIsLogin(!isLogin); setError(''); setSuccess(''); }} className="text-sm text-orange-600 hover:text-orange-700 font-semibold">
+              {isLogin ? '¿No tienes cuenta? Regístrate' : '¿Ya tienes cuenta? Inicia sesión'}
+            </button>
+          </div>
+        </Card>
+
+        <p className="text-center text-neutral-500 text-xs mt-6">© 2024 RootFlow · Microgreens Madrid</p>
+      </div>
+    </div>
+  );
+};
+
+// ==================== MAIN APP ====================
+const MainApp = () => {
+  const { user, userProfile, signOut } = useAuth();
+  const [activeSection, setActiveSection] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showModal, setShowModal] = useState(null);
+  const [editingItem, setEditingItem] = useState(null);
+  const [filterEstado, setFilterEstado] = useState('todos');
+  const [selectedFactura, setSelectedFactura] = useState(null);
+  
+  const [viewClientes, setViewClientes] = useState('grid');
+  const [viewLeads, setViewLeads] = useState('table');
+  const [viewPedidos, setViewPedidos] = useState('table');
+  const [viewProductos, setViewProductos] = useState('table');
+  const [viewFacturas, setViewFacturas] = useState('table');
+  const [viewGastos, setViewGastos] = useState('table');
+  const [viewLotes, setViewLotes] = useState('table');
+
+  const { data: clientes, loading: l1 } = useRealtime('clientes');
+  const { data: leads, setData: setLeads } = useRealtime('leads');
+  const { data: productos, loading: l2 } = useRealtime('productos');
+  const { data: pedidos, loading: l3 } = useRealtime('pedidos');
+  const { data: pedidoItems } = useRealtime('pedido_items');
+  const { data: facturas } = useRealtime('facturas');
+  const { data: gastos } = useRealtime('gastos');
+  const { data: lotes } = useRealtime('lotes');
+  const { data: alertas } = useRealtime('alertas');
+
+  const loading = l1 || l2 || l3;
+
+  // Metrics
+  const ventasMes = pedidos.filter(p => p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0);
+  const pedidosPendientes = pedidos.filter(p => ['pendiente', 'en_preparacion'].includes(p.estado)).length;
+  const facturasPendientesTotal = facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0);
+  const gastosMes = gastos.reduce((sum, g) => sum + (g.importe || 0), 0);
+  const stockBajo = productos.filter(p => p.stock < (p.stock_minimo || 20)).length;
+  const lotesActivos = lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).length;
+  const alertasNoLeidas = alertas.filter(a => !a.leida).length;
+  const leadsNuevos = leads.filter(l => l.estado === 'nuevo').length;
+
+  // CRUD
+  const handleSave = async (table, form, id = null) => {
+    try {
+      if (id) { await supabase.from(table).update(form).eq('id', id); }
+      else {
+        if (table === 'lotes') {
+          const year = new Date().getFullYear();
+          const { count } = await supabase.from('lotes').select('*', { count: 'exact', head: true });
+          form.id = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
+        }
+        await supabase.from(table).insert(form);
+      }
+      setShowModal(null);
+      setEditingItem(null);
+    } catch (error) { console.error('Error:', error); }
+  };
+
+  const handleDelete = async (table, id) => {
+    if (window.confirm('¿Eliminar este elemento?')) {
+      await supabase.from(table).delete().eq('id', id);
+    }
+  };
+
+  // Import Leads from Excel
+  const handleImportLeads = async (file) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet);
+        
+        const leadsToInsert = json.map(row => ({
+          nombre: row.nombre || row.Nombre || row.NOMBRE || '',
+          empresa: row.empresa || row.Empresa || row.EMPRESA || '',
+          tipo: (row.tipo || row.Tipo || 'otro').toLowerCase(),
+          contacto: row.contacto || row.Contacto || '',
+          email: row.email || row.Email || row.EMAIL || '',
+          telefono: String(row.telefono || row.Telefono || row.TELEFONO || ''),
+          direccion: row.direccion || row.Direccion || '',
+          codigo_postal: String(row.codigo_postal || row.cp || row.CP || ''),
+          ciudad: row.ciudad || row.Ciudad || 'Madrid',
+          zona: (row.zona || row.Zona || 'centro').toLowerCase(),
+          estado: 'nuevo',
+          origen: 'importado',
+          valor_estimado: parseFloat(row.valor_estimado || row.valor || 0) || 0,
+          notas: row.notas || row.Notas || ''
+        })).filter(l => l.nombre);
+
+        if (leadsToInsert.length > 0) {
+          const { error } = await supabase.from('leads').insert(leadsToInsert);
+          if (error) throw error;
+          alert(`✅ ${leadsToInsert.length} leads importados correctamente`);
+        } else {
+          alert('No se encontraron leads válidos en el archivo');
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Error al importar: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleCreatePedido = async (form) => {
+    try {
+      const cliente = clientes.find(c => c.id === form.cliente_id);
+      const descuento = cliente?.descuento || 0;
+      let subtotal = 0;
+      const itemsData = form.items.map(item => {
+        const prod = productos.find(p => p.id === item.producto_id);
+        const itemSubtotal = (prod?.precio || 0) * item.cantidad;
+        subtotal += itemSubtotal;
+        return { ...item, precio_unitario: prod?.precio || 0, subtotal: itemSubtotal };
+      });
+      const descuentoAplicado = subtotal * (descuento / 100);
+      const total = subtotal - descuentoAplicado;
+
+      const pedidoData = { cliente_id: form.cliente_id, fecha: form.fecha, fecha_entrega: form.fecha_entrega, estado: form.estado, notas: form.notas, subtotal, descuento_aplicado: descuentoAplicado, total, created_by: user.id };
+
+      let pedidoId;
+      if (editingItem) {
+        await supabase.from('pedidos').update(pedidoData).eq('id', editingItem.id);
+        await supabase.from('pedido_items').delete().eq('pedido_id', editingItem.id);
+        pedidoId = editingItem.id;
+      } else {
+        const { data: newPedido } = await supabase.from('pedidos').insert(pedidoData).select().single();
+        pedidoId = newPedido.id;
+      }
+
+      for (const item of itemsData) {
+        await supabase.from('pedido_items').insert({ pedido_id: pedidoId, producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario, subtotal: item.subtotal });
+      }
+
+      if (!editingItem) {
+        const year = new Date().getFullYear();
+        const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
+        const facturaId = `F-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        const fechaVencimiento = new Date(); fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
+        const baseImponible = total;
+        const iva = baseImponible * 0.21;
+        await supabase.from('facturas').insert({ id: facturaId, pedido_id: pedidoId, cliente_id: form.cliente_id, fecha: new Date().toISOString().split('T')[0], fecha_vencimiento: fechaVencimiento.toISOString().split('T')[0], estado: 'pendiente', subtotal, descuento_aplicado: descuentoAplicado, base_imponible: baseImponible, iva_porcentaje: 21, iva, total: baseImponible + iva });
+      }
+      setShowModal(null);
+      setEditingItem(null);
+    } catch (error) { console.error('Error:', error); }
+  };
+
+  // ==================== FORMS ====================
+  const ClienteForm = ({ cliente, onSave, onCancel }) => {
+    const [form, setForm] = useState(cliente || { nombre: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', descuento: 0, cif: '' });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
+          <Input label="CIF/NIF" value={form.cif} onChange={e => setForm({...form, cif: e.target.value})} />
+          <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[{ value: 'mercamadrid', label: 'Mercamadrid' }, { value: 'hotel', label: 'Hotel' }, { value: 'restaurante', label: 'Restaurante' }]} />
+          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={[{ value: 'norte', label: 'Norte' }, { value: 'centro', label: 'Centro' }, { value: 'sur', label: 'Sur' }]} />
+          <Input label="Descuento (%)" type="number" value={form.descuento} onChange={e => setForm({...form, descuento: parseInt(e.target.value) || 0})} />
+          <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+          <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
+          <Input label="Código Postal" value={form.codigo_postal} onChange={e => setForm({...form, codigo_postal: e.target.value})} placeholder="28001" />
+          <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{cliente ? 'Guardar' : 'Crear'}</Button></div>
+      </div>
+    );
+  };
+
+  const LeadForm = ({ lead, onSave, onCancel }) => {
+    const [form, setForm] = useState(lead || { nombre: '', empresa: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', estado: 'nuevo', origen: 'web', valor_estimado: 0, notas: '' });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre/Empresa" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
+          <Input label="Empresa" value={form.empresa} onChange={e => setForm({...form, empresa: e.target.value})} />
+          <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLeadConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Select label="Origen" value={form.origen} onChange={e => setForm({...form, origen: e.target.value})} options={Object.entries(origenLeadConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={[{ value: 'norte', label: 'Norte' }, { value: 'centro', label: 'Centro' }, { value: 'sur', label: 'Sur' }]} />
+          <Input label="Valor Estimado (€)" type="number" value={form.valor_estimado} onChange={e => setForm({...form, valor_estimado: parseFloat(e.target.value) || 0})} />
+          <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+          <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
+          <Input label="Código Postal" value={form.codigo_postal} onChange={e => setForm({...form, codigo_postal: e.target.value})} placeholder="28001" />
+          <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
+        </div>
+        <div><label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label><textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} /></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lead ? 'Guardar' : 'Crear'}</Button></div>
+      </div>
+    );
+  };
+
+  const ProductoForm = ({ producto, onSave, onCancel }) => {
+    const [form, setForm] = useState(producto || { nombre: '', categoria: 'nutritivos', precio: 0, coste: 0, stock: 0, stock_minimo: 20, unidad: 'bandeja 100g', dias_crecimiento: 7 });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[{ value: 'picantes', label: 'Picantes' }, { value: 'dulces', label: 'Dulces' }, { value: 'coloridos', label: 'Coloridos' }, { value: 'nutritivos', label: 'Nutritivos' }, { value: 'aromaticos', label: 'Aromáticos' }, { value: 'mix', label: 'Mix' }]} />
+          <Input label="Unidad" value={form.unidad} onChange={e => setForm({...form, unidad: e.target.value})} />
+          <Input label="Precio (€)" type="number" step="0.5" value={form.precio} onChange={e => setForm({...form, precio: parseFloat(e.target.value) || 0})} />
+          <Input label="Coste (€)" type="number" step="0.5" value={form.coste} onChange={e => setForm({...form, coste: parseFloat(e.target.value) || 0})} />
+          <Input label="Stock" type="number" value={form.stock} onChange={e => setForm({...form, stock: parseInt(e.target.value) || 0})} />
+          <Input label="Stock Mínimo" type="number" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: parseInt(e.target.value) || 20})} />
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{producto ? 'Guardar' : 'Crear'}</Button></div>
+      </div>
+    );
+  };
+
+  const PedidoForm = ({ pedido, onSave, onCancel }) => {
+    const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
+    const [form, setForm] = useState({ cliente_id: pedido?.cliente_id || clientes[0]?.id, fecha: pedido?.fecha || new Date().toISOString().split('T')[0], fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], estado: pedido?.estado || 'pendiente', items: existingItems.length > 0 ? existingItems : [{ producto_id: productos[0]?.id, cantidad: 1 }], notas: pedido?.notas || '' });
+    const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0]?.id, cantidad: 1 }]});
+    const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
+    const updateItem = (idx, field, value) => { const newItems = [...form.items]; newItems[idx] = {...newItems[idx], [field]: value}; setForm({...form, items: newItems}); };
+    const cliente = clientes.find(c => c.id === form.cliente_id);
+    const subtotal = form.items.reduce((sum, item) => { const prod = productos.find(p => p.id === item.producto_id); return sum + (prod?.precio || 0) * item.cantidad; }, 0);
+    const descuento = cliente?.descuento || 0;
+    const total = subtotal * (1 - descuento / 100);
+    
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Select label="Cliente" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: parseInt(e.target.value)})} options={clientes.map(c => ({ value: c.id, label: `${c.nombre} (${c.descuento}% dto)` }))} />
+          <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Input label="Entrega" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
+        </div>
+        <div>
+          <div className="flex justify-between mb-2"><label className="text-sm font-semibold text-neutral-700">Productos</label><button onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button></div>
+          <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
+            {form.items.map((item, idx) => {
+              const prod = productos.find(p => p.id === item.producto_id);
+              return (
+                <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                  <select value={item.producto_id} onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} className="flex-1 px-3 py-2 rounded-lg border text-sm">
+                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} - {formatCurrency(p.precio)}</option>)}
+                  </select>
+                  <input type="number" value={item.cantidad} onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} className="w-20 px-3 py-2 rounded-lg border text-sm text-center" min="1" />
+                  <span className="text-sm font-semibold w-24 text-right">{formatCurrency((prod?.precio || 0) * item.cantidad)}</span>
+                  {form.items.length > 1 && <button onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <Card className="p-4 bg-orange-50 border-orange-200">
+          <div className="space-y-1 text-sm">
+            <div className="flex justify-between"><span>Subtotal:</span><span className="font-semibold">{formatCurrency(subtotal)}</span></div>
+            {descuento > 0 && <div className="flex justify-between text-green-600"><span>Descuento ({descuento}%):</span><span>-{formatCurrency(subtotal * descuento / 100)}</span></div>}
+            <div className="flex justify-between text-lg font-black pt-2 border-t border-orange-200"><span>Total:</span><span className="text-orange-600">{formatCurrency(total)}</span></div>
+          </div>
+        </Card>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{pedido ? 'Guardar' : 'Crear Pedido'}</Button></div>
+      </div>
+    );
+  };
+
+  const GastoForm = ({ gasto, onSave, onCancel }) => {
+    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor: '', importe: 0, pagado: false });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
+          <Input label="Proveedor" value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} />
+          <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+          <div className="col-span-2"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={form.pagado} onChange={e => setForm({...form, pagado: e.target.checked})} className="w-5 h-5 rounded border-neutral-300 text-orange-500" /><span className="font-semibold">Pagado</span></label></div>
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{gasto ? 'Guardar' : 'Crear'}</Button></div>
+      </div>
+    );
+  };
+
+  const LoteForm = ({ lote, onSave, onCancel }) => {
+    const [form, setForm] = useState({ producto_id: lote?.producto_id || productos[0]?.id, fecha_siembra: lote?.fecha_siembra || new Date().toISOString().split('T')[0], fecha_cosecha_prevista: lote?.fecha_cosecha_prevista || '', bandejas: lote?.bandejas || 20, estado: lote?.estado || 'sembrado' });
+    useEffect(() => {
+      if (form.producto_id && form.fecha_siembra) {
+        const prod = productos.find(p => p.id === form.producto_id);
+        if (prod) { const fecha = new Date(form.fecha_siembra); fecha.setDate(fecha.getDate() + prod.dias_crecimiento); setForm(f => ({...f, fecha_cosecha_prevista: fecha.toISOString().split('T')[0]})); }
+      }
+    }, [form.producto_id, form.fecha_siembra]);
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Select label="Producto" className="col-span-2" value={form.producto_id} onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} options={productos.map(p => ({ value: p.id, label: `${p.nombre} (${p.dias_crecimiento}d)` }))} />
+          <Input label="Siembra" type="date" value={form.fecha_siembra} onChange={e => setForm({...form, fecha_siembra: e.target.value})} />
+          <Input label="Cosecha" type="date" value={form.fecha_cosecha_prevista} readOnly />
+          <Input label="Bandejas" type="number" value={form.bandejas} onChange={e => setForm({...form, bandejas: parseInt(e.target.value) || 1})} />
+          <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lote ? 'Guardar' : 'Crear'}</Button></div>
+      </div>
+    );
+  };
+
+  // ==================== NAV ====================
+  const NavItem = ({ icon: Icon, label, section, badge }) => (
+    <button onClick={() => setActiveSection(section)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
+      <Icon size={20} />
+      {sidebarOpen && <><span className="font-semibold flex-1 text-left">{label}</span>{badge > 0 && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${activeSection === section ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>{badge}</span>}</>}
+    </button>
+  );
+
+  // ==================== RENDER SECTIONS ====================
+  const renderDashboard = () => {
+    const last7Days = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - (6 - i)); return d.toISOString().split('T')[0]; });
+    const ventasData = last7Days.map(fecha => ({ fecha: formatDateShort(fecha), ventas: pedidos.filter(p => p.fecha === fecha && p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0) }));
+    const gastosPorCategoria = Object.entries(categoriasGasto).map(([key, val]) => ({ name: val.label, value: gastos.filter(g => g.categoria === key).reduce((sum, g) => sum + g.importe, 0) })).filter(g => g.value > 0);
+    const beneficio = ventasMes - gastosMes;
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1><p className="text-neutral-500 mt-1 font-medium">Panel de control de RootFlow ERP</p></div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+          <StatCard icon={Euro} label="Ventas" value={formatCurrency(ventasMes)} trend={12} color="bg-green-100 text-green-600" />
+          <StatCard icon={Wallet} label="Gastos" value={formatCurrency(gastosMes)} color="bg-red-100 text-red-600" />
+          <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(beneficio)} color="bg-orange-100 text-orange-600" />
+          <StatCard icon={ShoppingCart} label="Pedidos" value={pedidosPendientes} color="bg-amber-100 text-amber-600" onClick={() => setActiveSection('pedidos')} />
+          <StatCard icon={Target} label="Leads" value={leadsNuevos} color="bg-purple-100 text-purple-600" onClick={() => setActiveSection('leads')} />
+          <StatCard icon={Users} label="Clientes" value={clientes.length} color="bg-blue-100 text-blue-600" onClick={() => setActiveSection('clientes')} />
+          <StatCard icon={AlertCircle} label="Stock Bajo" value={stockBajo} color="bg-red-100 text-red-600" onClick={() => setActiveSection('productos')} />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Ventas 7 Días</h3><div className="h-64"><ResponsiveContainer><AreaChart data={ventasData}><defs><linearGradient id="colorVentas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#F97316" stopOpacity={0.3}/><stop offset="95%" stopColor="#F97316" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" /><XAxis dataKey="fecha" tick={{ fontSize: 12 }} /><YAxis tick={{ fontSize: 12 }} /><Tooltip formatter={(v) => formatCurrency(v)} /><Area type="monotone" dataKey="ventas" stroke="#F97316" strokeWidth={3} fill="url(#colorVentas)" /></AreaChart></ResponsiveContainer></div></Card>
+          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Gastos por Categoría</h3><div className="h-64"><ResponsiveContainer><RechartsPie><Pie data={gastosPorCategoria} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>{gastosPorCategoria.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Pie><Tooltip formatter={(v) => formatCurrency(v)} /></RechartsPie></ResponsiveContainer></div></Card>
+        </div>
+      </div>
+    );
+  };
+
+  const renderClientes = () => {
+    const filtered = clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase()));
+    const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
+
+    if (viewClientes === 'map') return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
+          <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+        </div>
+        <MapView items={clientes} type="clientes" />
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
+        </div>
+        <Card className="p-4"><div className="relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div></Card>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map(cliente => {
+            const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+            const Icon = config.icon;
+            return (
+              <Card key={cliente.id} className="p-5 hover:shadow-md transition-all">
+                <div className="flex items-start justify-between mb-3">
+                  <div className={`p-2.5 rounded-xl ${config.color} border`}><Icon size={20} /></div>
+                  <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
+                </div>
+                <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
+                <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
+                {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
+                <div className="flex items-center justify-between pt-3 border-t">
+                  <Badge variant="orange">{cliente.descuento}% dto</Badge>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                    <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+        {filtered.length === 0 && <EmptyState icon={Users} title="No hay clientes" description="Añade tu primer cliente" action={<Button onClick={() => setShowModal('cliente')}><Plus size={16} />Nuevo</Button>} />}
+      </div>
+    );
+  };
+
+  const renderLeads = () => {
+    const filtered = leads.filter(l => { const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; return matchesSearch && matchesFilter; });
+    const exportColumns = [{ header: 'Nombre', accessor: l => l.nombre },{ header: 'Empresa', accessor: l => l.empresa },{ header: 'Tipo', accessor: l => tipoClienteConfig[l.tipo]?.label },{ header: 'CP', accessor: l => l.codigo_postal },{ header: 'Estado', accessor: l => estadoLeadConfig[l.estado]?.label },{ header: 'Origen', accessor: l => origenLeadConfig[l.origen]?.label },{ header: 'Valor', accessor: l => l.valor_estimado },{ header: 'Email', accessor: l => l.email },{ header: 'Teléfono', accessor: l => l.telefono }];
+    const fileInputRef = React.useRef(null);
+
+    const handleConvertToClient = async (lead) => {
+      if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
+      const clienteData = { nombre: lead.nombre || lead.empresa, tipo: ['mercamadrid', 'hotel', 'restaurante'].includes(lead.tipo) ? lead.tipo : 'restaurante', contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
+      const { data: newCliente } = await supabase.from('clientes').insert(clienteData).select().single();
+      if (newCliente) { await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); alert('✅ Lead convertido a cliente'); }
+    };
+
+    if (viewLeads === 'map') return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
+          <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
+        </div>
+        <MapView items={leads} type="leads" />
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
+            <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={e => { if (e.target.files[0]) handleImportLeads(e.target.files[0]); e.target.value = ''; }} />
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}><Upload size={18} /> Importar Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('lead'); }}><Plus size={20} /> Nuevo Lead</Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          {Object.entries(estadoLeadConfig).map(([key, config]) => {
+            const count = leads.filter(l => l.estado === key).length;
+            const Icon = config.icon;
+            return <Card key={key} className={`p-4 cursor-pointer hover:shadow-md ${filterEstado === key ? 'ring-2 ring-orange-500' : ''}`} onClick={() => setFilterEstado(filterEstado === key ? 'todos' : key)}>
+              <div className="flex items-center justify-between">
+                <div className={`p-2 rounded-lg ${config.color}`}><Icon size={16} /></div>
+                <span className="text-2xl font-black">{count}</span>
+              </div>
+              <p className="text-sm text-neutral-600 mt-2 font-medium">{config.label}</p>
+            </Card>;
+          })}
+        </div>
+
+        <Card className="p-4 flex items-center gap-4">
+          <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+          {filterEstado !== 'todos' && <Button variant="ghost" size="sm" onClick={() => setFilterEstado('todos')}><X size={16} /> Limpiar filtro</Button>}
+        </Card>
+
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Lead</th><th className="text-left px-5 py-4 text-sm font-bold">Tipo</th><th className="text-left px-5 py-4 text-sm font-bold">Contacto</th><th className="text-left px-5 py-4 text-sm font-bold">CP</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-left px-5 py-4 text-sm font-bold">Origen</th><th className="text-left px-5 py-4 text-sm font-bold">Valor</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {filtered.map(lead => {
+                const tipoConfig = tipoClienteConfig[lead.tipo] || tipoClienteConfig.otro;
+                const estadoConf = estadoLeadConfig[lead.estado];
+                const origenConf = origenLeadConfig[lead.origen] || origenLeadConfig.otro;
+                const Icon = estadoConf?.icon || Star;
+                return (
+                  <tr key={lead.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4"><p className="font-bold text-neutral-900">{lead.nombre}</p><p className="text-xs text-neutral-400">{lead.empresa}</p></td>
+                    <td className="px-5 py-4"><Badge className={tipoConfig.color}>{tipoConfig.label}</Badge></td>
+                    <td className="px-5 py-4"><p className="text-sm">{lead.email}</p><p className="text-xs text-neutral-400">{lead.telefono}</p></td>
+                    <td className="px-5 py-4 text-sm">{lead.codigo_postal || '-'}</td>
+                    <td className="px-5 py-4"><Badge className={estadoConf?.color}><Icon size={12} />{estadoConf?.label}</Badge></td>
+                    <td className="px-5 py-4"><Badge className={origenConf.color}>{origenConf.label}</Badge></td>
+                    <td className="px-5 py-4 font-bold">{formatCurrency(lead.valor_estimado)}</td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-1">
+                        {lead.estado !== 'ganado' && lead.estado !== 'perdido' && <button onClick={() => handleConvertToClient(lead)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Convertir a cliente"><UserPlus size={16} /></button>}
+                        <button onClick={() => { setEditingItem(lead); setShowModal('lead'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                        <button onClick={() => handleDelete('leads', lead.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState icon={Target} title="No hay leads" description="Añade o importa leads" action={<Button onClick={() => setShowModal('lead')}><Plus size={16} />Nuevo</Button>} />}
+        </Card>
+      </div>
+    );
+  };
+
+  const renderPedidos = () => {
+    const filtered = pedidos.filter(p => { const cliente = clientes.find(c => c.id === p.cliente_id); const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; return matchesSearch && matchesFilter; });
+    const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Pedidos</h1><p className="text-neutral-500 font-medium">{pedidos.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={20} /> Nuevo Pedido</Button>
+          </div>
+        </div>
+        <Card className="p-4 flex items-center gap-4">
+          <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className="px-4 py-2.5 rounded-xl border font-medium"><option value="todos">Todos</option>{Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
+        </Card>
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Pedido</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Entrega</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {filtered.map(pedido => {
+                const cliente = clientes.find(c => c.id === pedido.cliente_id);
+                const config = estadoConfig[pedido.estado];
+                const Icon = config?.icon || Clock;
+                return (
+                  <tr key={pedido.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4"><p className="font-black text-neutral-900">#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
+                    <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
+                    <td className="px-5 py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>
+                    <td className="px-5 py-4 font-bold">{formatCurrency(pedido.total)}</td>
+                    <td className="px-5 py-4"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
+        </Card>
+      </div>
+    );
+  };
+
+  const renderProductos = () => {
+    const exportColumns = [{ header: 'Nombre', accessor: p => p.nombre },{ header: 'Categoría', accessor: p => p.categoria },{ header: 'Precio', accessor: p => p.precio },{ header: 'Coste', accessor: p => p.coste },{ header: 'Stock', accessor: p => p.stock },{ header: 'Stock Mínimo', accessor: p => p.stock_minimo }];
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium">{productos.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productos, 'productos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
+        </div>
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Producto</th><th className="text-left px-5 py-4 text-sm font-bold">Categoría</th><th className="text-left px-5 py-4 text-sm font-bold">Precio</th><th className="text-left px-5 py-4 text-sm font-bold">Stock</th><th className="text-left px-5 py-4 text-sm font-bold">Margen</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {productos.map(producto => {
+                const margen = producto.precio > 0 && producto.coste > 0 ? ((producto.precio - producto.coste) / producto.precio * 100).toFixed(0) : '-';
+                const stockBajoFlag = producto.stock < (producto.stock_minimo || 20);
+                return (
+                  <tr key={producto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={18} /></div><div><p className="font-semibold">{producto.nombre}</p><p className="text-xs text-neutral-400">{producto.unidad}</p></div></div></td>
+                    <td className="px-5 py-4"><Badge>{producto.categoria}</Badge></td>
+                    <td className="px-5 py-4"><p className="font-bold">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400">Coste: {formatCurrency(producto.coste)}</p></td>
+                    <td className="px-5 py-4"><div className="flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} /><span className={stockBajoFlag ? 'text-red-600 font-bold' : 'font-medium'}>{producto.stock}</span></div></td>
+                    <td className="px-5 py-4"><Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge></td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(producto); setShowModal('producto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('productos', producto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderFacturacion = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between"><div><h1 className="text-3xl font-black text-neutral-900">Facturación</h1><p className="text-neutral-500 font-medium">{facturas.length} registros</p></div></div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
+        <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
+        <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
+        <StatCard icon={AlertCircle} label="Vencidas" value={facturas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+      </div>
+      <Card className="overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Factura</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+          <tbody>
+            {facturas.map(factura => {
+              const cliente = clientes.find(c => c.id === factura.cliente_id);
+              const config = estadoFacturaConfig[factura.estado];
+              return (
+                <tr key={factura.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                  <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p></td>
+                  <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
+                  <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
+                  <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
+                  <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
+                  <td className="px-5 py-4"><div className="flex justify-end gap-1">{factura.estado === 'pendiente' && <button onClick={() => supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}</div></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {facturas.length === 0 && <EmptyState icon={Receipt} title="No hay facturas" description="Las facturas se generan al crear pedidos" />}
+      </Card>
+    </div>
+  );
+
+  const renderGastos = () => {
+    const exportColumns = [{ header: 'Fecha', accessor: g => formatDate(g.fecha) },{ header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },{ header: 'Concepto', accessor: g => g.concepto },{ header: 'Proveedor', accessor: g => g.proveedor },{ header: 'Importe', accessor: g => g.importe },{ header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' }];
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Gastos</h1><p className="text-neutral-500 font-medium">{gastos.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(gastos, 'gastos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('gasto'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={Wallet} label="Total" value={formatCurrency(gastos.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
+          <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastos.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
+          <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastos.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={TrendingUp} label="Este Mes" value={formatCurrency(gastos.filter(g => new Date(g.fecha).getMonth() === new Date().getMonth()).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-orange-100 text-orange-600" />
+        </div>
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Concepto</th><th className="text-left px-5 py-4 text-sm font-bold">Categoría</th><th className="text-left px-5 py-4 text-sm font-bold">Proveedor</th><th className="text-left px-5 py-4 text-sm font-bold">Importe</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {gastos.map(gasto => {
+                const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
+                const Icon = catConfig.icon;
+                return (
+                  <tr key={gasto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4 text-sm">{formatDate(gasto.fecha)}</td>
+                    <td className="px-5 py-4 font-semibold">{gasto.concepto}</td>
+                    <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
+                    <td className="px-5 py-4 text-sm">{gasto.proveedor || '-'}</td>
+                    <td className="px-5 py-4 font-bold">{formatCurrency(gasto.importe)}</td>
+                    <td className="px-5 py-4"><Badge variant={gasto.pagado ? 'success' : 'warning'}>{gasto.pagado ? 'Pagado' : 'Pendiente'}</Badge></td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-1">{!gasto.pagado && <button onClick={() => supabase.from('gastos').update({ pagado: true }).eq('id', gasto.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}<button onClick={() => { setEditingItem(gasto); setShowModal('gasto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('gastos', gasto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {gastos.length === 0 && <EmptyState icon={Wallet} title="No hay gastos" description="Registra tus gastos" action={<Button onClick={() => setShowModal('gasto')}><Plus size={16} />Nuevo</Button>} />}
+        </Card>
+      </div>
+    );
+  };
+
+  const renderProduccion = () => {
+    const exportColumns = [{ header: 'Lote', accessor: l => l.id },{ header: 'Producto', accessor: l => productos.find(p => p.id === l.producto_id)?.nombre },{ header: 'Siembra', accessor: l => formatDate(l.fecha_siembra) },{ header: 'Cosecha', accessor: l => formatDate(l.fecha_cosecha_prevista) },{ header: 'Bandejas', accessor: l => l.bandejas },{ header: 'Estado', accessor: l => estadoLoteConfig[l.estado]?.label }];
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Producción</h1><p className="text-neutral-500 font-medium">{lotes.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(lotes, 'produccion', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('lote'); }}><Plus size={20} /> Nuevo Lote</Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={Sprout} label="Sembrados" value={lotes.filter(l => l.estado === 'sembrado').length} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={Sun} label="Creciendo" value={lotes.filter(l => l.estado === 'creciendo').length} color="bg-green-100 text-green-600" />
+          <StatCard icon={Check} label="Cosechados" value={lotes.filter(l => l.estado === 'cosechado').length} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={Layers} label="Bandejas Activas" value={lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).reduce((sum, l) => sum + l.bandejas, 0)} color="bg-orange-100 text-orange-600" />
+        </div>
+        <Card className="overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Lote</th><th className="text-left px-5 py-4 text-sm font-bold">Producto</th><th className="text-left px-5 py-4 text-sm font-bold">Siembra</th><th className="text-left px-5 py-4 text-sm font-bold">Cosecha</th><th className="text-left px-5 py-4 text-sm font-bold">Bandejas</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <tbody>
+              {lotes.map(lote => {
+                const producto = productos.find(p => p.id === lote.producto_id);
+                const config = estadoLoteConfig[lote.estado];
+                const Icon = config?.icon || Sprout;
+                const diasRestantes = Math.ceil((new Date(lote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+                return (
+                  <tr key={lote.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4 font-black">{lote.id}</td>
+                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white"><Leaf size={14} /></div><span className="font-semibold">{producto?.nombre}</span></div></td>
+                    <td className="px-5 py-4 text-sm">{formatDate(lote.fecha_siembra)}</td>
+                    <td className="px-5 py-4"><p className="text-sm">{formatDate(lote.fecha_cosecha_prevista)}</p>{lote.estado !== 'cosechado' && diasRestantes <= 2 && <p className="text-xs text-amber-600 font-bold">{diasRestantes <= 0 ? '¡Hoy!' : `En ${diasRestantes}d`}</p>}</td>
+                    <td className="px-5 py-4 font-bold">{lote.bandejas}</td>
+                    <td className="px-5 py-4"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-1">{lote.estado === 'creciendo' && <button onClick={() => supabase.from('lotes').update({ estado: 'cosechado', fecha_cosecha_real: new Date().toISOString().split('T')[0] }).eq('id', lote.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}{lote.estado === 'sembrado' && <button onClick={() => supabase.from('lotes').update({ estado: 'creciendo' }).eq('id', lote.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"><Sun size={16} /></button>}<button onClick={() => { setEditingItem(lote); setShowModal('lote'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('lotes', lote.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {lotes.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
+        </Card>
+      </div>
+    );
+  };
+
+  // ==================== MAIN RENDER ====================
+  if (loading) return <LoadingScreen />;
+
+  return (
+    <div className="min-h-screen bg-neutral-100 flex">
+      {/* Sidebar Negro */}
+      <aside className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-neutral-900 p-4 flex flex-col transition-all duration-300 fixed h-full z-40`}>
+        <div className="flex items-center gap-3 px-2 mb-8">
+          <RootFlowLogo size={40} />
+          {sidebarOpen && <div><h1 className="font-black text-lg"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1><p className="text-[10px] text-neutral-500 uppercase tracking-wider">ERP Interno</p></div>}
+        </div>
+        <nav className="flex-1 space-y-1">
+          <NavItem icon={BarChart3} label="Dashboard" section="dashboard" />
+          <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
+          <NavItem icon={Users} label="Clientes" section="clientes" />
+          <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
+          <NavItem icon={Package} label="Productos" section="productos" badge={stockBajo} />
+          <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
+          <NavItem icon={Receipt} label="Facturación" section="facturacion" />
+          <NavItem icon={Wallet} label="Gastos" section="gastos" />
+          <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
+          <NavItem icon={Sprout} label="Producción" section="produccion" badge={lotesActivos} />
+        </nav>
+        <div className="pt-4 border-t border-neutral-700 space-y-1">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="w-full flex items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
+          <button onClick={signOut} className="w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-xl"><LogOut size={20} />{sidebarOpen && <span className="text-sm font-medium">Salir</span>}</button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main className={`flex-1 ${sidebarOpen ? 'ml-64' : 'ml-20'} transition-all duration-300`}>
+        <header className="bg-white border-b border-neutral-200 px-8 py-4 sticky top-0 z-30">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-bold text-neutral-900 capitalize">{activeSection}</h2>
+            <div className="flex items-center gap-3">
+              <button className="p-2 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 rounded-xl relative"><Bell size={20} />{alertasNoLeidas > 0 && <span className="absolute -top-1 -right-1 w-5 h-5 bg-orange-500 text-white text-xs rounded-full flex items-center justify-center font-bold">{alertasNoLeidas}</span>}</button>
+              <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 rounded-xl"><div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div>{sidebarOpen && <span className="text-sm font-semibold text-neutral-700">{userProfile?.nombre?.split(' ')[0]}</span>}</div>
+            </div>
+          </div>
+        </header>
+        <div className="p-8">
+          {activeSection === 'dashboard' && renderDashboard()}
+          {activeSection === 'leads' && renderLeads()}
+          {activeSection === 'clientes' && renderClientes()}
+          {activeSection === 'pedidos' && renderPedidos()}
+          {activeSection === 'productos' && renderProductos()}
+          {activeSection === 'facturacion' && renderFacturacion()}
+          {activeSection === 'gastos' && renderGastos()}
+          {activeSection === 'produccion' && renderProduccion()}
+        </div>
+      </main>
+
+      {/* Modals */}
+      {showModal === 'cliente' && <Modal title={editingItem ? 'Editar Cliente' : 'Nuevo Cliente'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ClienteForm cliente={editingItem} onSave={form => handleSave('clientes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'lead' && <Modal title={editingItem ? 'Editar Lead' : 'Nuevo Lead'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LeadForm lead={editingItem} onSave={form => handleSave('leads', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'producto' && <Modal title={editingItem ? 'Editar Producto' : 'Nuevo Producto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProductoForm producto={editingItem} onSave={form => handleSave('productos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'pedido' && <Modal title={editingItem ? 'Editar Pedido' : 'Nuevo Pedido'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoForm pedido={editingItem} onSave={handleCreatePedido} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={form => handleSave('lotes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+    </div>
+  );
+};
+
+// ==================== APP WRAPPER ====================
+export default function App() {
+  return <AuthProvider><AppContent /></AuthProvider>;
+}
+
+function AppContent() {
+  const { user, loading } = useAuth();
+  if (loading) return <LoadingScreen />;
+  return user ? <MainApp /> : <LoginPage />;
+}
