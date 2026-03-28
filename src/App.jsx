@@ -772,9 +772,39 @@ const MainApp = () => {
   };
 
   const PedidoForm = ({ pedido, onSave, onCancel }) => {
+    // Verificar que hay clientes y productos
+    if (clientes.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay clientes</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear al menos un cliente para poder hacer pedidos.</p>
+          <Button onClick={onCancel}>Cerrar</Button>
+        </div>
+      );
+    }
+    
+    if (productos.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto para poder hacer pedidos.</p>
+          <Button onClick={onCancel}>Cerrar</Button>
+        </div>
+      );
+    }
+
     const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
-    const [form, setForm] = useState({ cliente_id: pedido?.cliente_id || clientes[0]?.id, fecha: pedido?.fecha || new Date().toISOString().split('T')[0], fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], estado: pedido?.estado || 'pendiente', items: existingItems.length > 0 ? existingItems : [{ producto_id: productos[0]?.id, cantidad: 1 }], notas: pedido?.notas || '' });
-    const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0]?.id, cantidad: 1 }]});
+    const [form, setForm] = useState({ 
+      cliente_id: pedido?.cliente_id || clientes[0].id, 
+      fecha: pedido?.fecha || new Date().toISOString().split('T')[0], 
+      fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], 
+      estado: pedido?.estado || 'pendiente', 
+      items: existingItems.length > 0 ? existingItems : [{ producto_id: productos[0].id, cantidad: 1 }], 
+      notas: pedido?.notas || '' 
+    });
+    const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0].id, cantidad: 1 }]});
     const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
     const updateItem = (idx, field, value) => { const newItems = [...form.items]; newItems[idx] = {...newItems[idx], [field]: value}; setForm({...form, items: newItems}); };
     const cliente = clientes.find(c => c.id === form.cliente_id);
@@ -900,11 +930,121 @@ const MainApp = () => {
     const filtered = clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase()));
     const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
 
+    // Vista Grid (tarjetas)
+    const renderGridView = () => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map(cliente => {
+          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+          const Icon = config.icon;
+          return (
+            <Card key={cliente.id} className="p-5 hover:shadow-md transition-all">
+              <div className="flex items-start justify-between mb-3">
+                <div className={`p-2.5 rounded-xl ${config.color} border`}><Icon size={20} /></div>
+                <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
+              </div>
+              <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
+              <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
+              {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
+              <div className="flex items-center justify-between pt-3 border-t">
+                <Badge variant="orange">{cliente.descuento}% dto</Badge>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    );
+
+    // Vista Lista
+    const renderListView = () => (
+      <div className="space-y-3">
+        {filtered.map(cliente => {
+          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+          const Icon = config.icon;
+          return (
+            <Card key={cliente.id} className="p-4 hover:shadow-md transition-all">
+              <div className="flex items-center gap-4">
+                <div className={`p-3 rounded-xl ${config.color} border flex-shrink-0`}><Icon size={24} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h3 className="font-bold text-neutral-900">{cliente.nombre}</h3>
+                    <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
+                    <Badge variant="orange">{cliente.descuento}% dto</Badge>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-neutral-500 flex-wrap">
+                    {cliente.contacto && <span>{cliente.contacto}</span>}
+                    {cliente.email && <span className="flex items-center gap-1"><Mail size={12} />{cliente.email}</span>}
+                    {cliente.telefono && <span className="flex items-center gap-1"><Phone size={12} />{cliente.telefono}</span>}
+                    {cliente.codigo_postal && <span className="flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal}</span>}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={18} /></button>
+                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    );
+
+    // Vista Tabla
+    const renderTableView = () => (
+      <Card className="overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-neutral-900 text-white">
+            <tr>
+              <th className="text-left px-5 py-4 text-sm font-bold">Cliente</th>
+              <th className="text-left px-5 py-4 text-sm font-bold">Tipo</th>
+              <th className="text-left px-5 py-4 text-sm font-bold">Zona</th>
+              <th className="text-left px-5 py-4 text-sm font-bold">Contacto</th>
+              <th className="text-left px-5 py-4 text-sm font-bold">Descuento</th>
+              <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(cliente => {
+              const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+              return (
+                <tr key={cliente.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                  <td className="px-5 py-4">
+                    <p className="font-bold text-neutral-900">{cliente.nombre}</p>
+                    <p className="text-xs text-neutral-400">{cliente.cif || cliente.codigo_postal}</p>
+                  </td>
+                  <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
+                  <td className="px-5 py-4"><Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label || '-'}</Badge></td>
+                  <td className="px-5 py-4">
+                    <p className="text-sm">{cliente.email || '-'}</p>
+                    <p className="text-xs text-neutral-400">{cliente.telefono}</p>
+                  </td>
+                  <td className="px-5 py-4 font-bold text-orange-600">{cliente.descuento}%</td>
+                  <td className="px-5 py-4">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                      <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Card>
+    );
+
+    // Vista Mapa
     if (viewClientes === 'map') return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
-          <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
         </div>
         <MapView items={clientes} type="clientes" />
       </div>
@@ -921,30 +1061,10 @@ const MainApp = () => {
         </div>
         <Card className="p-4"><div className="relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div></Card>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(cliente => {
-            const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
-            const Icon = config.icon;
-            return (
-              <Card key={cliente.id} className="p-5 hover:shadow-md transition-all">
-                <div className="flex items-start justify-between mb-3">
-                  <div className={`p-2.5 rounded-xl ${config.color} border`}><Icon size={20} /></div>
-                  <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
-                </div>
-                <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
-                <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
-                {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
-                <div className="flex items-center justify-between pt-3 border-t">
-                  <Badge variant="orange">{cliente.descuento}% dto</Badge>
-                  <div className="flex gap-1">
-                    <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                    <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
+        {viewClientes === 'grid' && renderGridView()}
+        {viewClientes === 'list' && renderListView()}
+        {viewClientes === 'table' && renderTableView()}
+        
         {filtered.length === 0 && <EmptyState icon={Users} title="No hay clientes" description="Añade tu primer cliente" action={<Button onClick={() => setShowModal('cliente')}><Plus size={16} />Nuevo</Button>} />}
       </div>
     );
