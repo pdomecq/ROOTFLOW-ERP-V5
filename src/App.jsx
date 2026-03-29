@@ -153,38 +153,38 @@ const useRealtime = (table) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
-        if (e) {
-          console.warn(`Error cargando ${table}:`, e.message);
-          setError(e);
-          setData([]);
-        } else {
-          setData(d || []);
-        }
-      } catch (err) {
-        console.warn(`Error en ${table}:`, err);
+  const fetchData = async () => {
+    try {
+      const { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      if (e) {
+        console.warn(`Error cargando ${table}:`, e.message);
+        setError(e);
         setData([]);
+      } else {
+        setData(d || []);
       }
-      setLoading(false);
-    };
+    } catch (err) {
+      console.warn(`Error en ${table}:`, err);
+      setData([]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
     fetchData();
 
     const subscription = supabase
       .channel(`${table}_realtime_${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
-        if (payload.eventType === 'INSERT') setData(prev => [payload.new, ...prev]);
-        else if (payload.eventType === 'UPDATE') setData(prev => prev.map(item => item.id === payload.new.id ? payload.new : item));
-        else if (payload.eventType === 'DELETE') setData(prev => prev.filter(item => item.id !== payload.old.id));
+      .on('postgres_changes', { event: '*', schema: 'public', table }, () => {
+        // Refetch en lugar de actualizar parcialmente (más confiable)
+        fetchData();
       })
       .subscribe();
 
     return () => subscription.unsubscribe();
   }, [table]);
 
-  return { data, loading, setData, error };
+  return { data, loading, setData, error, refetch: fetchData };
 };
 
 // ==================== HELPERS ====================
@@ -622,14 +622,26 @@ const MainApp = () => {
   const [viewGastos, setViewGastos] = useState('table');
   const [viewLotes, setViewLotes] = useState('table');
 
-  const { data: clientesData, loading: l1 } = useRealtime('clientes');
-  const { data: leadsData, setData: setLeadsData } = useRealtime('leads');
-  const { data: productosData, loading: l2 } = useRealtime('productos');
-  const { data: pedidosData, loading: l3 } = useRealtime('pedidos');
-  const { data: pedidoItemsData } = useRealtime('pedido_items');
-  const { data: facturasData } = useRealtime('facturas');
-  const { data: gastosData } = useRealtime('gastos');
-  const { data: lotesData } = useRealtime('lotes');
+  const { data: clientesData, loading: l1, refetch: refetchClientes } = useRealtime('clientes');
+  const { data: leadsData, setData: setLeadsData, refetch: refetchLeads } = useRealtime('leads');
+  const { data: productosData, loading: l2, refetch: refetchProductos } = useRealtime('productos');
+  const { data: pedidosData, loading: l3, refetch: refetchPedidos } = useRealtime('pedidos');
+  const { data: pedidoItemsData, refetch: refetchPedidoItems } = useRealtime('pedido_items');
+  const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
+  const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
+  const { data: lotesData, refetch: refetchLotes } = useRealtime('lotes');
+
+  // Función para refrescar todo
+  const refetchAll = () => {
+    refetchClientes();
+    refetchLeads();
+    refetchProductos();
+    refetchPedidos();
+    refetchPedidoItems();
+    refetchFacturas();
+    refetchGastos();
+    refetchLotes();
+  };
 
   // Variables seguras (nunca undefined)
   const clientes = clientesData || [];
@@ -668,12 +680,25 @@ const MainApp = () => {
       }
       setShowModal(null);
       setEditingItem(null);
+      // Refrescar datos inmediatamente
+      if (table === 'clientes') refetchClientes();
+      else if (table === 'productos') refetchProductos();
+      else if (table === 'leads') refetchLeads();
+      else if (table === 'gastos') refetchGastos();
+      else if (table === 'lotes') refetchLotes();
     } catch (error) { console.error('Error:', error); }
   };
 
   const handleDelete = async (table, id) => {
     if (window.confirm('¿Eliminar este elemento?')) {
       await supabase.from(table).delete().eq('id', id);
+      // Refrescar datos inmediatamente
+      if (table === 'clientes') refetchClientes();
+      else if (table === 'productos') refetchProductos();
+      else if (table === 'leads') refetchLeads();
+      else if (table === 'gastos') refetchGastos();
+      else if (table === 'lotes') refetchLotes();
+      else if (table === 'pedidos') { refetchPedidos(); refetchFacturas(); }
     }
   };
 
@@ -707,6 +732,7 @@ const MainApp = () => {
         if (leadsToInsert.length > 0) {
           const { error } = await supabase.from('leads').insert(leadsToInsert);
           if (error) throw error;
+          refetchLeads(); // Refrescar inmediatamente
           alert(`✅ ${leadsToInsert.length} leads importados correctamente`);
         } else {
           alert('No se encontraron leads válidos en el archivo');
@@ -793,6 +819,11 @@ const MainApp = () => {
           total: baseImponible + iva 
         });
       }
+      
+      // Refrescar datos inmediatamente
+      refetchPedidos();
+      refetchPedidoItems();
+      refetchFacturas();
       
       setShowModal(null);
       setEditingItem(null);
@@ -950,7 +981,46 @@ const MainApp = () => {
   };
 
   const GastoForm = ({ gasto, onSave, onCancel }) => {
-    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor: '', importe: 0, pagado: false });
+    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor: '', importe: 0, pagado: false, factura_url: '' });
+    const [uploading, setUploading] = useState(false);
+    const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
+
+    const handleFileUpload = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      
+      setUploading(true);
+      try {
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
+        
+        const { data, error } = await supabase.storage
+          .from('facturas-gastos')
+          .upload(fileName, file);
+        
+        if (error) {
+          if (error.message.includes('bucket') || error.message.includes('not found')) {
+            alert('⚠️ El bucket de almacenamiento no está configurado.\n\nVe a Supabase → Storage → New Bucket → Nombre: "facturas-gastos" → Public: ON');
+          } else {
+            throw error;
+          }
+        } else {
+          const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fileName);
+          setForm({...form, factura_url: urlData.publicUrl});
+          setFileName(file.name);
+        }
+      } catch (err) {
+        console.error('Error subiendo archivo:', err);
+        alert('Error al subir el archivo: ' + err.message);
+      }
+      setUploading(false);
+    };
+
+    const removeFile = () => {
+      setForm({...form, factura_url: ''});
+      setFileName('');
+    };
+
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -959,31 +1029,86 @@ const MainApp = () => {
           <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
           <Input label="Proveedor" value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} />
           <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
-          <div className="col-span-2"><label className="flex items-center gap-3 cursor-pointer"><input type="checkbox" checked={form.pagado} onChange={e => setForm({...form, pagado: e.target.checked})} className="w-5 h-5 rounded border-neutral-300 text-orange-500" /><span className="font-semibold">Pagado</span></label></div>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{gasto ? 'Guardar' : 'Crear'}</Button></div>
+        
+        {/* Adjuntar factura */}
+        <div className="border-t pt-4">
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Factura / Justificante</label>
+          {form.factura_url ? (
+            <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
+              <FileText size={24} className="text-green-600" />
+              <div className="flex-1">
+                <p className="font-medium text-green-800">{fileName || 'Archivo adjunto'}</p>
+                <a href={form.factura_url} target="_blank" rel="noopener noreferrer" className="text-sm text-green-600 hover:underline">Ver archivo</a>
+              </div>
+              <button type="button" onClick={removeFile} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-neutral-300 rounded-xl cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
+              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={handleFileUpload} disabled={uploading} />
+              {uploading ? (
+                <><Loader2 size={24} className="animate-spin text-orange-500" /><span className="text-neutral-600">Subiendo...</span></>
+              ) : (
+                <><Upload size={24} className="text-neutral-400" /><span className="text-neutral-600">Click para adjuntar PDF o imagen</span></>
+              )}
+            </label>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 pt-2">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={form.pagado} onChange={e => setForm({...form, pagado: e.target.checked})} className="w-5 h-5 rounded border-neutral-300 text-orange-500" />
+            <span className="font-semibold">Pagado</span>
+          </label>
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{gasto ? 'Guardar' : 'Crear Gasto'}</Button></div>
       </div>
     );
   };
 
   const LoteForm = ({ lote, onSave, onCancel }) => {
-    const [form, setForm] = useState({ producto_id: lote?.producto_id || productos[0]?.id, fecha_siembra: lote?.fecha_siembra || new Date().toISOString().split('T')[0], fecha_cosecha_prevista: lote?.fecha_cosecha_prevista || '', bandejas: lote?.bandejas || 20, estado: lote?.estado || 'sembrado' });
+    const [form, setForm] = useState({ 
+      producto_id: lote?.producto_id || (productos.length > 0 ? productos[0].id : null), 
+      fecha_siembra: lote?.fecha_siembra || new Date().toISOString().split('T')[0], 
+      fecha_cosecha_prevista: lote?.fecha_cosecha_prevista || '', 
+      bandejas: lote?.bandejas || 20, 
+      estado: lote?.estado || 'sembrado' 
+    });
+    
     useEffect(() => {
-      if (form.producto_id && form.fecha_siembra) {
+      if (form.producto_id && form.fecha_siembra && productos.length > 0) {
         const prod = productos.find(p => p.id === form.producto_id);
-        if (prod) { const fecha = new Date(form.fecha_siembra); fecha.setDate(fecha.getDate() + prod.dias_crecimiento); setForm(f => ({...f, fecha_cosecha_prevista: fecha.toISOString().split('T')[0]})); }
+        if (prod) { 
+          const fecha = new Date(form.fecha_siembra); 
+          fecha.setDate(fecha.getDate() + (prod.dias_crecimiento || 7)); 
+          setForm(f => ({...f, fecha_cosecha_prevista: fecha.toISOString().split('T')[0]})); 
+        }
       }
     }, [form.producto_id, form.fecha_siembra]);
+
+    // Verificar que hay productos
+    if (productos.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto para crear lotes de producción.</p>
+          <Button onClick={onCancel}>Cerrar</Button>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
-          <Select label="Producto" className="col-span-2" value={form.producto_id} onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} options={productos.map(p => ({ value: p.id, label: `${p.nombre} (${p.dias_crecimiento}d)` }))} />
+          <Select label="Producto" className="col-span-2" value={form.producto_id} onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} options={productos.map(p => ({ value: p.id, label: `${p.nombre} (${p.dias_crecimiento || 7}d)` }))} />
           <Input label="Siembra" type="date" value={form.fecha_siembra} onChange={e => setForm({...form, fecha_siembra: e.target.value})} />
-          <Input label="Cosecha" type="date" value={form.fecha_cosecha_prevista} readOnly />
+          <Input label="Cosecha Prevista" type="date" value={form.fecha_cosecha_prevista} readOnly className="bg-neutral-100" />
           <Input label="Bandejas" type="number" value={form.bandejas} onChange={e => setForm({...form, bandejas: parseInt(e.target.value) || 1})} />
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lote ? 'Guardar' : 'Crear'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lote ? 'Guardar' : 'Crear Lote'}</Button></div>
       </div>
     );
   };
@@ -1177,7 +1302,12 @@ const MainApp = () => {
       if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
       const clienteData = { nombre: lead.nombre || lead.empresa, tipo: ['mercamadrid', 'hotel', 'restaurante'].includes(lead.tipo) ? lead.tipo : 'restaurante', contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
       const { data: newCliente } = await supabase.from('clientes').insert(clienteData).select().single();
-      if (newCliente) { await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); alert('✅ Lead convertido a cliente'); }
+      if (newCliente) { 
+        await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); 
+        refetchClientes();
+        refetchLeads();
+        alert('✅ Lead convertido a cliente'); 
+      }
     };
 
     if (viewLeads === 'map') return (
@@ -1568,7 +1698,7 @@ const MainApp = () => {
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
-                        {factura.estado === 'pendiente' && <button onClick={() => supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagada"><Check size={16} /></button>}
+                        {factura.estado === 'pendiente' && <button onClick={async () => { await supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id); refetchFacturas(); }} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagada"><Check size={16} /></button>}
                       </div>
                     </td>
                   </tr>
@@ -1593,7 +1723,13 @@ const MainApp = () => {
   };
 
   const renderGastos = () => {
-    const exportColumns = [{ header: 'Fecha', accessor: g => formatDate(g.fecha) },{ header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },{ header: 'Concepto', accessor: g => g.concepto },{ header: 'Proveedor', accessor: g => g.proveedor },{ header: 'Importe', accessor: g => g.importe },{ header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' }];
+    const exportColumns = [{ header: 'Fecha', accessor: g => formatDate(g.fecha) },{ header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },{ header: 'Concepto', accessor: g => g.concepto },{ header: 'Proveedor', accessor: g => g.proveedor },{ header: 'Importe', accessor: g => g.importe },{ header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },{ header: 'Factura', accessor: g => g.factura_url ? 'Sí' : 'No' }];
+    
+    const handleMarcarPagado = async (id) => {
+      await supabase.from('gastos').update({ pagado: true }).eq('id', id);
+      refetchGastos();
+    };
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -1611,7 +1747,18 @@ const MainApp = () => {
         </div>
         <Card className="overflow-hidden">
           <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Concepto</th><th className="text-left px-5 py-4 text-sm font-bold">Categoría</th><th className="text-left px-5 py-4 text-sm font-bold">Proveedor</th><th className="text-left px-5 py-4 text-sm font-bold">Importe</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <thead className="bg-neutral-900 text-white">
+              <tr>
+                <th className="text-left px-5 py-4 text-sm font-bold">Fecha</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Concepto</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Categoría</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Proveedor</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Importe</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Estado</th>
+                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
               {gastos.map(gasto => {
                 const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
@@ -1623,8 +1770,24 @@ const MainApp = () => {
                     <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
                     <td className="px-5 py-4 text-sm">{gasto.proveedor || '-'}</td>
                     <td className="px-5 py-4 font-bold">{formatCurrency(gasto.importe)}</td>
+                    <td className="px-5 py-4">
+                      {gasto.factura_url ? (
+                        <a href={gasto.factura_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-green-600 hover:text-green-700">
+                          <FileText size={16} />
+                          <span className="text-sm font-medium">Ver</span>
+                        </a>
+                      ) : (
+                        <span className="text-neutral-400 text-sm">-</span>
+                      )}
+                    </td>
                     <td className="px-5 py-4"><Badge variant={gasto.pagado ? 'success' : 'warning'}>{gasto.pagado ? 'Pagado' : 'Pendiente'}</Badge></td>
-                    <td className="px-5 py-4"><div className="flex justify-end gap-1">{!gasto.pagado && <button onClick={() => supabase.from('gastos').update({ pagado: true }).eq('id', gasto.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}<button onClick={() => { setEditingItem(gasto); setShowModal('gasto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('gastos', gasto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-1">
+                        {!gasto.pagado && <button onClick={() => handleMarcarPagado(gasto.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagado"><Check size={16} /></button>}
+                        <button onClick={() => { setEditingItem(gasto); setShowModal('gasto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                        <button onClick={() => handleDelete('gastos', gasto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
