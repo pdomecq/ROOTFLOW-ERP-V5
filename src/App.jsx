@@ -619,25 +619,36 @@ const MainApp = () => {
   const [viewGastos, setViewGastos] = useState('table');
   const [viewLotes, setViewLotes] = useState('table');
 
-  const { data: clientes, loading: l1 } = useRealtime('clientes');
-  const { data: leads, setData: setLeads } = useRealtime('leads');
-  const { data: productos, loading: l2 } = useRealtime('productos');
-  const { data: pedidos, loading: l3 } = useRealtime('pedidos');
-  const { data: pedidoItems } = useRealtime('pedido_items');
-  const { data: facturas } = useRealtime('facturas');
-  const { data: gastos } = useRealtime('gastos');
-  const { data: lotes } = useRealtime('lotes');
+  const { data: clientesData, loading: l1 } = useRealtime('clientes');
+  const { data: leadsData, setData: setLeadsData } = useRealtime('leads');
+  const { data: productosData, loading: l2 } = useRealtime('productos');
+  const { data: pedidosData, loading: l3 } = useRealtime('pedidos');
+  const { data: pedidoItemsData } = useRealtime('pedido_items');
+  const { data: facturasData } = useRealtime('facturas');
+  const { data: gastosData } = useRealtime('gastos');
+  const { data: lotesData } = useRealtime('lotes');
+
+  // Variables seguras (nunca undefined)
+  const clientes = clientesData || [];
+  const leads = leadsData || [];
+  const productos = productosData || [];
+  const pedidos = pedidosData || [];
+  const pedidoItems = pedidoItemsData || [];
+  const facturas = facturasData || [];
+  const gastos = gastosData || [];
+  const lotes = lotesData || [];
+  const setLeads = setLeadsData;
 
   const loading = l1 || l2 || l3;
 
-  // Metrics
+  // Métricas
   const ventasMes = pedidos.filter(p => p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0);
-  const pedidosPendientes = pedidos.filter(p => ['pendiente', 'en_preparacion'].includes(p.estado)).length;
+  const pedidosPendientes = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length;
   const facturasPendientesTotal = facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0);
   const gastosMes = gastos.reduce((sum, g) => sum + (g.importe || 0), 0);
   const stockBajo = productos.filter(p => p.stock < (p.stock_minimo || 20)).length;
-  const lotesActivos = lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).length;
-  const alertasNoLeidas = alertas.filter(a => !a.leida).length;
+  const lotesActivos = lotes.filter(l => ['sembrado', 'germinando', 'creciendo'].includes(l.estado)).length;
+  const alertasNoLeidas = 0;
   const leadsNuevos = leads.filter(l => l.estado === 'nuevo').length;
 
   // CRUD
