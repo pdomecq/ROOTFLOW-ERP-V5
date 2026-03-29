@@ -611,6 +611,9 @@ const MainApp = () => {
   const [filterEstado, setFilterEstado] = useState('todos');
   const [selectedFactura, setSelectedFactura] = useState(null);
   
+  // Refs para inputs de archivo
+  const fileInputRef = useRef(null);
+  
   const [viewClientes, setViewClientes] = useState('grid');
   const [viewLeads, setViewLeads] = useState('table');
   const [viewPedidos, setViewPedidos] = useState('table');
@@ -730,7 +733,14 @@ const MainApp = () => {
       const descuentoAplicado = subtotal * (descuento / 100);
       const total = subtotal - descuentoAplicado;
 
-      const pedidoData = { cliente_id: form.cliente_id, fecha: form.fecha, fecha_entrega: form.fecha_entrega, estado: form.estado, notas: form.notas, subtotal, descuento_aplicado: descuentoAplicado, total, created_by: user.id };
+      const pedidoData = { 
+        cliente_id: form.cliente_id, 
+        fecha: form.fecha, 
+        fecha_entrega: form.fecha_entrega, 
+        estado: form.estado, 
+        notas: form.notas || '', 
+        total 
+      };
 
       let pedidoId;
       if (editingItem) {
@@ -738,26 +748,58 @@ const MainApp = () => {
         await supabase.from('pedido_items').delete().eq('pedido_id', editingItem.id);
         pedidoId = editingItem.id;
       } else {
-        const { data: newPedido } = await supabase.from('pedidos').insert(pedidoData).select().single();
+        const { data: newPedido, error: pedidoError } = await supabase.from('pedidos').insert(pedidoData).select().single();
+        if (pedidoError) {
+          console.error('Error creando pedido:', pedidoError);
+          alert('Error al crear pedido: ' + pedidoError.message);
+          return;
+        }
         pedidoId = newPedido.id;
       }
 
+      // Insertar items
       for (const item of itemsData) {
-        await supabase.from('pedido_items').insert({ pedido_id: pedidoId, producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario, subtotal: item.subtotal });
+        await supabase.from('pedido_items').insert({ 
+          pedido_id: pedidoId, 
+          producto_id: item.producto_id, 
+          cantidad: item.cantidad, 
+          precio_unitario: item.precio_unitario, 
+          subtotal: item.subtotal 
+        });
       }
 
+      // Crear factura automáticamente si es pedido nuevo
       if (!editingItem) {
         const year = new Date().getFullYear();
         const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
         const facturaId = `F-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
-        const fechaVencimiento = new Date(); fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
+        const fechaVencimiento = new Date(); 
+        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
         const baseImponible = total;
         const iva = baseImponible * 0.21;
-        await supabase.from('facturas').insert({ id: facturaId, pedido_id: pedidoId, cliente_id: form.cliente_id, fecha: new Date().toISOString().split('T')[0], fecha_vencimiento: fechaVencimiento.toISOString().split('T')[0], estado: 'pendiente', subtotal, descuento_aplicado: descuentoAplicado, base_imponible: baseImponible, iva_porcentaje: 21, iva, total: baseImponible + iva });
+        
+        await supabase.from('facturas').insert({ 
+          id: facturaId, 
+          pedido_id: pedidoId, 
+          cliente_id: form.cliente_id, 
+          fecha: new Date().toISOString().split('T')[0], 
+          fecha_vencimiento: fechaVencimiento.toISOString().split('T')[0], 
+          estado: 'pendiente', 
+          subtotal, 
+          descuento_aplicado: descuentoAplicado, 
+          base_imponible: baseImponible, 
+          iva_porcentaje: 21, 
+          iva, 
+          total: baseImponible + iva 
+        });
       }
+      
       setShowModal(null);
       setEditingItem(null);
-    } catch (error) { console.error('Error:', error); }
+    } catch (error) { 
+      console.error('Error:', error); 
+      alert('Error al procesar el pedido. Revisa la consola.');
+    }
   };
 
   // ==================== FORMS ====================
@@ -1130,7 +1172,6 @@ const MainApp = () => {
   const renderLeads = () => {
     const filtered = leads.filter(l => { const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; return matchesSearch && matchesFilter; });
     const exportColumns = [{ header: 'Nombre', accessor: l => l.nombre },{ header: 'Empresa', accessor: l => l.empresa },{ header: 'Tipo', accessor: l => tipoClienteConfig[l.tipo]?.label },{ header: 'CP', accessor: l => l.codigo_postal },{ header: 'Estado', accessor: l => estadoLeadConfig[l.estado]?.label },{ header: 'Origen', accessor: l => origenLeadConfig[l.origen]?.label },{ header: 'Valor', accessor: l => l.valor_estimado },{ header: 'Email', accessor: l => l.email },{ header: 'Teléfono', accessor: l => l.telefono }];
-    const fileInputRef = React.useRef(null);
 
     const handleConvertToClient = async (lead) => {
       if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
