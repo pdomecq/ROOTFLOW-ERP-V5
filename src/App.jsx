@@ -31,25 +31,27 @@ const EMPRESA = {
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
-const RootFlowLogo = ({ size = 40, showERP = true, variant = 'color' }) => (
+const RootFlowLogo = ({ size = 40, showERP = true }) => (
   <div className="relative">
     <svg width={size} height={size * 1.4} viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
-      {/* Fondo verde en forma de cápsula */}
-      <rect x="5" y="5" width="90" height="130" rx="45" fill="#1B5E3B"/>
-      {/* Planta/Microgreens blanca */}
+      {/* Cápsula verde */}
+      <rect x="5" y="5" width="90" height="130" rx="45" fill="#2D6A4F"/>
+      {/* Microgreens - hojas en abanico */}
       <g fill="white">
-        {/* Hoja central */}
-        <path d="M50 45 L50 95 L48 95 L48 45 Z"/>
-        <path d="M50 35 Q50 55, 50 75 Q45 55, 50 35"/>
-        {/* Hojas laterales izquierda */}
-        <path d="M50 70 Q30 50, 25 65 Q35 55, 50 70"/>
-        <path d="M50 85 Q20 70, 15 90 Q30 75, 50 85"/>
-        {/* Hojas laterales derecha */}
-        <path d="M50 70 Q70 50, 75 65 Q65 55, 50 70"/>
-        <path d="M50 85 Q80 70, 85 90 Q70 75, 50 85"/>
-        {/* Brotes adicionales */}
-        <path d="M50 60 Q35 40, 30 50 Q40 42, 50 60"/>
-        <path d="M50 60 Q65 40, 70 50 Q60 42, 50 60"/>
+        {/* Hoja central larga */}
+        <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
+        {/* Hojas internas */}
+        <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
+        <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
+        {/* Hojas medias */}
+        <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
+        <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
+        {/* Hojas externas */}
+        <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
+        <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
+        {/* Hojas más externas */}
+        <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
+        <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
       </g>
     </svg>
     {showERP && <span className="absolute -bottom-1 -right-1 bg-neutral-900 text-white text-[8px] font-black px-1.5 py-0.5 rounded">ERP</span>}
@@ -60,7 +62,7 @@ const RootFlowLogoFull = ({ showERP = true }) => (
   <div className="flex items-center gap-3">
     <RootFlowLogo size={32} showERP={showERP} />
     <div>
-      <h1 className="font-black text-lg tracking-tight text-white">RootFlow</h1>
+      <h1 className="font-black text-lg tracking-tight"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1>
       <p className="text-[9px] text-neutral-400 tracking-wider uppercase">Hydroponics</p>
     </div>
   </div>
@@ -69,16 +71,17 @@ const RootFlowLogoFull = ({ showERP = true }) => (
 // Logo para facturas (sin badge ERP)
 const RootFlowLogoFactura = () => (
   <svg width="60" height="84" viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
-    <rect x="5" y="5" width="90" height="130" rx="45" fill="#1B5E3B"/>
+    <rect x="5" y="5" width="90" height="130" rx="45" fill="#2D6A4F"/>
     <g fill="white">
-      <path d="M50 45 L50 95 L48 95 L48 45 Z"/>
-      <path d="M50 35 Q50 55, 50 75 Q45 55, 50 35"/>
-      <path d="M50 70 Q30 50, 25 65 Q35 55, 50 70"/>
-      <path d="M50 85 Q20 70, 15 90 Q30 75, 50 85"/>
-      <path d="M50 70 Q70 50, 75 65 Q65 55, 50 70"/>
-      <path d="M50 85 Q80 70, 85 90 Q70 75, 50 85"/>
-      <path d="M50 60 Q35 40, 30 50 Q40 42, 50 60"/>
-      <path d="M50 60 Q65 40, 70 50 Q60 42, 50 60"/>
+      <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
+      <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
+      <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
+      <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
+      <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
+      <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
+      <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
+      <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
+      <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
     </g>
   </svg>
 );
@@ -1784,24 +1787,26 @@ const MainApp = () => {
             body { padding: 40px; background: white; color: #333; }
             .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
             .logo-section { display: flex; align-items: center; gap: 15px; }
-            .logo { width: 50px; height: 70px; background: #1B5E3B; border-radius: 25px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px; }
-            .logo svg { width: 40px; height: 40px; }
-            .company-name { font-size: 24px; font-weight: 800; color: #1B5E3B; }
-            .company-sub { font-size: 11px; color: #666; }
+            .logo { width: 50px; height: 70px; background: #2D6A4F; border-radius: 25px; display: flex; align-items: center; justify-content: center; }
+            .logo svg { width: 44px; height: 60px; }
+            .company-name { font-size: 24px; font-weight: 800; }
+            .company-name .root { color: #1a1a1a; }
+            .company-name .flow { color: #f97316; }
+            .company-sub { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
             .factura-num { text-align: right; }
-            .factura-num h1 { font-size: 28px; color: #1B5E3B; margin-bottom: 5px; }
+            .factura-num h1 { font-size: 28px; color: #2D6A4F; margin-bottom: 5px; }
             .factura-num p { color: #666; font-size: 13px; }
             .addresses { display: flex; justify-content: space-between; margin-bottom: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
             .address h3 { font-size: 12px; color: #999; text-transform: uppercase; margin-bottom: 8px; }
             .address p { font-size: 13px; line-height: 1.6; }
             .address strong { font-weight: 600; }
             table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-            th { background: #1B5E3B; color: white; padding: 12px 15px; text-align: left; font-size: 12px; text-transform: uppercase; }
+            th { background: #2D6A4F; color: white; padding: 12px 15px; text-align: left; font-size: 12px; text-transform: uppercase; }
             td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 13px; }
             .text-right { text-align: right; }
             .totals { margin-left: auto; width: 300px; }
             .totals-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
-            .totals-row.total { border-top: 2px solid #1B5E3B; border-bottom: none; padding-top: 15px; font-size: 18px; font-weight: 800; color: #1B5E3B; }
+            .totals-row.total { border-top: 2px solid #2D6A4F; border-bottom: none; padding-top: 15px; font-size: 18px; font-weight: 800; color: #2D6A4F; }
             .footer { margin-top: 60px; text-align: center; color: #999; font-size: 11px; }
             .footer p { margin: 3px 0; }
             @media print { body { padding: 20px; } }
@@ -1811,11 +1816,23 @@ const MainApp = () => {
           <div class="header">
             <div class="logo-section">
               <div class="logo">
-                <svg viewBox="0 0 40 40" fill="white"><path d="M20 5 L20 25 M20 10 Q10 5, 8 12 Q14 8, 20 15 M20 10 Q30 5, 32 12 Q26 8, 20 15 M20 18 Q8 12, 5 22 Q12 15, 20 22 M20 18 Q32 12, 35 22 Q28 15, 20 22"/></svg>
+                <svg viewBox="0 0 100 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <g fill="white">
+                    <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
+                    <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
+                    <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
+                    <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
+                    <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
+                    <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
+                    <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
+                    <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
+                    <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
+                  </g>
+                </svg>
               </div>
               <div>
-                <div class="company-name">RootFlow</div>
-                <div class="company-sub">HYDROPONICS</div>
+                <div class="company-name"><span class="root">Root</span><span class="flow">Flow</span></div>
+                <div class="company-sub">Hydroponics</div>
               </div>
             </div>
             <div class="factura-num">
@@ -1895,12 +1912,12 @@ const MainApp = () => {
             <div className="flex items-center gap-4">
               <RootFlowLogoFactura />
               <div>
-                <h2 className="text-xl font-bold text-green-800">RootFlow</h2>
+                <h2 className="text-xl font-bold"><span className="text-neutral-900">Root</span><span className="text-orange-500">Flow</span></h2>
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Hydroponics</p>
               </div>
             </div>
             <div className="text-right">
-              <h1 className="text-3xl font-black text-green-800">FACTURA</h1>
+              <h1 className="text-3xl font-black text-emerald-700">FACTURA</h1>
               <p className="text-lg font-bold">{factura.id}</p>
               <p className="text-sm text-neutral-500">Fecha: {formatDate(factura.fecha)}</p>
               <p className="text-sm text-neutral-500">Vencimiento: {formatDate(factura.fecha_vencimiento)}</p>
@@ -1929,7 +1946,7 @@ const MainApp = () => {
           
           {/* Items */}
           <table className="w-full mb-6">
-            <thead className="bg-green-800 text-white">
+            <thead className="bg-emerald-700 text-white">
               <tr>
                 <th className="text-left px-4 py-3 text-sm">Descripción</th>
                 <th className="text-right px-4 py-3 text-sm">Cantidad</th>
@@ -1959,7 +1976,7 @@ const MainApp = () => {
               {factura.descuento_aplicado > 0 && <div className="flex justify-between py-2 border-b text-green-600"><span>Descuento</span><span>-{formatCurrency(factura.descuento_aplicado)}</span></div>}
               <div className="flex justify-between py-2 border-b"><span>Base Imponible</span><span>{formatCurrency(factura.base_imponible)}</span></div>
               <div className="flex justify-between py-2 border-b"><span>IVA (21%)</span><span>{formatCurrency(factura.iva)}</span></div>
-              <div className="flex justify-between py-3 text-xl font-black text-green-800 border-t-2 border-green-800"><span>TOTAL</span><span>{formatCurrency(factura.total)}</span></div>
+              <div className="flex justify-between py-3 text-xl font-black text-emerald-700 border-t-2 border-emerald-700"><span>TOTAL</span><span>{formatCurrency(factura.total)}</span></div>
             </div>
           </div>
           
