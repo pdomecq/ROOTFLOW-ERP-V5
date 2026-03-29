@@ -401,31 +401,31 @@ const Badge = ({ children, variant = "default", className = "" }) => {
 };
 
 const StatCard = ({ icon: Icon, label, value, subvalue, trend, color, onClick }) => (
-  <Card className={`p-5 hover:shadow-md transition-all cursor-pointer ${onClick ? 'hover:-translate-y-1' : ''}`} onClick={onClick}>
+  <Card className={`p-3 md:p-5 hover:shadow-md transition-all cursor-pointer ${onClick ? 'hover:-translate-y-1' : ''}`} onClick={onClick}>
     <div className="flex items-start justify-between">
-      <div className={`p-3 rounded-xl ${color}`}><Icon size={22} /></div>
+      <div className={`p-2 md:p-3 rounded-xl ${color}`}><Icon size={18} className="md:w-[22px] md:h-[22px]" /></div>
       {trend !== undefined && (
-        <div className={`flex items-center gap-1 text-sm font-bold ${trend >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-          {trend >= 0 ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}{Math.abs(trend)}%
+        <div className={`flex items-center gap-1 text-xs md:text-sm font-bold ${trend >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+          {trend >= 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}{Math.abs(trend)}%
         </div>
       )}
     </div>
-    <div className="mt-4">
-      <p className="text-2xl font-black text-neutral-900">{value}</p>
-      <p className="text-neutral-500 text-sm mt-0.5 font-medium">{label}</p>
-      {subvalue && <p className="text-xs text-neutral-400 mt-1">{subvalue}</p>}
+    <div className="mt-2 md:mt-4">
+      <p className="text-lg md:text-2xl font-black text-neutral-900 truncate">{value}</p>
+      <p className="text-neutral-500 text-xs md:text-sm mt-0.5 font-medium truncate">{label}</p>
+      {subvalue && <p className="text-xs text-neutral-400 mt-1 truncate">{subvalue}</p>}
     </div>
   </Card>
 );
 
 const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-    <div className={`bg-white rounded-2xl shadow-2xl w-full ${size} max-h-[90vh] overflow-hidden`} onClick={e => e.stopPropagation()}>
-      <div className="flex items-center justify-between p-5 border-b border-neutral-200">
-        <h3 className="text-xl font-bold text-neutral-900">{title}</h3>
+  <div className="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-50 md:p-4" onClick={onClose}>
+    <div className={`bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full ${size} max-h-[95vh] md:max-h-[90vh] overflow-hidden`} onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between p-4 md:p-5 border-b border-neutral-200">
+        <h3 className="text-lg md:text-xl font-bold text-neutral-900">{title}</h3>
         <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-xl"><X size={20} /></button>
       </div>
-      <div className="p-5 overflow-y-auto max-h-[calc(90vh-80px)]">{children}</div>
+      <div className="p-4 md:p-5 overflow-y-auto max-h-[calc(95vh-70px)] md:max-h-[calc(90vh-80px)]">{children}</div>
     </div>
   </div>
 );
@@ -1392,7 +1392,7 @@ const MainApp = () => {
 
   // ==================== NAV ====================
   const NavItem = ({ icon: Icon, label, section, badge }) => (
-    <button onClick={() => setActiveSection(section)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
+    <button onClick={() => { setActiveSection(section); if (window.innerWidth < 768) setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
       <Icon size={20} />
       {sidebarOpen && <><span className="font-semibold flex-1 text-left">{label}</span>{badge > 0 && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${activeSection === section ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>{badge}</span>}</>}
     </button>
@@ -1411,17 +1411,17 @@ const MainApp = () => {
 
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1>
-            <p className="text-neutral-500 mt-1 font-medium">Panel de control de RootFlow ERP</p>
+            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1>
+            <p className="text-neutral-500 mt-1 font-medium text-sm md:text-base">Panel de control de RootFlow ERP</p>
           </div>
           <div className="flex items-center gap-2">
-            <Calendar size={20} className="text-neutral-400" />
+            <Calendar size={20} className="text-neutral-400 hidden sm:block" />
             <select 
               value={dashboardPeriodo} 
               onChange={e => setDashboardPeriodo(e.target.value)}
-              className="px-4 py-2 rounded-xl border border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none"
+              className="px-3 md:px-4 py-2 rounded-xl border border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none text-sm md:text-base w-full sm:w-auto"
             >
               <option value="mes_actual">Este mes</option>
               <option value="año_actual">Año {new Date().getFullYear()}</option>
@@ -1434,11 +1434,11 @@ const MainApp = () => {
           </div>
         </div>
         
-        <Card className="p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
-          <p className="text-sm font-medium text-orange-700">📊 Mostrando datos de: <span className="font-bold">{periodoLabel}</span></p>
+        <Card className="p-3 md:p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
+          <p className="text-xs md:text-sm font-medium text-orange-700">📊 Mostrando datos de: <span className="font-bold">{periodoLabel}</span></p>
         </Card>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 md:gap-4">
           <StatCard icon={Euro} label="Ventas" value={formatCurrency(ventasPeriodo)} color="bg-green-100 text-green-600" />
           <StatCard icon={Wallet} label="Gastos" value={formatCurrency(gastosPeriodo)} color="bg-red-100 text-red-600" />
           <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(beneficio)} color={beneficio >= 0 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"} />
@@ -1524,15 +1524,16 @@ const MainApp = () => {
     // Vista Tabla
     const renderTableView = () => (
       <Card className="overflow-hidden">
-        <table className="w-full">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px]">
           <thead className="bg-neutral-900 text-white">
             <tr>
-              <th className="text-left px-5 py-4 text-sm font-bold">Cliente</th>
-              <th className="text-left px-5 py-4 text-sm font-bold">Tipo</th>
-              <th className="text-left px-5 py-4 text-sm font-bold">Zona</th>
-              <th className="text-left px-5 py-4 text-sm font-bold">Contacto</th>
-              <th className="text-left px-5 py-4 text-sm font-bold">Descuento</th>
-              <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th>
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Tipo</th>
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Zona</th>
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Contacto</th>
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Dto</th>
+              <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -1540,8 +1541,8 @@ const MainApp = () => {
               const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
               return (
                 <tr key={cliente.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                  <td className="px-5 py-4">
-                    <p className="font-bold text-neutral-900">{cliente.nombre}</p>
+                  <td className="px-3 md:px-5 py-3 md:py-4">
+                    <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
                     <p className="text-xs text-neutral-400">{cliente.cif || cliente.codigo_postal}</p>
                   </td>
                   <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
@@ -1562,6 +1563,7 @@ const MainApp = () => {
             })}
           </tbody>
         </table>
+        </div>
       </Card>
     );
 
@@ -1709,8 +1711,9 @@ const MainApp = () => {
           <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className="px-4 py-2.5 rounded-xl border font-medium"><option value="todos">Todos</option>{Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
         </Card>
         <Card className="overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Pedido</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Entrega</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[600px]">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Entrega</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Total</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Estado</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
             <tbody>
               {filtered.map(pedido => {
                 const cliente = clientes.find(c => c.id === pedido.cliente_id);
@@ -1718,17 +1721,18 @@ const MainApp = () => {
                 const Icon = config?.icon || Clock;
                 return (
                   <tr key={pedido.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-5 py-4"><p className="font-black text-neutral-900">#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
-                    <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
-                    <td className="px-5 py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>
-                    <td className="px-5 py-4 font-bold">{formatCurrency(pedido.total)}</td>
-                    <td className="px-5 py-4"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
-                    <td className="px-5 py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-black text-neutral-900 text-sm">#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4 font-semibold text-sm">{cliente?.nombre}</td>
+                    <td className="px-3 md:px-5 py-3 md:py-4 text-sm hidden sm:table-cell">{formatDate(pedido.fecha_entrega)}</td>
+                    <td className="px-3 md:px-5 py-3 md:py-4 font-bold text-sm">{formatCurrency(pedido.total)}</td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          </div>
           {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
         </Card>
       </div>
@@ -1739,33 +1743,35 @@ const MainApp = () => {
     const exportColumns = [{ header: 'Nombre', accessor: p => p.nombre },{ header: 'Categoría', accessor: p => p.categoria },{ header: 'Precio', accessor: p => p.precio },{ header: 'Coste', accessor: p => p.coste },{ header: 'Stock', accessor: p => p.stock },{ header: 'Stock Mínimo', accessor: p => p.stock_minimo }];
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium">{productos.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productos, 'productos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
-            <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={20} /> Nuevo</Button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div><h1 className="text-2xl md:text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium text-sm">{productos.length} registros</p></div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productos, 'productos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo</span></Button>
           </div>
         </div>
         <Card className="overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Producto</th><th className="text-left px-5 py-4 text-sm font-bold">Categoría</th><th className="text-left px-5 py-4 text-sm font-bold">Precio</th><th className="text-left px-5 py-4 text-sm font-bold">Stock</th><th className="text-left px-5 py-4 text-sm font-bold">Margen</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[500px]">
+            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Producto</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Categoría</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Precio</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Stock</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Margen</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
             <tbody>
               {productos.map(producto => {
                 const margen = producto.precio > 0 && producto.coste > 0 ? ((producto.precio - producto.coste) / producto.precio * 100).toFixed(0) : '-';
                 const stockBajoFlag = producto.stock < (producto.stock_minimo || 20);
                 return (
                   <tr key={producto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={18} /></div><div><p className="font-semibold">{producto.nombre}</p><p className="text-xs text-neutral-400">{producto.unidad}</p></div></div></td>
-                    <td className="px-5 py-4"><Badge>{producto.categoria}</Badge></td>
-                    <td className="px-5 py-4"><p className="font-bold">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400">Coste: {formatCurrency(producto.coste)}</p></td>
-                    <td className="px-5 py-4"><div className="flex items-center gap-2"><div className={`w-2.5 h-2.5 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} /><span className={stockBajoFlag ? 'text-red-600 font-bold' : 'font-medium'}>{producto.stock}</span></div></td>
-                    <td className="px-5 py-4"><Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge></td>
-                    <td className="px-5 py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(producto); setShowModal('producto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('productos', producto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2 md:gap-3"><div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={16} /></div><div><p className="font-semibold text-sm">{producto.nombre}</p><p className="text-xs text-neutral-400 hidden sm:block">{producto.unidad}</p></div></div></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4 hidden sm:table-cell"><Badge>{producto.categoria}</Badge></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-bold text-sm">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400 hidden md:block">Coste: {formatCurrency(producto.coste)}</p></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2"><div className={`w-2 h-2 md:w-2.5 md:h-2.5 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} /><span className={`text-sm ${stockBajoFlag ? 'text-red-600 font-bold' : 'font-medium'}`}>{producto.stock}</span></div></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4 hidden md:table-cell"><Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(producto); setShowModal('producto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('productos', producto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          </div>
         </Card>
       </div>
     );
@@ -3222,8 +3228,20 @@ Firma repartidor: _________________
 
   return (
     <div className="min-h-screen bg-neutral-100 flex">
-      {/* Sidebar Negro */}
-      <aside className={`${sidebarOpen ? 'w-64' : 'w-20'} bg-neutral-900 p-4 flex flex-col transition-all duration-300 fixed h-full z-40`}>
+      {/* Overlay para móvil cuando sidebar está abierto */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 md:hidden" 
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      
+      {/* Sidebar Negro - oculto en móvil por defecto */}
+      <aside className={`
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} 
+        ${sidebarOpen ? 'w-64' : 'md:w-20'} 
+        w-64 bg-neutral-900 p-4 flex flex-col transition-all duration-300 fixed h-full z-40
+      `}>
         <div className="flex items-center gap-3 px-2 mb-8">
           <RootFlowLogo size={40} />
           {sidebarOpen && <div><h1 className="font-black text-lg"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1><p className="text-[10px] text-neutral-500 uppercase tracking-wider">ERP Interno</p></div>}
@@ -3249,23 +3267,29 @@ Firma repartidor: _________________
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
         </nav>
         <div className="pt-4 border-t border-neutral-700 space-y-1">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="w-full flex items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="hidden md:flex w-full items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
           <button onClick={signOut} className="w-full flex items-center gap-3 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-xl"><LogOut size={20} />{sidebarOpen && <span className="text-sm font-medium">Salir</span>}</button>
         </div>
       </aside>
 
       {/* Main */}
-      <main className={`flex-1 ${sidebarOpen ? 'ml-64' : 'ml-20'} transition-all duration-300`}>
-        <header className="bg-white border-b border-neutral-200 px-8 py-4 sticky top-0 z-30">
+      <main className={`flex-1 w-full md:${sidebarOpen ? 'ml-64' : 'ml-20'} transition-all duration-300`}>
+        <header className="bg-white border-b border-neutral-200 px-4 md:px-8 py-3 md:py-4 sticky top-0 z-30">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-neutral-900 capitalize">{activeSection}</h2>
             <div className="flex items-center gap-3">
+              {/* Botón hamburguesa solo en móvil */}
+              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden p-2 text-neutral-600 hover:bg-neutral-100 rounded-xl">
+                <Menu size={24} />
+              </button>
+              <h2 className="text-base md:text-lg font-bold text-neutral-900 capitalize">{activeSection}</h2>
+            </div>
+            <div className="flex items-center gap-2 md:gap-3">
               <button className="p-2 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 rounded-xl relative"><Bell size={20} />{alertasNoLeidas > 0 && <span className="absolute -top-1 -right-1 w-5 h-5 bg-orange-500 text-white text-xs rounded-full flex items-center justify-center font-bold">{alertasNoLeidas}</span>}</button>
-              <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 rounded-xl"><div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div>{sidebarOpen && <span className="text-sm font-semibold text-neutral-700">{userProfile?.nombre?.split(' ')[0]}</span>}</div>
+              <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-neutral-100 rounded-xl"><div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div><span className="hidden md:inline text-sm font-semibold text-neutral-700">{userProfile?.nombre?.split(' ')[0]}</span></div>
             </div>
           </div>
         </header>
-        <div className="p-8">
+        <div className="p-4 md:p-8">
           {activeSection === 'dashboard' && renderDashboard()}
           {activeSection === 'calendario' && renderCalendario()}
           {activeSection === 'tareas' && renderTareas()}
