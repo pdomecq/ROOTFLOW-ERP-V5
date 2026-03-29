@@ -785,10 +785,11 @@ const MainApp = () => {
       if (id) { 
         result = await supabase.from(table).update(form).eq('id', id); 
       } else {
+        // Para lotes, generar código legible (no tocar el id que es auto-increment)
         if (table === 'lotes') {
           const year = new Date().getFullYear();
           const { count } = await supabase.from('lotes').select('*', { count: 'exact', head: true });
-          form.id = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
+          form.codigo = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
         }
         result = await supabase.from(table).insert(form);
       }
@@ -1372,7 +1373,7 @@ const MainApp = () => {
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
-          <Select label="Lote" className="col-span-2" value={form.lote_id} onChange={e => setForm({...form, lote_id: e.target.value})} options={lotes.map(l => ({ value: l.id, label: `${l.id} - ${productos.find(p => p.id === l.producto_id)?.nombre || 'Producto'}` }))} />
+          <Select label="Lote" className="col-span-2" value={form.lote_id} onChange={e => setForm({...form, lote_id: e.target.value})} options={lotes.map(l => ({ value: l.id, label: `${l.codigo || 'L-'+l.id} - ${productos.find(p => p.id === l.producto_id)?.nombre || 'Producto'}` }))} />
           <Input label="Cantidad perdida" type="number" value={form.cantidad} onChange={e => setForm({...form, cantidad: parseInt(e.target.value) || 0})} />
           <Select label="Motivo" value={form.motivo} onChange={e => setForm({...form, motivo: e.target.value})} options={Object.entries(motivosConfig).map(([k, v]) => ({ value: k, label: v }))} />
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
@@ -2322,7 +2323,7 @@ const MainApp = () => {
                 const diasRestantes = Math.ceil((new Date(lote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
                 return (
                   <tr key={lote.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-5 py-4 font-black">{lote.id}</td>
+                    <td className="px-5 py-4 font-black">{lote.codigo || `L-${lote.id}`}</td>
                     <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white"><Leaf size={14} /></div><span className="font-semibold">{producto?.nombre}</span></div></td>
                     <td className="px-5 py-4 text-sm">{formatDate(lote.fecha_siembra)}</td>
                     <td className="px-5 py-4"><p className="text-sm">{formatDate(lote.fecha_cosecha_prevista)}</p>{lote.estado !== 'cosechado' && diasRestantes <= 2 && <p className="text-xs text-amber-600 font-bold">{diasRestantes <= 0 ? '¡Hoy!' : `En ${diasRestantes}d`}</p>}</td>
@@ -3023,7 +3024,7 @@ Firma repartidor: _________________
                         <Badge className={motivoConfig.color}>{motivoConfig.label}</Badge>
                         <span className="font-bold text-red-600">-{m.cantidad} uds</span>
                       </div>
-                      <p className="text-sm text-neutral-600">{producto?.nombre || 'Producto'} • Lote {m.lote_id}</p>
+                      <p className="text-sm text-neutral-600">{producto?.nombre || 'Producto'} • Lote {lote?.codigo || 'L-'+m.lote_id}</p>
                       <p className="text-xs text-neutral-400">{formatDate(m.fecha)}</p>
                     </div>
                     <button onClick={() => handleDeleteMerma(m.id)} className="p-2 text-neutral-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button>
