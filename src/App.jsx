@@ -280,6 +280,9 @@ const zonaConfig = {
   norte: { label: "Norte", color: "bg-sky-100 text-sky-700" },
   centro: { label: "Centro", color: "bg-violet-100 text-violet-700" },
   sur: { label: "Sur", color: "bg-rose-100 text-rose-700" },
+  este: { label: "Este", color: "bg-emerald-100 text-emerald-700" },
+  oeste: { label: "Oeste", color: "bg-amber-100 text-amber-700" },
+  mercamadrid: { label: "Mercamadrid", color: "bg-orange-100 text-orange-700" },
 };
 
 const origenLeadConfig = {
@@ -303,6 +306,13 @@ const categoriasGasto = {
   alquiler: { label: "Alquiler", icon: Building2, color: "bg-neutral-100 text-neutral-700" },
   personal: { label: "Personal", icon: Users, color: "bg-pink-100 text-pink-700" },
   marketing: { label: "Marketing", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700" },
+  equipamiento: { label: "Equipamiento", icon: Package, color: "bg-slate-100 text-slate-700" },
+  mantenimiento: { label: "Mantenimiento", icon: AlertTriangle, color: "bg-orange-100 text-orange-700" },
+  seguros: { label: "Seguros", icon: FileText, color: "bg-teal-100 text-teal-700" },
+  impuestos: { label: "Impuestos", icon: Receipt, color: "bg-red-100 text-red-700" },
+  software: { label: "Software/IT", icon: BarChart3, color: "bg-violet-100 text-violet-700" },
+  formacion: { label: "Formación", icon: Star, color: "bg-emerald-100 text-emerald-700" },
+  viajes: { label: "Viajes", icon: MapPin, color: "bg-rose-100 text-rose-700" },
   otros: { label: "Otros", icon: MoreVertical, color: "bg-gray-100 text-gray-700" },
 };
 
@@ -326,6 +336,10 @@ const categoriaProveedorConfig = {
   envases: { label: "Envases", color: "bg-blue-100 text-blue-700" },
   equipamiento: { label: "Equipamiento", color: "bg-purple-100 text-purple-700" },
   servicios: { label: "Servicios", color: "bg-pink-100 text-pink-700" },
+  transporte: { label: "Transporte", color: "bg-indigo-100 text-indigo-700" },
+  tecnologia: { label: "Tecnología", color: "bg-violet-100 text-violet-700" },
+  limpieza: { label: "Limpieza", color: "bg-teal-100 text-teal-700" },
+  alimentacion: { label: "Alimentación", color: "bg-orange-100 text-orange-700" },
   otros: { label: "Otros", color: "bg-gray-100 text-gray-700" },
 };
 
@@ -647,6 +661,12 @@ const MainApp = () => {
   
   // Informes - periodo
   const [informesPeriodo, setInformesPeriodo] = useState('mes_actual');
+  
+  // Calendario - mes actual
+  const [mesCalendario, setMesCalendario] = useState(new Date());
+  
+  // Rutas - fecha seleccionada
+  const [fechaRuta, setFechaRuta] = useState(new Date().toISOString().split('T')[0]);
   
   // Refs para inputs de archivo
   const fileInputRef = useRef(null);
@@ -970,8 +990,8 @@ const MainApp = () => {
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
           <Input label="CIF/NIF" value={form.cif} onChange={e => setForm({...form, cif: e.target.value})} />
-          <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[{ value: 'mercamadrid', label: 'Mercamadrid' }, { value: 'hotel', label: 'Hotel' }, { value: 'restaurante', label: 'Restaurante' }]} />
-          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={[{ value: 'norte', label: 'Norte' }, { value: 'centro', label: 'Centro' }, { value: 'sur', label: 'Sur' }]} />
+          <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[{ value: 'mercamadrid', label: 'Mercamadrid' }, { value: 'hotel', label: 'Hotel' }, { value: 'restaurante', label: 'Restaurante' }, { value: 'catering', label: 'Catering' }, { value: 'tienda', label: 'Tienda' }]} />
+          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Descuento (%)" type="number" value={form.descuento} onChange={e => setForm({...form, descuento: parseInt(e.target.value) || 0})} />
           <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
           <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
@@ -995,7 +1015,7 @@ const MainApp = () => {
           <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLeadConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Select label="Origen" value={form.origen} onChange={e => setForm({...form, origen: e.target.value})} options={Object.entries(origenLeadConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
-          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={[{ value: 'norte', label: 'Norte' }, { value: 'centro', label: 'Centro' }, { value: 'sur', label: 'Sur' }]} />
+          <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Valor Estimado (€)" type="number" value={form.valor_estimado} onChange={e => setForm({...form, valor_estimado: parseFloat(e.target.value) || 0})} />
           <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
           <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
@@ -1110,7 +1130,7 @@ const MainApp = () => {
   };
 
   const GastoForm = ({ gasto, onSave, onCancel }) => {
-    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor: '', importe: 0, pagado: false, factura_url: '' });
+    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor_id: null, importe: 0, pagado: false, factura_url: '' });
     const [uploading, setUploading] = useState(false);
     const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
 
@@ -1156,7 +1176,12 @@ const MainApp = () => {
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
           <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
-          <Input label="Proveedor" value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} />
+          <Select 
+            label="Proveedor" 
+            value={form.proveedor_id || ''} 
+            onChange={e => setForm({...form, proveedor_id: e.target.value ? parseInt(e.target.value) : null})} 
+            options={[{ value: '', label: 'Sin proveedor' }, ...proveedores.map(p => ({ value: p.id, label: p.nombre }))]} 
+          />
           <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
         </div>
         
@@ -2302,12 +2327,12 @@ const MainApp = () => {
 
   // ==================== CALENDARIO ====================
   const renderCalendario = () => {
-    const [mesActual, setMesActual] = useState(new Date());
+    const mesActual = mesCalendario || new Date();
     
     const primerDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth(), 1);
     const ultimoDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth() + 1, 0);
     const diasEnMes = ultimoDiaMes.getDate();
-    const primerDiaSemana = primerDiaMes.getDay() === 0 ? 6 : primerDiaMes.getDay() - 1; // Lunes = 0
+    const primerDiaSemana = primerDiaMes.getDay() === 0 ? 6 : primerDiaMes.getDay() - 1;
     
     const diasCalendario = [];
     for (let i = 0; i < primerDiaSemana; i++) diasCalendario.push(null);
@@ -2315,21 +2340,27 @@ const MainApp = () => {
     
     const fechaStr = (dia) => `${mesActual.getFullYear()}-${String(mesActual.getMonth() + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
     
-    const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
-    const cosechasDia = (dia) => lotes.filter(l => l.fecha_cosecha_prevista === fechaStr(dia) && l.estado !== 'cosechado');
+    const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+    const cosechasDia = (dia) => lotes.filter(l => l.fecha_cosecha_prevista && l.fecha_cosecha_prevista === fechaStr(dia) && l.estado !== 'cosechado');
     
-    const cambiarMes = (delta) => setMesActual(new Date(mesActual.getFullYear(), mesActual.getMonth() + delta, 1));
+    const cambiarMes = (delta) => setMesCalendario(new Date(mesActual.getFullYear(), mesActual.getMonth() + delta, 1));
     
     const hoy = new Date().toISOString().split('T')[0];
 
-    // Resumen del mes
+    // Resumen del mes (con verificación de fechas válidas)
     const entregasMes = pedidos.filter(p => {
-      const fecha = new Date(p.fecha_entrega);
-      return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+      if (!p.fecha_entrega) return false;
+      try {
+        const fecha = new Date(p.fecha_entrega);
+        return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+      } catch { return false; }
     });
     const cosechasMes = lotes.filter(l => {
-      const fecha = new Date(l.fecha_cosecha_prevista);
-      return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && l.estado !== 'cosechado';
+      if (!l.fecha_cosecha_prevista) return false;
+      try {
+        const fecha = new Date(l.fecha_cosecha_prevista);
+        return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && l.estado !== 'cosechado';
+      } catch { return false; }
     });
 
     return (
@@ -2458,45 +2489,54 @@ const MainApp = () => {
 
   // ==================== RUTAS DE REPARTO ====================
   const renderRutas = () => {
-    const [fechaRuta, setFechaRuta] = useState(new Date().toISOString().split('T')[0]);
+    const fechaActual = fechaRuta || new Date().toISOString().split('T')[0];
+    const pedidosDelDia = pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaActual && ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado));
     
-    const pedidosDelDia = pedidos.filter(p => p.fecha_entrega === fechaRuta && ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado));
-    
-    const pedidosPorZona = {
-      norte: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'norte'),
-      centro: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'centro'),
-      sur: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'sur')
-    };
+    // Agrupar por todas las zonas disponibles
+    const zonasDisponibles = Object.keys(zonaConfig);
+    const pedidosPorZona = {};
+    zonasDisponibles.forEach(zona => {
+      pedidosPorZona[zona] = pedidosDelDia.filter(p => {
+        const cliente = clientes.find(c => c.id === p.cliente_id);
+        return cliente?.zona === zona;
+      });
+    });
 
     const totalPedidos = pedidosDelDia.length;
     const totalImporte = pedidosDelDia.reduce((sum, p) => sum + (p.total || 0), 0);
 
     const imprimirHojaRuta = (zona) => {
-      const pedidosZona = pedidosPorZona[zona];
+      const pedidosZona = pedidosPorZona[zona] || [];
+      if (pedidosZona.length === 0) return;
+      
       const contenido = pedidosZona.map((p, idx) => {
         const cliente = clientes.find(c => c.id === p.cliente_id);
         const items = pedidoItems.filter(i => i.pedido_id === p.id);
         return `
-${idx + 1}. ${cliente?.nombre}
+${idx + 1}. ${cliente?.nombre || 'Cliente'}
    📍 ${cliente?.direccion || 'Sin dirección'}, ${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}
    📞 ${cliente?.telefono || 'Sin teléfono'}
    💰 Total: ${formatCurrency(p.total)}
    📦 Productos:
-${items.map(i => `      - ${productos.find(pr => pr.id === i.producto_id)?.nombre} x${i.cantidad}`).join('\n')}
+${items.map(i => `      - ${productos.find(pr => pr.id === i.producto_id)?.nombre || 'Producto'} x${i.cantidad}`).join('\n')}
    📝 Notas: ${p.notas || 'Ninguna'}
 ─────────────────────────────────`;
       }).join('\n');
 
       const ventana = window.open('', '_blank');
+      if (!ventana) {
+        alert('Por favor permite ventanas emergentes para imprimir');
+        return;
+      }
       ventana.document.write(`
         <html>
-          <head><title>Hoja de Ruta - ${zonaConfig[zona]?.label} - ${formatDate(fechaRuta)}</title>
+          <head><title>Hoja de Ruta - ${zonaConfig[zona]?.label || zona} - ${formatDate(fechaActual)}</title>
           <style>body { font-family: monospace; white-space: pre-wrap; padding: 20px; }</style></head>
           <body>
 ═══════════════════════════════════
 ROOTFLOW HYDROPONICS SL
-HOJA DE RUTA - ${formatDate(fechaRuta)}
-ZONA: ${zonaConfig[zona]?.label.toUpperCase()}
+HOJA DE RUTA - ${formatDate(fechaActual)}
+ZONA: ${(zonaConfig[zona]?.label || zona).toUpperCase()}
 Total entregas: ${pedidosZona.length}
 ═══════════════════════════════════
 
@@ -2510,6 +2550,9 @@ Firma repartidor: _________________
       ventana.print();
     };
 
+    // Zonas con pedidos
+    const zonasConPedidos = zonasDisponibles.filter(z => (pedidosPorZona[z]?.length || 0) > 0);
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
@@ -2520,76 +2563,81 @@ Firma repartidor: _________________
           <div className="flex items-center gap-3">
             <input 
               type="date" 
-              value={fechaRuta} 
+              value={fechaActual} 
               onChange={e => setFechaRuta(e.target.value)}
               className="px-4 py-2 rounded-xl border font-semibold"
             />
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard icon={Truck} label="Total Entregas" value={totalPedidos} color="bg-blue-100 text-blue-600" />
-          <StatCard icon={MapPin} label="Zona Norte" value={pedidosPorZona.norte.length} color="bg-purple-100 text-purple-600" />
-          <StatCard icon={MapPin} label="Zona Centro" value={pedidosPorZona.centro.length} color="bg-orange-100 text-orange-600" />
-          <StatCard icon={MapPin} label="Zona Sur" value={pedidosPorZona.sur.length} color="bg-green-100 text-green-600" />
+          <StatCard icon={Euro} label="Importe Total" value={formatCurrency(totalImporte)} color="bg-green-100 text-green-600" />
+          <StatCard icon={MapPin} label="Zonas Activas" value={zonasConPedidos.length} color="bg-purple-100 text-purple-600" />
+          <StatCard icon={Users} label="Clientes" value={[...new Set(pedidosDelDia.map(p => p.cliente_id))].length} color="bg-orange-100 text-orange-600" />
         </div>
 
         <Card className="p-4 bg-gradient-to-r from-blue-50 to-green-50 border-blue-200">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-bold text-neutral-900">Resumen del día: {formatDate(fechaRuta)}</p>
+              <p className="font-bold text-neutral-900">Resumen del día: {formatDate(fechaActual)}</p>
               <p className="text-sm text-neutral-600">{totalPedidos} entregas por valor de {formatCurrency(totalImporte)}</p>
             </div>
           </div>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {['norte', 'centro', 'sur'].map(zona => (
-            <Card key={zona} className="overflow-hidden">
-              <div className={`p-4 ${zonaConfig[zona]?.color} flex items-center justify-between`}>
-                <div className="flex items-center gap-2">
-                  <MapPin size={20} />
-                  <h3 className="font-bold">{zonaConfig[zona]?.label}</h3>
-                  <Badge className="bg-white/30 text-inherit">{pedidosPorZona[zona].length}</Badge>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {zonasDisponibles.map(zona => {
+            const pedidosZona = pedidosPorZona[zona] || [];
+            const config = zonaConfig[zona] || { label: zona, color: 'bg-neutral-100 text-neutral-700' };
+            
+            return (
+              <Card key={zona} className="overflow-hidden">
+                <div className={`p-4 ${config.color} flex items-center justify-between`}>
+                  <div className="flex items-center gap-2">
+                    <MapPin size={20} />
+                    <h3 className="font-bold">{config.label}</h3>
+                    <Badge className="bg-white/30 text-inherit">{pedidosZona.length}</Badge>
+                  </div>
+                  {pedidosZona.length > 0 && (
+                    <button onClick={() => imprimirHojaRuta(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Imprimir hoja de ruta">
+                      <Printer size={18} />
+                    </button>
+                  )}
                 </div>
-                {pedidosPorZona[zona].length > 0 && (
-                  <button onClick={() => imprimirHojaRuta(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Imprimir hoja de ruta">
-                    <Printer size={18} />
-                  </button>
-                )}
-              </div>
-              <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
-                {pedidosPorZona[zona].map((p, idx) => {
-                  const cliente = clientes.find(c => c.id === p.cliente_id);
-                  return (
-                    <div key={p.id} className="p-3 bg-neutral-50 rounded-xl border-l-4 border-neutral-300">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-full bg-neutral-200 flex items-center justify-center text-xs font-bold">{idx + 1}</span>
-                          <div>
-                            <p className="font-semibold text-neutral-900">{cliente?.nombre}</p>
-                            <p className="text-xs text-neutral-500">{cliente?.direccion}</p>
-                            <p className="text-xs text-neutral-400">{cliente?.codigo_postal} • {cliente?.telefono}</p>
+                <div className="p-4 space-y-3 max-h-72 overflow-y-auto">
+                  {pedidosZona.map((p, idx) => {
+                    const cliente = clientes.find(c => c.id === p.cliente_id);
+                    return (
+                      <div key={p.id} className="p-3 bg-neutral-50 rounded-xl border-l-4 border-neutral-300">
+                        <div className="flex items-start justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-full bg-neutral-200 flex items-center justify-center text-xs font-bold">{idx + 1}</span>
+                            <div>
+                              <p className="font-semibold text-neutral-900">{cliente?.nombre || 'Cliente'}</p>
+                              <p className="text-xs text-neutral-500">{cliente?.direccion || 'Sin dirección'}</p>
+                              <p className="text-xs text-neutral-400">{cliente?.codigo_postal || ''} • {cliente?.telefono || ''}</p>
+                            </div>
                           </div>
+                          <p className="font-bold text-neutral-900">{formatCurrency(p.total)}</p>
                         </div>
-                        <p className="font-bold text-neutral-900">{formatCurrency(p.total)}</p>
                       </div>
-                    </div>
-                  );
-                })}
-                {pedidosPorZona[zona].length === 0 && (
-                  <p className="text-center text-neutral-400 py-8">Sin entregas</p>
-                )}
-              </div>
-              {pedidosPorZona[zona].length > 0 && (
-                <div className="p-4 bg-neutral-100 border-t">
-                  <p className="text-sm font-semibold text-neutral-600">
-                    Total zona: {formatCurrency(pedidosPorZona[zona].reduce((sum, p) => sum + (p.total || 0), 0))}
-                  </p>
+                    );
+                  })}
+                  {pedidosZona.length === 0 && (
+                    <p className="text-center text-neutral-400 py-8">Sin entregas</p>
+                  )}
                 </div>
-              )}
-            </Card>
-          ))}
+                {pedidosZona.length > 0 && (
+                  <div className="p-4 bg-neutral-100 border-t">
+                    <p className="text-sm font-semibold text-neutral-600">
+                      Total zona: {formatCurrency(pedidosZona.reduce((sum, p) => sum + (p.total || 0), 0))}
+                    </p>
+                  </div>
+                )}
+              </Card>
+            );
+          })}
         </div>
       </div>
     );
