@@ -306,6 +306,29 @@ const categoriasGasto = {
   otros: { label: "Otros", icon: MoreVertical, color: "bg-gray-100 text-gray-700" },
 };
 
+const prioridadTareaConfig = {
+  alta: { label: "Alta", color: "bg-red-100 text-red-700" },
+  media: { label: "Media", color: "bg-amber-100 text-amber-700" },
+  baja: { label: "Baja", color: "bg-green-100 text-green-700" },
+};
+
+const categoriaTareaConfig = {
+  cliente: { label: "Cliente", icon: Users, color: "bg-blue-100 text-blue-700" },
+  produccion: { label: "Producción", icon: Sprout, color: "bg-green-100 text-green-700" },
+  compras: { label: "Compras", icon: ShoppingCart, color: "bg-purple-100 text-purple-700" },
+  admin: { label: "Admin", icon: FileText, color: "bg-neutral-100 text-neutral-700" },
+  otro: { label: "Otro", icon: MoreVertical, color: "bg-gray-100 text-gray-700" },
+};
+
+const categoriaProveedorConfig = {
+  semillas: { label: "Semillas", color: "bg-green-100 text-green-700" },
+  sustratos: { label: "Sustratos", color: "bg-amber-100 text-amber-700" },
+  envases: { label: "Envases", color: "bg-blue-100 text-blue-700" },
+  equipamiento: { label: "Equipamiento", color: "bg-purple-100 text-purple-700" },
+  servicios: { label: "Servicios", color: "bg-pink-100 text-pink-700" },
+  otros: { label: "Otros", color: "bg-gray-100 text-gray-700" },
+};
+
 // ==================== UI COMPONENTS ====================
 const Card = ({ children, className = "", onClick }) => (
   <div onClick={onClick} className={`bg-white rounded-2xl border border-neutral-200 shadow-sm ${className}`}>
@@ -622,6 +645,9 @@ const MainApp = () => {
   const [filtroGastosMes, setFiltroGastosMes] = useState('todos');
   const [selectedGastos, setSelectedGastos] = useState([]);
   
+  // Informes - periodo
+  const [informesPeriodo, setInformesPeriodo] = useState('mes_actual');
+  
   // Refs para inputs de archivo
   const fileInputRef = useRef(null);
   
@@ -641,6 +667,9 @@ const MainApp = () => {
   const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
   const { data: lotesData, refetch: refetchLotes } = useRealtime('lotes');
+  const { data: proveedoresData, refetch: refetchProveedores } = useRealtime('proveedores');
+  const { data: tareasData, refetch: refetchTareas } = useRealtime('tareas');
+  const { data: mermasData, refetch: refetchMermas } = useRealtime('mermas');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -652,6 +681,9 @@ const MainApp = () => {
     refetchFacturas();
     refetchGastos();
     refetchLotes();
+    refetchProveedores();
+    refetchTareas();
+    refetchMermas();
   };
 
   // Variables seguras (nunca undefined)
@@ -663,9 +695,15 @@ const MainApp = () => {
   const facturas = facturasData || [];
   const gastos = gastosData || [];
   const lotes = lotesData || [];
+  const proveedores = proveedoresData || [];
+  const tareas = tareasData || [];
+  const mermas = mermasData || [];
   const setLeads = setLeadsData;
 
   const loading = l1 || l2 || l3;
+
+  // Métricas de tareas
+  const tareasPendientes = tareas.filter(t => !t.completada).length;
 
   // Funciones de filtro por periodo
   const getMesesDisponibles = () => {
@@ -1200,6 +1238,103 @@ const MainApp = () => {
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
         </div>
         <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lote ? 'Guardar' : 'Crear Lote'}</Button></div>
+      </div>
+    );
+  };
+
+  // ==================== PROVEEDOR FORM ====================
+  const ProveedorForm = ({ proveedor, onSave, onCancel }) => {
+    const [form, setForm] = useState(proveedor || { 
+      nombre: '', 
+      categoria: 'otros', 
+      contacto: '', 
+      email: '', 
+      telefono: '', 
+      direccion: '', 
+      notas: '' 
+    });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriaProveedorConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+          <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
+          <div className="col-span-2">
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label>
+            <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{proveedor ? 'Guardar' : 'Crear Proveedor'}</Button></div>
+      </div>
+    );
+  };
+
+  // ==================== TAREA FORM ====================
+  const TareaForm = ({ tarea, onSave, onCancel }) => {
+    const [form, setForm] = useState(tarea || { 
+      titulo: '', 
+      descripcion: '', 
+      categoria: 'otro', 
+      prioridad: 'media', 
+      fecha_limite: '', 
+      cliente_id: null,
+      completada: false 
+    });
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Título" className="col-span-2" value={form.titulo} onChange={e => setForm({...form, titulo: e.target.value})} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriaTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Select label="Prioridad" value={form.prioridad} onChange={e => setForm({...form, prioridad: e.target.value})} options={Object.entries(prioridadTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Input label="Fecha límite" type="date" value={form.fecha_limite} onChange={e => setForm({...form, fecha_limite: e.target.value})} />
+          <Select label="Cliente (opcional)" value={form.cliente_id || ''} onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})} options={[{ value: '', label: 'Sin cliente' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]} />
+          <div className="col-span-2">
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Descripción</label>
+            <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{tarea ? 'Guardar' : 'Crear Tarea'}</Button></div>
+      </div>
+    );
+  };
+
+  // ==================== MERMA FORM ====================
+  const MermaForm = ({ merma, onSave, onCancel }) => {
+    const [form, setForm] = useState(merma || { 
+      lote_id: lotes.length > 0 ? lotes[0].id : '', 
+      cantidad: 1, 
+      motivo: 'plagas', 
+      fecha: new Date().toISOString().split('T')[0],
+      notas: '' 
+    });
+
+    const motivosConfig = {
+      plagas: 'Plagas',
+      hongos: 'Hongos/Moho',
+      riego: 'Problemas de riego',
+      temperatura: 'Temperatura',
+      germinacion: 'Fallo germinación',
+      manipulacion: 'Manipulación',
+      caducidad: 'Caducidad',
+      otros: 'Otros'
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Select label="Lote" className="col-span-2" value={form.lote_id} onChange={e => setForm({...form, lote_id: e.target.value})} options={lotes.map(l => ({ value: l.id, label: `${l.id} - ${productos.find(p => p.id === l.producto_id)?.nombre || 'Producto'}` }))} />
+          <Input label="Cantidad perdida" type="number" value={form.cantidad} onChange={e => setForm({...form, cantidad: parseInt(e.target.value) || 0})} />
+          <Select label="Motivo" value={form.motivo} onChange={e => setForm({...form, motivo: e.target.value})} options={Object.entries(motivosConfig).map(([k, v]) => ({ value: k, label: v }))} />
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <div className="col-span-2">
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label>
+            <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{merma ? 'Guardar' : 'Registrar Merma'}</Button></div>
       </div>
     );
   };
@@ -2460,6 +2595,540 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== INFORMES Y ANÁLISIS ====================
+  const renderInformes = () => {
+    const pedidosPeriodo = filtrarPorPeriodo(pedidos, 'fecha', informesPeriodo);
+    const facturasPeriodo = filtrarPorPeriodo(facturas, 'fecha', informesPeriodo);
+    const gastosPeriodoInf = filtrarPorPeriodo(gastos, 'fecha', informesPeriodo);
+    
+    // Ranking de clientes por facturación
+    const rankingClientes = clientes.map(c => {
+      const totalFacturado = facturasPeriodo.filter(f => f.cliente_id === c.id).reduce((sum, f) => sum + (f.total || 0), 0);
+      const numPedidos = pedidosPeriodo.filter(p => p.cliente_id === c.id).length;
+      return { ...c, totalFacturado, numPedidos };
+    }).filter(c => c.totalFacturado > 0).sort((a, b) => b.totalFacturado - a.totalFacturado);
+
+    // Productos más vendidos
+    const ventasPorProducto = {};
+    pedidosPeriodo.forEach(p => {
+      pedidoItems.filter(i => i.pedido_id === p.id).forEach(item => {
+        if (!ventasPorProducto[item.producto_id]) {
+          ventasPorProducto[item.producto_id] = { cantidad: 0, importe: 0 };
+        }
+        ventasPorProducto[item.producto_id].cantidad += item.cantidad;
+        ventasPorProducto[item.producto_id].importe += item.subtotal || 0;
+      });
+    });
+    const rankingProductos = Object.entries(ventasPorProducto).map(([id, data]) => ({
+      producto: productos.find(p => p.id === parseInt(id)),
+      ...data
+    })).filter(p => p.producto).sort((a, b) => b.importe - a.importe);
+
+    // Margen por producto
+    const margenProductos = productos.map(p => {
+      const ventas = ventasPorProducto[p.id]?.importe || 0;
+      const coste = (ventasPorProducto[p.id]?.cantidad || 0) * (p.coste || 0);
+      const margen = ventas - coste;
+      const margenPct = ventas > 0 ? (margen / ventas * 100) : 0;
+      return { ...p, ventas, coste, margen, margenPct };
+    }).filter(p => p.ventas > 0).sort((a, b) => b.margen - a.margen);
+
+    // Totales
+    const totalVentas = pedidosPeriodo.filter(p => p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0);
+    const totalGastos = gastosPeriodoInf.reduce((sum, g) => sum + (g.importe || 0), 0);
+    const totalFacturado = facturasPeriodo.reduce((sum, f) => sum + (f.total || 0), 0);
+    const totalCobrado = facturasPeriodo.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0);
+
+    const periodoLabel = informesPeriodo === 'mes_actual' ? 'Este mes' : 
+                         informesPeriodo === 'año_actual' ? 'Este año' : 
+                         getMesesDisponibles().find(m => m.value === informesPeriodo)?.label || 'Periodo';
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Informes y Análisis</h1>
+            <p className="text-neutral-500 font-medium">Métricas y rendimiento del negocio</p>
+          </div>
+          <select value={informesPeriodo} onChange={e => setInformesPeriodo(e.target.value)} className="px-4 py-2 rounded-xl border font-semibold">
+            <option value="mes_actual">Este mes</option>
+            <option value="año_actual">Este año</option>
+            {getMesesDisponibles().slice(1).map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </div>
+
+        <Card className="p-4 bg-gradient-to-r from-blue-50 to-green-50 border-blue-200">
+          <p className="font-bold text-neutral-900">📊 Periodo: {periodoLabel}</p>
+        </Card>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard icon={Euro} label="Ventas" value={formatCurrency(totalVentas)} color="bg-green-100 text-green-600" />
+          <StatCard icon={Wallet} label="Gastos" value={formatCurrency(totalGastos)} color="bg-red-100 text-red-600" />
+          <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(totalVentas - totalGastos)} color={totalVentas - totalGastos >= 0 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"} />
+          <StatCard icon={Receipt} label="Facturado" value={formatCurrency(totalFacturado)} color="bg-blue-100 text-blue-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">🏆 Top Clientes</h3>
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {rankingClientes.slice(0, 10).map((c, idx) => (
+                <div key={c.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${idx < 3 ? 'bg-orange-500' : 'bg-neutral-400'}`}>{idx + 1}</span>
+                    <div>
+                      <p className="font-semibold">{c.nombre}</p>
+                      <p className="text-xs text-neutral-500">{c.numPedidos} pedidos</p>
+                    </div>
+                  </div>
+                  <p className="font-bold text-lg">{formatCurrency(c.totalFacturado)}</p>
+                </div>
+              ))}
+              {rankingClientes.length === 0 && <p className="text-neutral-400 text-center py-4">Sin datos en este periodo</p>}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">📦 Top Productos</h3>
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {rankingProductos.slice(0, 10).map((p, idx) => (
+                <div key={p.producto.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white ${idx < 3 ? 'bg-green-500' : 'bg-neutral-400'}`}>{idx + 1}</span>
+                    <div>
+                      <p className="font-semibold">{p.producto.nombre}</p>
+                      <p className="text-xs text-neutral-500">{p.cantidad} uds vendidas</p>
+                    </div>
+                  </div>
+                  <p className="font-bold text-lg">{formatCurrency(p.importe)}</p>
+                </div>
+              ))}
+              {rankingProductos.length === 0 && <p className="text-neutral-400 text-center py-4">Sin datos en este periodo</p>}
+            </div>
+          </Card>
+
+          <Card className="p-5 lg:col-span-2">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">💰 Margen por Producto</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-neutral-100">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-bold">Producto</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Ventas</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Coste</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Margen €</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Margen %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {margenProductos.slice(0, 8).map(p => (
+                    <tr key={p.id} className="border-b">
+                      <td className="px-4 py-3 font-semibold">{p.nombre}</td>
+                      <td className="px-4 py-3 text-right">{formatCurrency(p.ventas)}</td>
+                      <td className="px-4 py-3 text-right text-red-600">{formatCurrency(p.coste)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-green-600">{formatCurrency(p.margen)}</td>
+                      <td className="px-4 py-3 text-right"><Badge className={p.margenPct >= 50 ? 'bg-green-100 text-green-700' : p.margenPct >= 30 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}>{p.margenPct.toFixed(1)}%</Badge></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== PROVEEDORES ====================
+  const renderProveedores = () => {
+    const handleDeleteProveedor = async (id) => {
+      if (window.confirm('¿Eliminar este proveedor?')) {
+        await supabase.from('proveedores').delete().eq('id', id);
+        refetchProveedores();
+      }
+    };
+
+    // Calcular totales por proveedor
+    const proveedoresConTotales = proveedores.map(p => {
+      const gastosProveedor = gastos.filter(g => g.proveedor_id === p.id);
+      const total = gastosProveedor.reduce((sum, g) => sum + (g.importe || 0), 0);
+      return { ...p, totalGastos: total, numFacturas: gastosProveedor.length };
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Proveedores</h1>
+            <p className="text-neutral-500 font-medium">{proveedores.length} proveedores</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('proveedor'); }}><Plus size={20} /> Nuevo</Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {proveedoresConTotales.map(prov => {
+            const catConfig = categoriaProveedorConfig[prov.categoria] || categoriaProveedorConfig.otros;
+            return (
+              <Card key={prov.id} className="p-5 hover:shadow-md transition-all">
+                <div className="flex items-start justify-between mb-3">
+                  <Badge className={catConfig.color}>{catConfig.label}</Badge>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditingItem(prov); setShowModal('proveedor'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                    <button onClick={() => handleDeleteProveedor(prov.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                  </div>
+                </div>
+                <h3 className="font-bold text-lg text-neutral-900">{prov.nombre}</h3>
+                <p className="text-sm text-neutral-500 mb-2">{prov.contacto}</p>
+                <div className="text-sm text-neutral-400 space-y-1">
+                  {prov.email && <p className="flex items-center gap-2"><Mail size={14} /> {prov.email}</p>}
+                  {prov.telefono && <p className="flex items-center gap-2"><Phone size={14} /> {prov.telefono}</p>}
+                </div>
+                <div className="mt-4 pt-3 border-t flex justify-between items-center">
+                  <span className="text-sm text-neutral-500">{prov.numFacturas} facturas</span>
+                  <span className="font-bold text-neutral-900">{formatCurrency(prov.totalGastos)}</span>
+                </div>
+              </Card>
+            );
+          })}
+          {proveedores.length === 0 && (
+            <Card className="col-span-3 p-8 text-center">
+              <Package size={48} className="mx-auto text-neutral-300 mb-4" />
+              <h3 className="font-bold text-neutral-900 mb-2">No hay proveedores</h3>
+              <p className="text-neutral-500 mb-4">Añade tus proveedores para gestionar mejor las compras</p>
+              <Button onClick={() => setShowModal('proveedor')}><Plus size={16} /> Añadir Proveedor</Button>
+            </Card>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== TAREAS ====================
+  const renderTareas = () => {
+    const handleToggleTarea = async (tarea) => {
+      await supabase.from('tareas').update({ completada: !tarea.completada }).eq('id', tarea.id);
+      refetchTareas();
+    };
+
+    const handleDeleteTarea = async (id) => {
+      if (window.confirm('¿Eliminar esta tarea?')) {
+        await supabase.from('tareas').delete().eq('id', id);
+        refetchTareas();
+      }
+    };
+
+    const tareasPendientesLista = tareas.filter(t => !t.completada).sort((a, b) => {
+      const prioridadOrden = { alta: 0, media: 1, baja: 2 };
+      return prioridadOrden[a.prioridad] - prioridadOrden[b.prioridad];
+    });
+    const tareasCompletadas = tareas.filter(t => t.completada);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Tareas</h1>
+            <p className="text-neutral-500 font-medium">{tareasPendientes} pendientes</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('tarea'); }}><Plus size={20} /> Nueva Tarea</Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard icon={Clock} label="Pendientes" value={tareasPendientesLista.length} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={AlertCircle} label="Alta Prioridad" value={tareasPendientesLista.filter(t => t.prioridad === 'alta').length} color="bg-red-100 text-red-600" />
+          <StatCard icon={CheckCircle} label="Completadas" value={tareasCompletadas.length} color="bg-green-100 text-green-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">📋 Pendientes</h3>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {tareasPendientesLista.map(tarea => {
+                const catConfig = categoriaTareaConfig[tarea.categoria] || categoriaTareaConfig.otro;
+                const prioConfig = prioridadTareaConfig[tarea.prioridad];
+                const cliente = tarea.cliente_id ? clientes.find(c => c.id === tarea.cliente_id) : null;
+                const vencida = tarea.fecha_limite && new Date(tarea.fecha_limite) < new Date();
+                return (
+                  <div key={tarea.id} className={`p-4 rounded-xl border ${vencida ? 'bg-red-50 border-red-200' : 'bg-neutral-50 border-neutral-200'}`}>
+                    <div className="flex items-start gap-3">
+                      <button onClick={() => handleToggleTarea(tarea)} className="mt-1 w-5 h-5 rounded border-2 border-neutral-300 hover:border-green-500 flex-shrink-0" />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <p className="font-semibold text-neutral-900">{tarea.titulo}</p>
+                          <Badge className={prioConfig.color}>{prioConfig.label}</Badge>
+                          <Badge className={catConfig.color}>{catConfig.label}</Badge>
+                        </div>
+                        {tarea.descripcion && <p className="text-sm text-neutral-500 mb-2">{tarea.descripcion}</p>}
+                        <div className="flex items-center gap-4 text-xs text-neutral-400">
+                          {tarea.fecha_limite && <span className={vencida ? 'text-red-600 font-bold' : ''}>{vencida ? '⚠️ Vencida: ' : '📅 '}{formatDate(tarea.fecha_limite)}</span>}
+                          {cliente && <span>👤 {cliente.nombre}</span>}
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button onClick={() => { setEditingItem(tarea); setShowModal('tarea'); }} className="p-2 text-neutral-400 hover:text-orange-600 rounded-lg"><Edit2 size={14} /></button>
+                        <button onClick={() => handleDeleteTarea(tarea.id)} className="p-2 text-neutral-400 hover:text-red-600 rounded-lg"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {tareasPendientesLista.length === 0 && <p className="text-center text-neutral-400 py-8">🎉 ¡No hay tareas pendientes!</p>}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">✅ Completadas</h3>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {tareasCompletadas.slice(0, 10).map(tarea => (
+                <div key={tarea.id} className="p-3 bg-green-50 rounded-xl border border-green-200 flex items-center gap-3">
+                  <button onClick={() => handleToggleTarea(tarea)} className="w-5 h-5 rounded bg-green-500 text-white flex items-center justify-center flex-shrink-0"><Check size={12} /></button>
+                  <p className="text-neutral-500 line-through flex-1">{tarea.titulo}</p>
+                  <button onClick={() => handleDeleteTarea(tarea.id)} className="p-1 text-neutral-400 hover:text-red-600 rounded"><Trash2 size={14} /></button>
+                </div>
+              ))}
+              {tareasCompletadas.length === 0 && <p className="text-center text-neutral-400 py-8">Sin tareas completadas</p>}
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== MERMAS ====================
+  const renderMermas = () => {
+    const handleDeleteMerma = async (id) => {
+      if (window.confirm('¿Eliminar este registro?')) {
+        await supabase.from('mermas').delete().eq('id', id);
+        refetchMermas();
+      }
+    };
+
+    const motivosConfig = {
+      plagas: { label: 'Plagas', color: 'bg-red-100 text-red-700' },
+      hongos: { label: 'Hongos/Moho', color: 'bg-amber-100 text-amber-700' },
+      riego: { label: 'Problemas de riego', color: 'bg-blue-100 text-blue-700' },
+      temperatura: { label: 'Temperatura', color: 'bg-orange-100 text-orange-700' },
+      germinacion: { label: 'Fallo germinación', color: 'bg-purple-100 text-purple-700' },
+      manipulacion: { label: 'Manipulación', color: 'bg-pink-100 text-pink-700' },
+      caducidad: { label: 'Caducidad', color: 'bg-neutral-100 text-neutral-700' },
+      otros: { label: 'Otros', color: 'bg-gray-100 text-gray-700' },
+    };
+
+    const totalMermas = mermas.reduce((sum, m) => sum + (m.cantidad || 0), 0);
+    const mermasPorMotivo = Object.entries(motivosConfig).map(([key, config]) => ({
+      motivo: key,
+      label: config.label,
+      cantidad: mermas.filter(m => m.motivo === key).reduce((sum, m) => sum + (m.cantidad || 0), 0)
+    })).filter(m => m.cantidad > 0);
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Control de Mermas</h1>
+            <p className="text-neutral-500 font-medium">Registro de pérdidas en producción</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('merma'); }}><Plus size={20} /> Registrar Merma</Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={AlertTriangle} label="Total Mermas" value={totalMermas} color="bg-red-100 text-red-600" />
+          <StatCard icon={TrendingDown} label="Este Mes" value={mermas.filter(m => new Date(m.fecha).getMonth() === new Date().getMonth()).reduce((sum, m) => sum + (m.cantidad || 0), 0)} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={Sprout} label="Lotes Afectados" value={[...new Set(mermas.map(m => m.lote_id))].length} color="bg-purple-100 text-purple-600" />
+          <StatCard icon={Package} label="Registros" value={mermas.length} color="bg-blue-100 text-blue-600" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Card className="p-5 lg:col-span-2">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">📋 Historial de Mermas</h3>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {mermas.map(m => {
+                const lote = lotes.find(l => l.id === m.lote_id);
+                const producto = lote ? productos.find(p => p.id === lote.producto_id) : null;
+                const motivoConfig = motivosConfig[m.motivo] || motivosConfig.otros;
+                return (
+                  <div key={m.id} className="p-4 bg-neutral-50 rounded-xl flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge className={motivoConfig.color}>{motivoConfig.label}</Badge>
+                        <span className="font-bold text-red-600">-{m.cantidad} uds</span>
+                      </div>
+                      <p className="text-sm text-neutral-600">{producto?.nombre || 'Producto'} • Lote {m.lote_id}</p>
+                      <p className="text-xs text-neutral-400">{formatDate(m.fecha)}</p>
+                    </div>
+                    <button onClick={() => handleDeleteMerma(m.id)} className="p-2 text-neutral-400 hover:text-red-600 rounded-lg"><Trash2 size={16} /></button>
+                  </div>
+                );
+              })}
+              {mermas.length === 0 && <p className="text-center text-neutral-400 py-8">Sin registros de mermas</p>}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4">📊 Por Motivo</h3>
+            <div className="space-y-3">
+              {mermasPorMotivo.map(m => {
+                const pct = totalMermas > 0 ? (m.cantidad / totalMermas * 100) : 0;
+                return (
+                  <div key={m.motivo}>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span>{m.label}</span>
+                      <span className="font-bold">{m.cantidad} ({pct.toFixed(0)}%)</span>
+                    </div>
+                    <div className="h-2 bg-neutral-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-red-500 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {mermasPorMotivo.length === 0 && <p className="text-center text-neutral-400 py-4">Sin datos</p>}
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== CONTABILIDAD ====================
+  const renderContabilidad = () => {
+    const year = new Date().getFullYear();
+    const trimestres = [
+      { num: 1, meses: [0, 1, 2], label: 'T1 (Ene-Mar)' },
+      { num: 2, meses: [3, 4, 5], label: 'T2 (Abr-Jun)' },
+      { num: 3, meses: [6, 7, 8], label: 'T3 (Jul-Sep)' },
+      { num: 4, meses: [9, 10, 11], label: 'T4 (Oct-Dic)' },
+    ];
+
+    const datosTrimestre = trimestres.map(t => {
+      const facturasT = facturas.filter(f => {
+        const fecha = new Date(f.fecha);
+        return fecha.getFullYear() === year && t.meses.includes(fecha.getMonth());
+      });
+      const gastosT = gastos.filter(g => {
+        const fecha = new Date(g.fecha);
+        return fecha.getFullYear() === year && t.meses.includes(fecha.getMonth());
+      });
+
+      const ivaRepercutido = facturasT.reduce((sum, f) => sum + (f.iva || 0), 0);
+      const ivaSoportado = gastosT.reduce((sum, g) => sum + ((g.importe || 0) * 0.21), 0); // Estimación 21%
+      const resultado = ivaRepercutido - ivaSoportado;
+
+      return {
+        ...t,
+        facturas: facturasT.length,
+        gastos: gastosT.length,
+        ivaRepercutido,
+        ivaSoportado,
+        resultado,
+        baseImponible: facturasT.reduce((sum, f) => sum + (f.base_imponible || 0), 0),
+        totalGastos: gastosT.reduce((sum, g) => sum + (g.importe || 0), 0),
+      };
+    });
+
+    const totalAnual = {
+      ingresos: facturas.filter(f => new Date(f.fecha).getFullYear() === year).reduce((sum, f) => sum + (f.total || 0), 0),
+      gastos: gastos.filter(g => new Date(g.fecha).getFullYear() === year).reduce((sum, g) => sum + (g.importe || 0), 0),
+      ivaRepercutido: datosTrimestre.reduce((sum, t) => sum + t.ivaRepercutido, 0),
+      ivaSoportado: datosTrimestre.reduce((sum, t) => sum + t.ivaSoportado, 0),
+    };
+
+    // Flujo de caja por mes
+    const meses = [...Array(12)].map((_, i) => {
+      const facturasM = facturas.filter(f => {
+        const fecha = new Date(f.fecha);
+        return fecha.getFullYear() === year && fecha.getMonth() === i;
+      });
+      const gastosM = gastos.filter(g => {
+        const fecha = new Date(g.fecha);
+        return fecha.getFullYear() === year && fecha.getMonth() === i;
+      });
+      return {
+        mes: new Date(year, i).toLocaleDateString('es-ES', { month: 'short' }),
+        ingresos: facturasM.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0),
+        gastos: gastosM.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0),
+      };
+    });
+
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-black text-neutral-900">Contabilidad</h1>
+          <p className="text-neutral-500 font-medium">Resumen fiscal y flujo de caja - Año {year}</p>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard icon={Euro} label="Ingresos Año" value={formatCurrency(totalAnual.ingresos)} color="bg-green-100 text-green-600" />
+          <StatCard icon={Wallet} label="Gastos Año" value={formatCurrency(totalAnual.gastos)} color="bg-red-100 text-red-600" />
+          <StatCard icon={TrendingUp} label="IVA Repercutido" value={formatCurrency(totalAnual.ivaRepercutido)} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={TrendingDown} label="IVA Soportado" value={formatCurrency(totalAnual.ivaSoportado)} color="bg-amber-100 text-amber-600" />
+        </div>
+
+        <Card className="p-5">
+          <h3 className="text-lg font-bold text-neutral-900 mb-4">📊 Resumen IVA Trimestral</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-neutral-100">
+                <tr>
+                  <th className="text-left px-4 py-3 text-sm font-bold">Trimestre</th>
+                  <th className="text-right px-4 py-3 text-sm font-bold">Base Imponible</th>
+                  <th className="text-right px-4 py-3 text-sm font-bold">IVA Repercutido</th>
+                  <th className="text-right px-4 py-3 text-sm font-bold">IVA Soportado</th>
+                  <th className="text-right px-4 py-3 text-sm font-bold">Resultado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {datosTrimestre.map(t => (
+                  <tr key={t.num} className="border-b">
+                    <td className="px-4 py-3 font-semibold">{t.label}</td>
+                    <td className="px-4 py-3 text-right">{formatCurrency(t.baseImponible)}</td>
+                    <td className="px-4 py-3 text-right text-green-600">{formatCurrency(t.ivaRepercutido)}</td>
+                    <td className="px-4 py-3 text-right text-red-600">{formatCurrency(t.ivaSoportado)}</td>
+                    <td className="px-4 py-3 text-right font-bold">
+                      <span className={t.resultado >= 0 ? 'text-red-600' : 'text-green-600'}>
+                        {t.resultado >= 0 ? 'A pagar: ' : 'A compensar: '}{formatCurrency(Math.abs(t.resultado))}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-neutral-900 text-white">
+                <tr>
+                  <td className="px-4 py-3 font-bold">TOTAL ANUAL</td>
+                  <td className="px-4 py-3 text-right font-bold">{formatCurrency(datosTrimestre.reduce((s, t) => s + t.baseImponible, 0))}</td>
+                  <td className="px-4 py-3 text-right font-bold">{formatCurrency(totalAnual.ivaRepercutido)}</td>
+                  <td className="px-4 py-3 text-right font-bold">{formatCurrency(totalAnual.ivaSoportado)}</td>
+                  <td className="px-4 py-3 text-right font-bold">{formatCurrency(totalAnual.ivaRepercutido - totalAnual.ivaSoportado)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Card>
+
+        <Card className="p-5">
+          <h3 className="text-lg font-bold text-neutral-900 mb-4">💰 Flujo de Caja Mensual (Cobros vs Pagos)</h3>
+          <div className="h-64">
+            <ResponsiveContainer>
+              <BarChart data={meses}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="mes" />
+                <YAxis />
+                <Tooltip formatter={(v) => formatCurrency(v)} />
+                <Bar dataKey="ingresos" name="Cobros" fill="#22c55e" />
+                <Bar dataKey="gastos" name="Pagos" fill="#ef4444" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card className="p-4 bg-amber-50 border-amber-200">
+          <p className="text-sm text-amber-800">
+            <strong>⚠️ Nota:</strong> El IVA soportado es una estimación al 21%. Para datos exactos, asegúrate de registrar el IVA real en cada gasto.
+          </p>
+        </Card>
+      </div>
+    );
+  };
+
   // ==================== MAIN RENDER ====================
   if (loading) return <LoadingScreen />;
 
@@ -2471,9 +3140,11 @@ Firma repartidor: _________________
           <RootFlowLogo size={40} />
           {sidebarOpen && <div><h1 className="font-black text-lg"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1><p className="text-[10px] text-neutral-500 uppercase tracking-wider">ERP Interno</p></div>}
         </div>
-        <nav className="flex-1 space-y-1">
+        <nav className="flex-1 space-y-1 overflow-y-auto">
           <NavItem icon={BarChart3} label="Dashboard" section="dashboard" />
           <NavItem icon={Calendar} label="Calendario" section="calendario" />
+          <NavItem icon={CheckCircle} label="Tareas" section="tareas" badge={tareasPendientes} />
+          <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Comercial</p>}</div>
           <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
           <NavItem icon={Users} label="Clientes" section="clientes" />
           <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
@@ -2482,8 +3153,12 @@ Firma repartidor: _________________
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
           <NavItem icon={Receipt} label="Facturación" section="facturacion" />
           <NavItem icon={Wallet} label="Gastos" section="gastos" />
+          <NavItem icon={Building2} label="Proveedores" section="proveedores" />
+          <NavItem icon={BarChart3} label="Informes" section="informes" />
+          <NavItem icon={Euro} label="Contabilidad" section="contabilidad" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
           <NavItem icon={Sprout} label="Producción" section="produccion" badge={lotesActivos} />
+          <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
         </nav>
         <div className="pt-4 border-t border-neutral-700 space-y-1">
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="w-full flex items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
@@ -2505,6 +3180,7 @@ Firma repartidor: _________________
         <div className="p-8">
           {activeSection === 'dashboard' && renderDashboard()}
           {activeSection === 'calendario' && renderCalendario()}
+          {activeSection === 'tareas' && renderTareas()}
           {activeSection === 'leads' && renderLeads()}
           {activeSection === 'clientes' && renderClientes()}
           {activeSection === 'pedidos' && renderPedidos()}
@@ -2512,7 +3188,11 @@ Firma repartidor: _________________
           {activeSection === 'productos' && renderProductos()}
           {activeSection === 'facturacion' && renderFacturacion()}
           {activeSection === 'gastos' && renderGastos()}
+          {activeSection === 'proveedores' && renderProveedores()}
+          {activeSection === 'informes' && renderInformes()}
+          {activeSection === 'contabilidad' && renderContabilidad()}
           {activeSection === 'produccion' && renderProduccion()}
+          {activeSection === 'mermas' && renderMermas()}
         </div>
       </main>
 
@@ -2523,6 +3203,9 @@ Firma repartidor: _________________
       {showModal === 'pedido' && <Modal title={editingItem ? 'Editar Pedido' : 'Nuevo Pedido'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoForm pedido={editingItem} onSave={handleCreatePedido} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={form => handleSave('lotes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}><TareaForm tarea={editingItem} onSave={form => handleSave('tareas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
     </div>
   );
 };
