@@ -781,15 +781,24 @@ const MainApp = () => {
   // CRUD
   const handleSave = async (table, form, id = null) => {
     try {
-      if (id) { await supabase.from(table).update(form).eq('id', id); }
-      else {
+      let result;
+      if (id) { 
+        result = await supabase.from(table).update(form).eq('id', id); 
+      } else {
         if (table === 'lotes') {
           const year = new Date().getFullYear();
           const { count } = await supabase.from('lotes').select('*', { count: 'exact', head: true });
           form.id = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
         }
-        await supabase.from(table).insert(form);
+        result = await supabase.from(table).insert(form);
       }
+      
+      if (result.error) {
+        console.error('Error guardando:', result.error);
+        alert('Error: ' + result.error.message);
+        return;
+      }
+      
       setShowModal(null);
       setEditingItem(null);
       // Refrescar datos inmediatamente
@@ -798,12 +807,22 @@ const MainApp = () => {
       else if (table === 'leads') refetchLeads();
       else if (table === 'gastos') refetchGastos();
       else if (table === 'lotes') refetchLotes();
-    } catch (error) { console.error('Error:', error); }
+      else if (table === 'proveedores') refetchProveedores();
+      else if (table === 'tareas') refetchTareas();
+      else if (table === 'mermas') refetchMermas();
+    } catch (error) { 
+      console.error('Error:', error); 
+      alert('Error: ' + error.message);
+    }
   };
 
   const handleDelete = async (table, id) => {
     if (window.confirm('¿Eliminar este elemento?')) {
-      await supabase.from(table).delete().eq('id', id);
+      const { error } = await supabase.from(table).delete().eq('id', id);
+      if (error) {
+        alert('Error al eliminar: ' + error.message);
+        return;
+      }
       // Refrescar datos inmediatamente
       if (table === 'clientes') refetchClientes();
       else if (table === 'productos') refetchProductos();
@@ -811,6 +830,9 @@ const MainApp = () => {
       else if (table === 'gastos') refetchGastos();
       else if (table === 'lotes') refetchLotes();
       else if (table === 'pedidos') { refetchPedidos(); refetchFacturas(); }
+      else if (table === 'proveedores') refetchProveedores();
+      else if (table === 'tareas') refetchTareas();
+      else if (table === 'mermas') refetchMermas();
     }
   };
 
