@@ -4,7 +4,7 @@ import {
   Package, Users, ShoppingCart, Plus, Search, Edit2, Trash2, Check, X, 
   Eye, FileText, Truck, Clock, Leaf, Building2, UtensilsCrossed, BarChart3, 
   Euro, ArrowUpRight, ArrowDownRight, Menu, Bell, LogOut, 
-  MapPin, Sprout, Sun, AlertTriangle, CheckCircle, 
+  MapPin, Sprout, Sun, AlertTriangle, CheckCircle, Calendar,
   Phone, Mail, Receipt, Layers, Loader2, User, Lock, Eye as EyeIcon, EyeOff,
   Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
@@ -611,6 +611,17 @@ const MainApp = () => {
   const [filterEstado, setFilterEstado] = useState('todos');
   const [selectedFactura, setSelectedFactura] = useState(null);
   
+  // Dashboard - selector de periodo
+  const [dashboardPeriodo, setDashboardPeriodo] = useState('mes_actual');
+  
+  // Facturas - filtros y selección
+  const [filtroFacturasMes, setFiltroFacturasMes] = useState('todos');
+  const [selectedFacturas, setSelectedFacturas] = useState([]);
+  
+  // Gastos - filtros y selección
+  const [filtroGastosMes, setFiltroGastosMes] = useState('todos');
+  const [selectedGastos, setSelectedGastos] = useState([]);
+  
   // Refs para inputs de archivo
   const fileInputRef = useRef(null);
   
@@ -656,11 +667,54 @@ const MainApp = () => {
 
   const loading = l1 || l2 || l3;
 
-  // Métricas
-  const ventasMes = pedidos.filter(p => p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0);
+  // Funciones de filtro por periodo
+  const getMesesDisponibles = () => {
+    const meses = [];
+    const now = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      meses.push({
+        value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })
+      });
+    }
+    return meses;
+  };
+
+  const filtrarPorPeriodo = (items, campo, periodo) => {
+    if (periodo === 'todos') return items;
+    const now = new Date();
+    const year = now.getFullYear();
+    
+    if (periodo === 'mes_actual') {
+      const mes = now.getMonth();
+      return items.filter(item => {
+        const fecha = new Date(item[campo]);
+        return fecha.getFullYear() === year && fecha.getMonth() === mes;
+      });
+    } else if (periodo === 'año_actual') {
+      return items.filter(item => new Date(item[campo]).getFullYear() === year);
+    } else {
+      // Formato: "2024-03" (año-mes)
+      const [pYear, pMonth] = periodo.split('-').map(Number);
+      return items.filter(item => {
+        const fecha = new Date(item[campo]);
+        return fecha.getFullYear() === pYear && fecha.getMonth() === pMonth - 1;
+      });
+    }
+  };
+
+  // Métricas filtradas por periodo del dashboard
+  const pedidosFiltrados = filtrarPorPeriodo(pedidos, 'fecha', dashboardPeriodo);
+  const gastosFiltrados = filtrarPorPeriodo(gastos, 'fecha', dashboardPeriodo);
+  const facturasFiltradas = filtrarPorPeriodo(facturas, 'fecha', dashboardPeriodo);
+
+  const ventasPeriodo = pedidosFiltrados.filter(p => p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0);
+  const gastosPeriodo = gastosFiltrados.reduce((sum, g) => sum + (g.importe || 0), 0);
+
+  // Métricas generales (no afectadas por periodo)
   const pedidosPendientes = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length;
   const facturasPendientesTotal = facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0);
-  const gastosMes = gastos.reduce((sum, g) => sum + (g.importe || 0), 0);
   const stockBajo = productos.filter(p => p.stock < (p.stock_minimo || 20)).length;
   const lotesActivos = lotes.filter(l => ['sembrado', 'germinando', 'creciendo'].includes(l.estado)).length;
   const alertasNoLeidas = 0;
@@ -1125,18 +1179,46 @@ const MainApp = () => {
   const renderDashboard = () => {
     const last7Days = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - (6 - i)); return d.toISOString().split('T')[0]; });
     const ventasData = last7Days.map(fecha => ({ fecha: formatDateShort(fecha), ventas: pedidos.filter(p => p.fecha === fecha && p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0) }));
-    const gastosPorCategoria = Object.entries(categoriasGasto).map(([key, val]) => ({ name: val.label, value: gastos.filter(g => g.categoria === key).reduce((sum, g) => sum + g.importe, 0) })).filter(g => g.value > 0);
-    const beneficio = ventasMes - gastosMes;
+    const gastosPorCategoria = Object.entries(categoriasGasto).map(([key, val]) => ({ name: val.label, value: gastosFiltrados.filter(g => g.categoria === key).reduce((sum, g) => sum + (g.importe || 0), 0) })).filter(g => g.value > 0);
+    const beneficio = ventasPeriodo - gastosPeriodo;
+
+    const periodoLabel = dashboardPeriodo === 'mes_actual' ? 'Este mes' : 
+                         dashboardPeriodo === 'año_actual' ? 'Este año' : 
+                         getMesesDisponibles().find(m => m.value === dashboardPeriodo)?.label || 'Periodo';
 
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1><p className="text-neutral-500 mt-1 font-medium">Panel de control de RootFlow ERP</p></div>
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1>
+            <p className="text-neutral-500 mt-1 font-medium">Panel de control de RootFlow ERP</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Calendar size={20} className="text-neutral-400" />
+            <select 
+              value={dashboardPeriodo} 
+              onChange={e => setDashboardPeriodo(e.target.value)}
+              className="px-4 py-2 rounded-xl border border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none"
+            >
+              <option value="mes_actual">Este mes</option>
+              <option value="año_actual">Año {new Date().getFullYear()}</option>
+              <optgroup label="Meses anteriores">
+                {getMesesDisponibles().slice(1).map(m => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
         </div>
+        
+        <Card className="p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
+          <p className="text-sm font-medium text-orange-700">📊 Mostrando datos de: <span className="font-bold">{periodoLabel}</span></p>
+        </Card>
+
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-          <StatCard icon={Euro} label="Ventas" value={formatCurrency(ventasMes)} trend={12} color="bg-green-100 text-green-600" />
-          <StatCard icon={Wallet} label="Gastos" value={formatCurrency(gastosMes)} color="bg-red-100 text-red-600" />
-          <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(beneficio)} color="bg-orange-100 text-orange-600" />
+          <StatCard icon={Euro} label="Ventas" value={formatCurrency(ventasPeriodo)} color="bg-green-100 text-green-600" />
+          <StatCard icon={Wallet} label="Gastos" value={formatCurrency(gastosPeriodo)} color="bg-red-100 text-red-600" />
+          <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(beneficio)} color={beneficio >= 0 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"} />
           <StatCard icon={ShoppingCart} label="Pedidos" value={pedidosPendientes} color="bg-amber-100 text-amber-600" onClick={() => setActiveSection('pedidos')} />
           <StatCard icon={Target} label="Leads" value={leadsNuevos} color="bg-purple-100 text-purple-600" onClick={() => setActiveSection('leads')} />
           <StatCard icon={Users} label="Clientes" value={clientes.length} color="bg-blue-100 text-blue-600" onClick={() => setActiveSection('clientes')} />
@@ -1144,7 +1226,7 @@ const MainApp = () => {
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Ventas 7 Días</h3><div className="h-64"><ResponsiveContainer><AreaChart data={ventasData}><defs><linearGradient id="colorVentas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#F97316" stopOpacity={0.3}/><stop offset="95%" stopColor="#F97316" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" /><XAxis dataKey="fecha" tick={{ fontSize: 12 }} /><YAxis tick={{ fontSize: 12 }} /><Tooltip formatter={(v) => formatCurrency(v)} /><Area type="monotone" dataKey="ventas" stroke="#F97316" strokeWidth={3} fill="url(#colorVentas)" /></AreaChart></ResponsiveContainer></div></Card>
-          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Gastos por Categoría</h3><div className="h-64"><ResponsiveContainer><RechartsPie><Pie data={gastosPorCategoria} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>{gastosPorCategoria.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Pie><Tooltip formatter={(v) => formatCurrency(v)} /></RechartsPie></ResponsiveContainer></div></Card>
+          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Gastos por Categoría ({periodoLabel})</h3><div className="h-64">{gastosPorCategoria.length > 0 ? <ResponsiveContainer><RechartsPie><Pie data={gastosPorCategoria} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>{gastosPorCategoria.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Pie><Tooltip formatter={(v) => formatCurrency(v)} /></RechartsPie></ResponsiveContainer> : <div className="h-full flex items-center justify-center text-neutral-400">Sin gastos en este periodo</div>}</div></Card>
         </div>
       </div>
     );
@@ -1672,24 +1754,127 @@ const MainApp = () => {
   };
 
   const renderFacturacion = () => {
+    // Filtrar facturas por mes
+    const facturasFiltradas = filtrarPorPeriodo(facturas, 'fecha', filtroFacturasMes);
+    
+    // Exportar seleccionadas
+    const exportColumns = [
+      { header: 'Factura', accessor: f => f.id },
+      { header: 'Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.nombre },
+      { header: 'Fecha', accessor: f => formatDate(f.fecha) },
+      { header: 'Vencimiento', accessor: f => formatDate(f.fecha_vencimiento) },
+      { header: 'Subtotal', accessor: f => f.subtotal },
+      { header: 'IVA', accessor: f => f.iva },
+      { header: 'Total', accessor: f => f.total },
+      { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label }
+    ];
+
+    const handleSelectAll = (checked) => {
+      if (checked) {
+        setSelectedFacturas(facturasFiltradas.map(f => f.id));
+      } else {
+        setSelectedFacturas([]);
+      }
+    };
+
+    const handleSelectOne = (id, checked) => {
+      if (checked) {
+        setSelectedFacturas([...selectedFacturas, id]);
+      } else {
+        setSelectedFacturas(selectedFacturas.filter(fId => fId !== id));
+      }
+    };
+
+    const handleDeleteFactura = async (id) => {
+      if (window.confirm('¿Eliminar esta factura?')) {
+        await supabase.from('facturas').delete().eq('id', id);
+        refetchFacturas();
+        setSelectedFacturas(selectedFacturas.filter(fId => fId !== id));
+      }
+    };
+
+    const handleExportSelected = () => {
+      const toExport = selectedFacturas.length > 0 
+        ? facturas.filter(f => selectedFacturas.includes(f.id))
+        : facturasFiltradas;
+      exportToExcel(toExport, 'facturas', exportColumns);
+    };
+
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between"><div><h1 className="text-3xl font-black text-neutral-900">Facturación</h1><p className="text-neutral-500 font-medium">{facturas.length} registros</p></div></div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
-          <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
-          <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
-          <StatCard icon={AlertCircle} label="Vencidas" value={facturas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Facturación</h1>
+            <p className="text-neutral-500 font-medium">{facturasFiltradas.length} facturas</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <select 
+              value={filtroFacturasMes} 
+              onChange={e => { setFiltroFacturasMes(e.target.value); setSelectedFacturas([]); }}
+              className="px-3 py-2 rounded-xl border bg-white font-medium text-sm"
+            >
+              <option value="todos">Todas las fechas</option>
+              <option value="mes_actual">Este mes</option>
+              <option value="año_actual">Este año</option>
+              {getMesesDisponibles().slice(1).map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+            <Button variant="secondary" size="sm" onClick={handleExportSelected}>
+              <Download size={16} /> {selectedFacturas.length > 0 ? `Exportar (${selectedFacturas.length})` : 'Exportar'}
+            </Button>
+          </div>
         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturasFiltradas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
+          <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+        </div>
+
+        {selectedFacturas.length > 0 && (
+          <Card className="p-3 bg-orange-50 border-orange-200 flex items-center justify-between">
+            <span className="font-semibold text-orange-700">{selectedFacturas.length} factura(s) seleccionada(s)</span>
+            <Button variant="secondary" size="sm" onClick={() => setSelectedFacturas([])}>Limpiar selección</Button>
+          </Card>
+        )}
+
         <Card className="overflow-hidden">
           <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Factura</th><th className="text-left px-5 py-4 text-sm font-bold">Cliente</th><th className="text-left px-5 py-4 text-sm font-bold">Fecha</th><th className="text-left px-5 py-4 text-sm font-bold">Total</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <thead className="bg-neutral-900 text-white">
+              <tr>
+                <th className="px-5 py-4 text-left">
+                  <input 
+                    type="checkbox" 
+                    checked={facturasFiltradas.length > 0 && selectedFacturas.length === facturasFiltradas.length}
+                    onChange={e => handleSelectAll(e.target.checked)}
+                    className="w-4 h-4 rounded"
+                  />
+                </th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Cliente</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Fecha</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Total</th>
+                <th className="text-left px-5 py-4 text-sm font-bold">Estado</th>
+                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
-              {facturas.map(factura => {
+              {facturasFiltradas.map(factura => {
                 const cliente = clientes.find(c => c.id === factura.cliente_id);
                 const config = estadoFacturaConfig[factura.estado];
+                const isSelected = selectedFacturas.includes(factura.id);
                 return (
-                  <tr key={factura.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                  <tr key={factura.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-orange-50' : ''}`}>
+                    <td className="px-5 py-4">
+                      <input 
+                        type="checkbox" 
+                        checked={isSelected}
+                        onChange={e => handleSelectOne(factura.id, e.target.checked)}
+                        className="w-4 h-4 rounded"
+                      />
+                    </td>
                     <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p></td>
                     <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
                     <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
@@ -1699,6 +1884,7 @@ const MainApp = () => {
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
                         {factura.estado === 'pendiente' && <button onClick={async () => { await supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id); refetchFacturas(); }} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagada"><Check size={16} /></button>}
+                        <button onClick={() => handleDeleteFactura(factura.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
                       </div>
                     </td>
                   </tr>
@@ -1706,7 +1892,7 @@ const MainApp = () => {
               })}
             </tbody>
           </table>
-          {facturas.length === 0 && <EmptyState icon={Receipt} title="No hay facturas" description="Las facturas se generan al crear pedidos" />}
+          {facturasFiltradas.length === 0 && <EmptyState icon={Receipt} title="No hay facturas" description="Las facturas se generan al crear pedidos" />}
         </Card>
         
         {/* Modal de factura */}
@@ -1723,32 +1909,100 @@ const MainApp = () => {
   };
 
   const renderGastos = () => {
-    const exportColumns = [{ header: 'Fecha', accessor: g => formatDate(g.fecha) },{ header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },{ header: 'Concepto', accessor: g => g.concepto },{ header: 'Proveedor', accessor: g => g.proveedor },{ header: 'Importe', accessor: g => g.importe },{ header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },{ header: 'Factura', accessor: g => g.factura_url ? 'Sí' : 'No' }];
+    // Filtrar gastos por mes
+    const gastosFiltradosPorMes = filtrarPorPeriodo(gastos, 'fecha', filtroGastosMes);
+    
+    const exportColumns = [
+      { header: 'Fecha', accessor: g => formatDate(g.fecha) },
+      { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },
+      { header: 'Concepto', accessor: g => g.concepto },
+      { header: 'Proveedor', accessor: g => g.proveedor },
+      { header: 'Importe', accessor: g => g.importe },
+      { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
+      { header: 'Factura', accessor: g => g.factura_url ? 'Sí' : 'No' }
+    ];
     
     const handleMarcarPagado = async (id) => {
       await supabase.from('gastos').update({ pagado: true }).eq('id', id);
       refetchGastos();
     };
 
+    const handleSelectAllGastos = (checked) => {
+      if (checked) {
+        setSelectedGastos(gastosFiltradosPorMes.map(g => g.id));
+      } else {
+        setSelectedGastos([]);
+      }
+    };
+
+    const handleSelectOneGasto = (id, checked) => {
+      if (checked) {
+        setSelectedGastos([...selectedGastos, id]);
+      } else {
+        setSelectedGastos(selectedGastos.filter(gId => gId !== id));
+      }
+    };
+
+    const handleExportSelectedGastos = () => {
+      const toExport = selectedGastos.length > 0 
+        ? gastos.filter(g => selectedGastos.includes(g.id))
+        : gastosFiltradosPorMes;
+      exportToExcel(toExport, 'gastos', exportColumns);
+    };
+
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Gastos</h1><p className="text-neutral-500 font-medium">{gastos.length} registros</p></div>
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Gastos</h1>
+            <p className="text-neutral-500 font-medium">{gastosFiltradosPorMes.length} gastos</p>
+          </div>
           <div className="flex items-center gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(gastos, 'gastos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
+            <select 
+              value={filtroGastosMes} 
+              onChange={e => { setFiltroGastosMes(e.target.value); setSelectedGastos([]); }}
+              className="px-3 py-2 rounded-xl border bg-white font-medium text-sm"
+            >
+              <option value="todos">Todas las fechas</option>
+              <option value="mes_actual">Este mes</option>
+              <option value="año_actual">Este año</option>
+              {getMesesDisponibles().slice(1).map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+            <Button variant="secondary" size="sm" onClick={handleExportSelectedGastos}>
+              <Download size={16} /> {selectedGastos.length > 0 ? `Exportar (${selectedGastos.length})` : 'Exportar'}
+            </Button>
             <Button onClick={() => { setEditingItem(null); setShowModal('gasto'); }}><Plus size={20} /> Nuevo</Button>
           </div>
         </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard icon={Wallet} label="Total" value={formatCurrency(gastos.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
-          <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastos.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
-          <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastos.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
-          <StatCard icon={TrendingUp} label="Este Mes" value={formatCurrency(gastos.filter(g => new Date(g.fecha).getMonth() === new Date().getMonth()).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-orange-100 text-orange-600" />
+          <StatCard icon={Wallet} label="Total" value={formatCurrency(gastosFiltradosPorMes.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
+          <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastosFiltradosPorMes.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
+          <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastosFiltradosPorMes.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={FileText} label="Con Factura" value={gastosFiltradosPorMes.filter(g => g.factura_url).length} color="bg-blue-100 text-blue-600" />
         </div>
+
+        {selectedGastos.length > 0 && (
+          <Card className="p-3 bg-orange-50 border-orange-200 flex items-center justify-between">
+            <span className="font-semibold text-orange-700">{selectedGastos.length} gasto(s) seleccionado(s) - Total: {formatCurrency(gastos.filter(g => selectedGastos.includes(g.id)).reduce((sum, g) => sum + (g.importe || 0), 0))}</span>
+            <Button variant="secondary" size="sm" onClick={() => setSelectedGastos([])}>Limpiar selección</Button>
+          </Card>
+        )}
+
         <Card className="overflow-hidden">
           <table className="w-full">
             <thead className="bg-neutral-900 text-white">
               <tr>
+                <th className="px-5 py-4 text-left">
+                  <input 
+                    type="checkbox" 
+                    checked={gastosFiltradosPorMes.length > 0 && selectedGastos.length === gastosFiltradosPorMes.length}
+                    onChange={e => handleSelectAllGastos(e.target.checked)}
+                    className="w-4 h-4 rounded"
+                  />
+                </th>
                 <th className="text-left px-5 py-4 text-sm font-bold">Fecha</th>
                 <th className="text-left px-5 py-4 text-sm font-bold">Concepto</th>
                 <th className="text-left px-5 py-4 text-sm font-bold">Categoría</th>
@@ -1760,11 +2014,20 @@ const MainApp = () => {
               </tr>
             </thead>
             <tbody>
-              {gastos.map(gasto => {
+              {gastosFiltradosPorMes.map(gasto => {
                 const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
                 const Icon = catConfig.icon;
+                const isSelected = selectedGastos.includes(gasto.id);
                 return (
-                  <tr key={gasto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                  <tr key={gasto.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-orange-50' : ''}`}>
+                    <td className="px-5 py-4">
+                      <input 
+                        type="checkbox" 
+                        checked={isSelected}
+                        onChange={e => handleSelectOneGasto(gasto.id, e.target.checked)}
+                        className="w-4 h-4 rounded"
+                      />
+                    </td>
                     <td className="px-5 py-4 text-sm">{formatDate(gasto.fecha)}</td>
                     <td className="px-5 py-4 font-semibold">{gasto.concepto}</td>
                     <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
@@ -1793,7 +2056,7 @@ const MainApp = () => {
               })}
             </tbody>
           </table>
-          {gastos.length === 0 && <EmptyState icon={Wallet} title="No hay gastos" description="Registra tus gastos" action={<Button onClick={() => setShowModal('gasto')}><Plus size={16} />Nuevo</Button>} />}
+          {gastosFiltradosPorMes.length === 0 && <EmptyState icon={Wallet} title="No hay gastos" description="Registra tus gastos" action={<Button onClick={() => setShowModal('gasto')}><Plus size={16} />Nuevo</Button>} />}
         </Card>
       </div>
     );
