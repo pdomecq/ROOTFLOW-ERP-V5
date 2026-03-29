@@ -799,6 +799,31 @@ const MainApp = () => {
     reader.readAsArrayBuffer(file);
   };
 
+  // ==================== MANEJO DE LOTES CON STOCK ====================
+  const handleCambiarEstadoLote = async (lote, nuevoEstado) => {
+    await supabase.from('lotes').update({ estado: nuevoEstado }).eq('id', lote.id);
+    refetchLotes();
+  };
+
+  const handleCosecharLote = async (lote) => {
+    // Actualizar estado del lote
+    await supabase.from('lotes').update({ 
+      estado: 'cosechado', 
+      fecha_cosecha_real: new Date().toISOString().split('T')[0] 
+    }).eq('id', lote.id);
+    
+    // REPONER STOCK: Añadir bandejas cosechadas al stock del producto
+    const producto = productos.find(p => p.id === lote.producto_id);
+    if (producto) {
+      const nuevoStock = (producto.stock || 0) + (lote.bandejas || 0);
+      await supabase.from('productos').update({ stock: nuevoStock }).eq('id', lote.producto_id);
+      refetchProductos();
+    }
+    
+    refetchLotes();
+    alert(`✅ Lote cosechado. Se añadieron ${lote.bandejas} unidades al stock de ${producto?.nombre}`);
+  };
+
   const handleCreatePedido = async (form) => {
     try {
       const cliente = clientes.find(c => c.id === form.cliente_id);
@@ -846,6 +871,18 @@ const MainApp = () => {
           precio_unitario: item.precio_unitario, 
           subtotal: item.subtotal 
         });
+      }
+
+      // STOCK AUTOMÁTICO: Descontar stock de productos (solo para pedidos nuevos)
+      if (!editingItem) {
+        for (const item of itemsData) {
+          const prod = productos.find(p => p.id === item.producto_id);
+          if (prod) {
+            const nuevoStock = Math.max(0, (prod.stock || 0) - item.cantidad);
+            await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id);
+          }
+        }
+        refetchProductos();
       }
 
       // Crear factura automáticamente si es pedido nuevo
@@ -1746,6 +1783,19 @@ const MainApp = () => {
           {/* Acciones */}
           <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
             <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+            <Button variant="secondary" onClick={() => {
+              const itemsTexto = items.map(item => {
+                const prod = productos.find(p => p.id === item.producto_id);
+                return `- ${prod?.nombre || 'Producto'} x${item.cantidad}: ${formatCurrency(item.subtotal)}`;
+              }).join('%0A');
+              
+              const asunto = `Factura ${factura.id} - RootFlow Hydroponics`;
+              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (21%): ${formatCurrency(factura.iva)}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0AIBAN: ES00 0000 0000 0000 0000 0000%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
+              
+              window.open(`mailto:${cliente?.email || ''}?subject=${asunto}&body=${cuerpo}`, '_blank');
+            }}>
+              <Mail size={18} /> Enviar Email
+            </Button>
             <Button onClick={handlePrint}><Printer size={18} /> Imprimir / PDF</Button>
           </div>
         </div>
@@ -2096,7 +2146,14 @@ const MainApp = () => {
                     <td className="px-5 py-4"><p className="text-sm">{formatDate(lote.fecha_cosecha_prevista)}</p>{lote.estado !== 'cosechado' && diasRestantes <= 2 && <p className="text-xs text-amber-600 font-bold">{diasRestantes <= 0 ? '¡Hoy!' : `En ${diasRestantes}d`}</p>}</td>
                     <td className="px-5 py-4 font-bold">{lote.bandejas}</td>
                     <td className="px-5 py-4"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
-                    <td className="px-5 py-4"><div className="flex justify-end gap-1">{lote.estado === 'creciendo' && <button onClick={() => supabase.from('lotes').update({ estado: 'cosechado', fecha_cosecha_real: new Date().toISOString().split('T')[0] }).eq('id', lote.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><Check size={16} /></button>}{lote.estado === 'sembrado' && <button onClick={() => supabase.from('lotes').update({ estado: 'creciendo' }).eq('id', lote.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"><Sun size={16} /></button>}<button onClick={() => { setEditingItem(lote); setShowModal('lote'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('lotes', lote.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-1">
+                        {lote.estado === 'creciendo' && <button onClick={() => handleCosecharLote(lote)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Cosechar (añade stock)"><Check size={16} /></button>}
+                        {lote.estado === 'sembrado' && <button onClick={() => handleCambiarEstadoLote(lote, 'creciendo')} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Marcar creciendo"><Sun size={16} /></button>}
+                        <button onClick={() => { setEditingItem(lote); setShowModal('lote'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                        <button onClick={() => handleDelete('lotes', lote.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -2104,6 +2161,301 @@ const MainApp = () => {
           </table>
           {lotes.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
         </Card>
+      </div>
+    );
+  };
+
+  // ==================== CALENDARIO ====================
+  const renderCalendario = () => {
+    const [mesActual, setMesActual] = useState(new Date());
+    
+    const primerDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth(), 1);
+    const ultimoDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth() + 1, 0);
+    const diasEnMes = ultimoDiaMes.getDate();
+    const primerDiaSemana = primerDiaMes.getDay() === 0 ? 6 : primerDiaMes.getDay() - 1; // Lunes = 0
+    
+    const diasCalendario = [];
+    for (let i = 0; i < primerDiaSemana; i++) diasCalendario.push(null);
+    for (let i = 1; i <= diasEnMes; i++) diasCalendario.push(i);
+    
+    const fechaStr = (dia) => `${mesActual.getFullYear()}-${String(mesActual.getMonth() + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
+    
+    const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+    const cosechasDia = (dia) => lotes.filter(l => l.fecha_cosecha_prevista === fechaStr(dia) && l.estado !== 'cosechado');
+    
+    const cambiarMes = (delta) => setMesActual(new Date(mesActual.getFullYear(), mesActual.getMonth() + delta, 1));
+    
+    const hoy = new Date().toISOString().split('T')[0];
+
+    // Resumen del mes
+    const entregasMes = pedidos.filter(p => {
+      const fecha = new Date(p.fecha_entrega);
+      return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+    });
+    const cosechasMes = lotes.filter(l => {
+      const fecha = new Date(l.fecha_cosecha_prevista);
+      return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && l.estado !== 'cosechado';
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Calendario</h1>
+            <p className="text-neutral-500 font-medium">Entregas y cosechas programadas</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard icon={Truck} label="Entregas este mes" value={entregasMes.length} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={Leaf} label="Cosechas este mes" value={cosechasMes.length} color="bg-green-100 text-green-600" />
+          <StatCard icon={AlertCircle} label="Próximos 3 días" value={
+            pedidos.filter(p => {
+              const fecha = new Date(p.fecha_entrega);
+              const diff = (fecha - new Date()) / (1000*60*60*24);
+              return diff >= 0 && diff <= 3 && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+            }).length
+          } color="bg-amber-100 text-amber-600" />
+        </div>
+
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-6">
+            <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
+            <h2 className="text-xl font-bold text-neutral-900">
+              {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+            </h2>
+            <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowUpRight size={20} /></button>
+          </div>
+          
+          <div className="grid grid-cols-7 gap-1 mb-2">
+            {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+              <div key={d} className="text-center text-sm font-bold text-neutral-500 py-2">{d}</div>
+            ))}
+          </div>
+          
+          <div className="grid grid-cols-7 gap-1">
+            {diasCalendario.map((dia, idx) => {
+              if (!dia) return <div key={idx} className="h-24 bg-neutral-50 rounded-lg" />;
+              
+              const entregas = entregasDia(dia);
+              const cosechas = cosechasDia(dia);
+              const esHoy = fechaStr(dia) === hoy;
+              
+              return (
+                <div key={idx} className={`h-24 p-2 rounded-lg border ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}>
+                  <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
+                  <div className="mt-1 space-y-1">
+                    {entregas.slice(0, 2).map(p => (
+                      <div key={p.id} className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded truncate">
+                        🚚 {clientes.find(c => c.id === p.cliente_id)?.nombre?.split(' ')[0]}
+                      </div>
+                    ))}
+                    {cosechas.slice(0, 2).map(l => (
+                      <div key={l.id} className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded truncate">
+                        🌱 {productos.find(p => p.id === l.producto_id)?.nombre}
+                      </div>
+                    ))}
+                    {(entregas.length + cosechas.length > 2) && (
+                      <p className="text-[10px] text-neutral-400">+{entregas.length + cosechas.length - 2} más</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Truck size={20} className="text-blue-500" /> Próximas Entregas</h3>
+            <div className="space-y-3 max-h-64 overflow-y-auto">
+              {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
+                .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
+                .slice(0, 8)
+                .map(p => {
+                  const cliente = clientes.find(c => c.id === p.cliente_id);
+                  return (
+                    <div key={p.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                      <div>
+                        <p className="font-semibold text-neutral-900">{cliente?.nombre}</p>
+                        <p className="text-sm text-neutral-500">{formatDate(p.fecha_entrega)} • {formatCurrency(p.total)}</p>
+                      </div>
+                      <Badge className={estadoConfig[p.estado]?.color}>{estadoConfig[p.estado]?.label}</Badge>
+                    </div>
+                  );
+                })}
+              {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length === 0 && (
+                <p className="text-neutral-400 text-center py-4">No hay entregas pendientes</p>
+              )}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Leaf size={20} className="text-green-500" /> Próximas Cosechas</h3>
+            <div className="space-y-3 max-h-64 overflow-y-auto">
+              {lotes.filter(l => l.estado !== 'cosechado')
+                .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
+                .slice(0, 8)
+                .map(l => {
+                  const producto = productos.find(p => p.id === l.producto_id);
+                  const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+                  return (
+                    <div key={l.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                      <div>
+                        <p className="font-semibold text-neutral-900">{producto?.nombre}</p>
+                        <p className="text-sm text-neutral-500">{formatDate(l.fecha_cosecha_prevista)} • {l.bandejas} bandejas</p>
+                      </div>
+                      <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : dias <= 2 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}>
+                        {dias <= 0 ? '¡Hoy!' : `En ${dias}d`}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              {lotes.filter(l => l.estado !== 'cosechado').length === 0 && (
+                <p className="text-neutral-400 text-center py-4">No hay lotes pendientes</p>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== RUTAS DE REPARTO ====================
+  const renderRutas = () => {
+    const [fechaRuta, setFechaRuta] = useState(new Date().toISOString().split('T')[0]);
+    
+    const pedidosDelDia = pedidos.filter(p => p.fecha_entrega === fechaRuta && ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado));
+    
+    const pedidosPorZona = {
+      norte: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'norte'),
+      centro: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'centro'),
+      sur: pedidosDelDia.filter(p => clientes.find(c => c.id === p.cliente_id)?.zona === 'sur')
+    };
+
+    const totalPedidos = pedidosDelDia.length;
+    const totalImporte = pedidosDelDia.reduce((sum, p) => sum + (p.total || 0), 0);
+
+    const imprimirHojaRuta = (zona) => {
+      const pedidosZona = pedidosPorZona[zona];
+      const contenido = pedidosZona.map((p, idx) => {
+        const cliente = clientes.find(c => c.id === p.cliente_id);
+        const items = pedidoItems.filter(i => i.pedido_id === p.id);
+        return `
+${idx + 1}. ${cliente?.nombre}
+   📍 ${cliente?.direccion || 'Sin dirección'}, ${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}
+   📞 ${cliente?.telefono || 'Sin teléfono'}
+   💰 Total: ${formatCurrency(p.total)}
+   📦 Productos:
+${items.map(i => `      - ${productos.find(pr => pr.id === i.producto_id)?.nombre} x${i.cantidad}`).join('\n')}
+   📝 Notas: ${p.notas || 'Ninguna'}
+─────────────────────────────────`;
+      }).join('\n');
+
+      const ventana = window.open('', '_blank');
+      ventana.document.write(`
+        <html>
+          <head><title>Hoja de Ruta - ${zonaConfig[zona]?.label} - ${formatDate(fechaRuta)}</title>
+          <style>body { font-family: monospace; white-space: pre-wrap; padding: 20px; }</style></head>
+          <body>
+═══════════════════════════════════
+ROOTFLOW HYDROPONICS SL
+HOJA DE RUTA - ${formatDate(fechaRuta)}
+ZONA: ${zonaConfig[zona]?.label.toUpperCase()}
+Total entregas: ${pedidosZona.length}
+═══════════════════════════════════
+
+${contenido}
+
+Firma repartidor: _________________
+          </body>
+        </html>
+      `);
+      ventana.document.close();
+      ventana.print();
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Rutas de Reparto</h1>
+            <p className="text-neutral-500 font-medium">Organiza las entregas por zona</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <input 
+              type="date" 
+              value={fechaRuta} 
+              onChange={e => setFechaRuta(e.target.value)}
+              className="px-4 py-2 rounded-xl border font-semibold"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={Truck} label="Total Entregas" value={totalPedidos} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={MapPin} label="Zona Norte" value={pedidosPorZona.norte.length} color="bg-purple-100 text-purple-600" />
+          <StatCard icon={MapPin} label="Zona Centro" value={pedidosPorZona.centro.length} color="bg-orange-100 text-orange-600" />
+          <StatCard icon={MapPin} label="Zona Sur" value={pedidosPorZona.sur.length} color="bg-green-100 text-green-600" />
+        </div>
+
+        <Card className="p-4 bg-gradient-to-r from-blue-50 to-green-50 border-blue-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-bold text-neutral-900">Resumen del día: {formatDate(fechaRuta)}</p>
+              <p className="text-sm text-neutral-600">{totalPedidos} entregas por valor de {formatCurrency(totalImporte)}</p>
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {['norte', 'centro', 'sur'].map(zona => (
+            <Card key={zona} className="overflow-hidden">
+              <div className={`p-4 ${zonaConfig[zona]?.color} flex items-center justify-between`}>
+                <div className="flex items-center gap-2">
+                  <MapPin size={20} />
+                  <h3 className="font-bold">{zonaConfig[zona]?.label}</h3>
+                  <Badge className="bg-white/30 text-inherit">{pedidosPorZona[zona].length}</Badge>
+                </div>
+                {pedidosPorZona[zona].length > 0 && (
+                  <button onClick={() => imprimirHojaRuta(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Imprimir hoja de ruta">
+                    <Printer size={18} />
+                  </button>
+                )}
+              </div>
+              <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
+                {pedidosPorZona[zona].map((p, idx) => {
+                  const cliente = clientes.find(c => c.id === p.cliente_id);
+                  return (
+                    <div key={p.id} className="p-3 bg-neutral-50 rounded-xl border-l-4 border-neutral-300">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-full bg-neutral-200 flex items-center justify-center text-xs font-bold">{idx + 1}</span>
+                          <div>
+                            <p className="font-semibold text-neutral-900">{cliente?.nombre}</p>
+                            <p className="text-xs text-neutral-500">{cliente?.direccion}</p>
+                            <p className="text-xs text-neutral-400">{cliente?.codigo_postal} • {cliente?.telefono}</p>
+                          </div>
+                        </div>
+                        <p className="font-bold text-neutral-900">{formatCurrency(p.total)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+                {pedidosPorZona[zona].length === 0 && (
+                  <p className="text-center text-neutral-400 py-8">Sin entregas</p>
+                )}
+              </div>
+              {pedidosPorZona[zona].length > 0 && (
+                <div className="p-4 bg-neutral-100 border-t">
+                  <p className="text-sm font-semibold text-neutral-600">
+                    Total zona: {formatCurrency(pedidosPorZona[zona].reduce((sum, p) => sum + (p.total || 0), 0))}
+                  </p>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
       </div>
     );
   };
@@ -2121,9 +2473,11 @@ const MainApp = () => {
         </div>
         <nav className="flex-1 space-y-1">
           <NavItem icon={BarChart3} label="Dashboard" section="dashboard" />
+          <NavItem icon={Calendar} label="Calendario" section="calendario" />
           <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
           <NavItem icon={Users} label="Clientes" section="clientes" />
           <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
+          <NavItem icon={Truck} label="Rutas Reparto" section="rutas" />
           <NavItem icon={Package} label="Productos" section="productos" badge={stockBajo} />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
           <NavItem icon={Receipt} label="Facturación" section="facturacion" />
@@ -2150,9 +2504,11 @@ const MainApp = () => {
         </header>
         <div className="p-8">
           {activeSection === 'dashboard' && renderDashboard()}
+          {activeSection === 'calendario' && renderCalendario()}
           {activeSection === 'leads' && renderLeads()}
           {activeSection === 'clientes' && renderClientes()}
           {activeSection === 'pedidos' && renderPedidos()}
+          {activeSection === 'rutas' && renderRutas()}
           {activeSection === 'productos' && renderProductos()}
           {activeSection === 'facturacion' && renderFacturacion()}
           {activeSection === 'gastos' && renderGastos()}
