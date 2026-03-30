@@ -8,7 +8,8 @@ import {
   Phone, Mail, Receipt, Layers, Loader2, User, Lock, Eye as EyeIcon, EyeOff,
   Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
-  Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown
+  Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
+  Moon, Repeat, History, BellRing, XCircle
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -651,6 +652,17 @@ const MainApp = () => {
   const [filterEstado, setFilterEstado] = useState('todos');
   const [selectedFactura, setSelectedFactura] = useState(null);
   
+  // Modo oscuro
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('darkMode') === 'true';
+    }
+    return false;
+  });
+  
+  // Panel de alertas
+  const [showAlertasPanel, setShowAlertasPanel] = useState(false);
+  
   // Dashboard - selector de periodo
   const [dashboardPeriodo, setDashboardPeriodo] = useState('mes_actual');
   
@@ -693,6 +705,10 @@ const MainApp = () => {
   const { data: proveedoresData, refetch: refetchProveedores } = useRealtime('proveedores');
   const { data: tareasData, refetch: refetchTareas } = useRealtime('tareas');
   const { data: mermasData, refetch: refetchMermas } = useRealtime('mermas');
+  const { data: pedidosRecurrentesData, refetch: refetchPedidosRecurrentes } = useRealtime('pedidos_recurrentes');
+  const { data: pedidosRecurrentesItemsData, refetch: refetchPedidosRecurrentesItems } = useRealtime('pedidos_recurrentes_items');
+  const { data: historicoPreciosData, refetch: refetchHistoricoPrecios } = useRealtime('historico_precios');
+  const { data: condicionesData, refetch: refetchCondiciones } = useRealtime('condiciones_ambientales');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -707,6 +723,7 @@ const MainApp = () => {
     refetchProveedores();
     refetchTareas();
     refetchMermas();
+    refetchPedidosRecurrentes();
   };
 
   // Variables seguras (nunca undefined)
@@ -721,6 +738,10 @@ const MainApp = () => {
   const proveedores = proveedoresData || [];
   const tareas = tareasData || [];
   const mermas = mermasData || [];
+  const pedidosRecurrentes = pedidosRecurrentesData || [];
+  const pedidosRecurrentesItems = pedidosRecurrentesItemsData || [];
+  const historicoPrecios = historicoPreciosData || [];
+  const condiciones = condicionesData || [];
   const setLeads = setLeadsData;
 
   const loading = l1 || l2 || l3;
@@ -778,8 +799,222 @@ const MainApp = () => {
   const facturasPendientesTotal = facturas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0);
   const stockBajo = productos.filter(p => p.stock < (p.stock_minimo || 20)).length;
   const lotesActivos = lotes.filter(l => ['sembrado', 'germinando', 'creciendo'].includes(l.estado)).length;
-  const alertasNoLeidas = 0;
   const leadsNuevos = leads.filter(l => l.estado === 'nuevo').length;
+
+  // ==================== SISTEMA DE ALERTAS AUTOMÁTICAS ====================
+  const alertas = useMemo(() => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const alertasList = [];
+
+    // 1. Stock bajo
+    productos.filter(p => p.stock < (p.stock_minimo || 20)).forEach(p => {
+      alertasList.push({
+        id: `stock-${p.id}`,
+        tipo: 'stock',
+        prioridad: p.stock === 0 ? 'critica' : 'alta',
+        titulo: p.stock === 0 ? `Sin stock: ${p.nombre}` : `Stock bajo: ${p.nombre}`,
+        mensaje: `Quedan ${p.stock} unidades (mínimo: ${p.stock_minimo || 20})`,
+        icono: Package,
+        color: p.stock === 0 ? 'bg-red-500' : 'bg-amber-500',
+        accion: () => setActiveSection('productos')
+      });
+    });
+
+    // 2. Pedidos pendientes de entrega hoy o atrasados
+    pedidos.filter(p => ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado) && p.fecha_entrega).forEach(p => {
+      const fechaEntrega = new Date(p.fecha_entrega);
+      fechaEntrega.setHours(0, 0, 0, 0);
+      const cliente = clientes.find(c => c.id === p.cliente_id);
+      
+      if (fechaEntrega < hoy) {
+        alertasList.push({
+          id: `pedido-atrasado-${p.id}`,
+          tipo: 'pedido',
+          prioridad: 'critica',
+          titulo: `Pedido #${p.id} ATRASADO`,
+          mensaje: `${cliente?.nombre || 'Cliente'} - Debía entregarse ${formatDate(p.fecha_entrega)}`,
+          icono: Truck,
+          color: 'bg-red-500',
+          accion: () => setActiveSection('pedidos')
+        });
+      } else if (fechaEntrega.getTime() === hoy.getTime()) {
+        alertasList.push({
+          id: `pedido-hoy-${p.id}`,
+          tipo: 'pedido',
+          prioridad: 'alta',
+          titulo: `Entrega HOY: Pedido #${p.id}`,
+          mensaje: `${cliente?.nombre || 'Cliente'} - ${formatCurrency(p.total)}`,
+          icono: Truck,
+          color: 'bg-blue-500',
+          accion: () => setActiveSection('rutas')
+        });
+      }
+    });
+
+    // 3. Facturas vencidas o por vencer
+    facturas.filter(f => f.estado === 'pendiente' && f.fecha_vencimiento).forEach(f => {
+      const fechaVenc = new Date(f.fecha_vencimiento);
+      fechaVenc.setHours(0, 0, 0, 0);
+      const diasRestantes = Math.ceil((fechaVenc - hoy) / (1000 * 60 * 60 * 24));
+      const cliente = clientes.find(c => c.id === f.cliente_id);
+
+      if (diasRestantes < 0) {
+        alertasList.push({
+          id: `factura-vencida-${f.id}`,
+          tipo: 'factura',
+          prioridad: 'critica',
+          titulo: `Factura ${f.id} VENCIDA`,
+          mensaje: `${cliente?.nombre || 'Cliente'} - ${formatCurrency(f.total)} (${Math.abs(diasRestantes)} días)`,
+          icono: Receipt,
+          color: 'bg-red-500',
+          accion: () => setActiveSection('facturacion')
+        });
+      } else if (diasRestantes <= 3) {
+        alertasList.push({
+          id: `factura-vencer-${f.id}`,
+          tipo: 'factura',
+          prioridad: 'media',
+          titulo: `Factura ${f.id} vence ${diasRestantes === 0 ? 'HOY' : `en ${diasRestantes}d`}`,
+          mensaje: `${cliente?.nombre || 'Cliente'} - ${formatCurrency(f.total)}`,
+          icono: Receipt,
+          color: 'bg-amber-500',
+          accion: () => setActiveSection('facturacion')
+        });
+      }
+    });
+
+    // 4. Lotes listos para cosechar
+    lotes.filter(l => l.estado === 'creciendo' && l.fecha_cosecha_prevista).forEach(l => {
+      const fechaCosecha = new Date(l.fecha_cosecha_prevista);
+      fechaCosecha.setHours(0, 0, 0, 0);
+      const diasRestantes = Math.ceil((fechaCosecha - hoy) / (1000 * 60 * 60 * 24));
+      const producto = productos.find(p => p.id === l.producto_id);
+
+      if (diasRestantes <= 0) {
+        alertasList.push({
+          id: `lote-cosechar-${l.id}`,
+          tipo: 'produccion',
+          prioridad: 'alta',
+          titulo: `Lote ${l.codigo || l.id} listo para cosechar`,
+          mensaje: `${producto?.nombre || 'Producto'} - ${l.bandejas} bandejas`,
+          icono: Sprout,
+          color: 'bg-green-500',
+          accion: () => setActiveSection('produccion')
+        });
+      } else if (diasRestantes <= 2) {
+        alertasList.push({
+          id: `lote-pronto-${l.id}`,
+          tipo: 'produccion',
+          prioridad: 'baja',
+          titulo: `Lote ${l.codigo || l.id} cosecha en ${diasRestantes}d`,
+          mensaje: `${producto?.nombre || 'Producto'} - ${l.bandejas} bandejas`,
+          icono: Sprout,
+          color: 'bg-emerald-400',
+          accion: () => setActiveSection('produccion')
+        });
+      }
+    });
+
+    // 5. Tareas vencidas o urgentes
+    tareas.filter(t => !t.completada && t.fecha_limite).forEach(t => {
+      const fechaLimite = new Date(t.fecha_limite);
+      fechaLimite.setHours(0, 0, 0, 0);
+      const diasRestantes = Math.ceil((fechaLimite - hoy) / (1000 * 60 * 60 * 24));
+
+      if (diasRestantes < 0) {
+        alertasList.push({
+          id: `tarea-vencida-${t.id}`,
+          tipo: 'tarea',
+          prioridad: 'alta',
+          titulo: `Tarea vencida: ${t.titulo}`,
+          mensaje: `Venció hace ${Math.abs(diasRestantes)} días`,
+          icono: CheckCircle,
+          color: 'bg-red-500',
+          accion: () => setActiveSection('tareas')
+        });
+      } else if (diasRestantes === 0 && t.prioridad === 'alta') {
+        alertasList.push({
+          id: `tarea-hoy-${t.id}`,
+          tipo: 'tarea',
+          prioridad: 'alta',
+          titulo: `Tarea urgente HOY: ${t.titulo}`,
+          mensaje: t.descripcion || 'Sin descripción',
+          icono: CheckCircle,
+          color: 'bg-amber-500',
+          accion: () => setActiveSection('tareas')
+        });
+      }
+    });
+
+    // 6. Condiciones ambientales fuera de rango
+    const ultimaCondicion = condiciones.length > 0 ? condiciones[0] : null;
+    if (ultimaCondicion) {
+      const rangos = { temperatura: { min: 18, max: 24 }, humedad: { min: 50, max: 70 } };
+      
+      if (ultimaCondicion.temperatura < rangos.temperatura.min) {
+        alertasList.push({
+          id: 'temp-baja',
+          tipo: 'ambiente',
+          prioridad: 'alta',
+          titulo: 'Temperatura BAJA',
+          mensaje: `${ultimaCondicion.temperatura}°C (mínimo: ${rangos.temperatura.min}°C)`,
+          icono: Sun,
+          color: 'bg-blue-500',
+          accion: () => setActiveSection('ambiente')
+        });
+      } else if (ultimaCondicion.temperatura > rangos.temperatura.max) {
+        alertasList.push({
+          id: 'temp-alta',
+          tipo: 'ambiente',
+          prioridad: 'alta',
+          titulo: 'Temperatura ALTA',
+          mensaje: `${ultimaCondicion.temperatura}°C (máximo: ${rangos.temperatura.max}°C)`,
+          icono: Sun,
+          color: 'bg-red-500',
+          accion: () => setActiveSection('ambiente')
+        });
+      }
+      
+      if (ultimaCondicion.humedad < rangos.humedad.min) {
+        alertasList.push({
+          id: 'hum-baja',
+          tipo: 'ambiente',
+          prioridad: 'media',
+          titulo: 'Humedad BAJA',
+          mensaje: `${ultimaCondicion.humedad}% (mínimo: ${rangos.humedad.min}%)`,
+          icono: Sprout,
+          color: 'bg-amber-500',
+          accion: () => setActiveSection('ambiente')
+        });
+      } else if (ultimaCondicion.humedad > rangos.humedad.max) {
+        alertasList.push({
+          id: 'hum-alta',
+          tipo: 'ambiente',
+          prioridad: 'media',
+          titulo: 'Humedad ALTA',
+          mensaje: `${ultimaCondicion.humedad}% (máximo: ${rangos.humedad.max}%)`,
+          icono: Sprout,
+          color: 'bg-amber-500',
+          accion: () => setActiveSection('ambiente')
+        });
+      }
+    }
+
+    // Ordenar por prioridad
+    const prioridadOrden = { critica: 0, alta: 1, media: 2, baja: 3 };
+    return alertasList.sort((a, b) => prioridadOrden[a.prioridad] - prioridadOrden[b.prioridad]);
+  }, [productos, pedidos, facturas, lotes, tareas, clientes, condiciones]);
+
+  const alertasNoLeidas = alertas.length;
+  const alertasCriticas = alertas.filter(a => a.prioridad === 'critica').length;
+
+  // Toggle dark mode
+  const toggleDarkMode = () => {
+    const newMode = !darkMode;
+    setDarkMode(newMode);
+    localStorage.setItem('darkMode', newMode.toString());
+  };
 
   // CRUD
   const handleSave = async (table, form, id = null) => {
@@ -1068,7 +1303,9 @@ const MainApp = () => {
           <Input label="Coste (€)" type="number" step="0.5" value={form.coste} onChange={e => setForm({...form, coste: parseFloat(e.target.value) || 0})} />
           <Input label="Stock" type="number" value={form.stock} onChange={e => setForm({...form, stock: parseInt(e.target.value) || 0})} />
           <Input label="Stock Mínimo" type="number" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: parseInt(e.target.value) || 20})} />
+          <Input label="Días Crecimiento" type="number" value={form.dias_crecimiento || 7} onChange={e => setForm({...form, dias_crecimiento: parseInt(e.target.value) || 7})} />
         </div>
+        <p className="text-xs text-neutral-500">💡 Los días de crecimiento se usan para calcular la planificación de siembras</p>
         <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{producto ? 'Guardar' : 'Crear'}</Button></div>
       </div>
     );
@@ -1390,6 +1627,178 @@ const MainApp = () => {
     );
   };
 
+  // ==================== PEDIDO RECURRENTE FORM ====================
+  const PedidoRecurrenteForm = ({ onSave, onCancel }) => {
+    const [form, setForm] = useState({
+      nombre: '',
+      cliente_id: clientes.length > 0 ? clientes[0].id : '',
+      frecuencia: 'semanal',
+      dia_semana: 1,
+      notas: ''
+    });
+    const [items, setItems] = useState([{ producto_id: productos.length > 0 ? productos[0].id : '', cantidad: 1 }]);
+
+    const diasSemana = [
+      { value: 1, label: 'Lunes' },
+      { value: 2, label: 'Martes' },
+      { value: 3, label: 'Miércoles' },
+      { value: 4, label: 'Jueves' },
+      { value: 5, label: 'Viernes' },
+      { value: 6, label: 'Sábado' },
+      { value: 0, label: 'Domingo' }
+    ];
+
+    const frecuencias = [
+      { value: 'semanal', label: 'Semanal (cada semana)' },
+      { value: 'quincenal', label: 'Quincenal (cada 2 semanas)' },
+      { value: 'mensual', label: 'Mensual (cada mes)' }
+    ];
+
+    const addItem = () => {
+      setItems([...items, { producto_id: productos.length > 0 ? productos[0].id : '', cantidad: 1 }]);
+    };
+
+    const removeItem = (index) => {
+      if (items.length > 1) {
+        setItems(items.filter((_, i) => i !== index));
+      }
+    };
+
+    const updateItem = (index, field, value) => {
+      const newItems = [...items];
+      newItems[index][field] = value;
+      setItems(newItems);
+    };
+
+    const totalEstimado = items.reduce((sum, item) => {
+      const prod = productos.find(p => p.id === parseInt(item.producto_id));
+      return sum + ((prod?.precio || 0) * item.cantidad);
+    }, 0);
+
+    const handleSubmit = async () => {
+      if (!form.nombre.trim()) {
+        alert('Por favor ingresa un nombre para el pedido recurrente');
+        return;
+      }
+      if (!form.cliente_id) {
+        alert('Por favor selecciona un cliente');
+        return;
+      }
+      if (items.length === 0 || items.some(i => !i.producto_id)) {
+        alert('Por favor añade al menos un producto');
+        return;
+      }
+
+      // Crear pedido recurrente
+      const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
+        ...form,
+        dia_semana: parseInt(form.dia_semana),
+        activo: true
+      }).select().single();
+
+      if (error) {
+        alert('Error al crear: ' + error.message);
+        return;
+      }
+
+      // Insertar items
+      for (const item of items) {
+        await supabase.from('pedidos_recurrentes_items').insert({
+          pedido_recurrente_id: pr.id,
+          producto_id: parseInt(item.producto_id),
+          cantidad: item.cantidad
+        });
+      }
+
+      refetchPedidosRecurrentes();
+      refetchPedidosRecurrentesItems();
+      onSave();
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input 
+            label="Nombre del pedido" 
+            className="col-span-2" 
+            value={form.nombre} 
+            onChange={e => setForm({...form, nombre: e.target.value})} 
+            placeholder="Ej: Pedido semanal Hotel Palace"
+          />
+          <Select 
+            label="Cliente" 
+            className="col-span-2"
+            value={form.cliente_id} 
+            onChange={e => setForm({...form, cliente_id: e.target.value})} 
+            options={clientes.map(c => ({ value: c.id, label: c.nombre }))} 
+          />
+          <Select 
+            label="Frecuencia" 
+            value={form.frecuencia} 
+            onChange={e => setForm({...form, frecuencia: e.target.value})} 
+            options={frecuencias} 
+          />
+          <Select 
+            label="Día de entrega" 
+            value={form.dia_semana} 
+            onChange={e => setForm({...form, dia_semana: e.target.value})} 
+            options={diasSemana} 
+          />
+        </div>
+
+        <div className="border-t pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <label className="text-sm font-semibold text-neutral-700">Productos</label>
+            <button onClick={addItem} className="text-sm text-orange-500 hover:text-orange-600 font-semibold flex items-center gap-1">
+              <Plus size={16} /> Añadir producto
+            </button>
+          </div>
+          
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {items.map((item, index) => (
+              <div key={index} className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg">
+                <select 
+                  value={item.producto_id} 
+                  onChange={e => updateItem(index, 'producto_id', e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                >
+                  {productos.map(p => (
+                    <option key={p.id} value={p.id}>{p.nombre} - {formatCurrency(p.precio)}</option>
+                  ))}
+                </select>
+                <input 
+                  type="number" 
+                  min="1" 
+                  value={item.cantidad} 
+                  onChange={e => updateItem(index, 'cantidad', parseInt(e.target.value) || 1)}
+                  className="w-20 px-3 py-2 rounded-lg border text-sm text-center"
+                />
+                <button 
+                  onClick={() => removeItem(index)}
+                  className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-4 bg-orange-50 rounded-xl border border-orange-200">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-neutral-700">Total estimado por pedido:</span>
+            <span className="text-2xl font-black text-orange-600">{formatCurrency(totalEstimado)}</span>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={handleSubmit}><Repeat size={18} /> Crear Recurrente</Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== NAV ====================
   const NavItem = ({ icon: Icon, label, section, badge }) => (
     <button onClick={() => { setActiveSection(section); if (window.innerWidth < 768) setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
@@ -1694,47 +2103,274 @@ const MainApp = () => {
     );
   };
 
+  // Estado para pestaña de pedidos
+  const [pedidosTab, setPedidosTab] = useState('lista');
+
   const renderPedidos = () => {
     const filtered = pedidos.filter(p => { const cliente = clientes.find(c => c.id === p.cliente_id); const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; return matchesSearch && matchesFilter; });
     const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
+    
+    const frecuenciaConfig = {
+      semanal: { label: 'Semanal', color: 'bg-blue-100 text-blue-700' },
+      quincenal: { label: 'Quincenal', color: 'bg-purple-100 text-purple-700' },
+      mensual: { label: 'Mensual', color: 'bg-green-100 text-green-700' }
+    };
+    
+    const diasSemana = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+    // Ejecutar pedido recurrente (crear pedido normal a partir del recurrente)
+    const ejecutarPedidoRecurrente = async (pr) => {
+      const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+      if (items.length === 0) {
+        alert('Este pedido recurrente no tiene productos');
+        return;
+      }
+      
+      const cliente = clientes.find(c => c.id === pr.cliente_id);
+      let total = 0;
+      const itemsData = items.map(item => {
+        const prod = productos.find(p => p.id === item.producto_id);
+        const subtotal = (prod?.precio || 0) * item.cantidad;
+        total += subtotal;
+        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: prod?.precio || 0, subtotal };
+      });
+
+      // Aplicar descuento del cliente
+      const descuento = cliente?.descuento || 0;
+      total = total * (1 - descuento / 100);
+
+      // Crear pedido
+      const hoy = new Date().toISOString().split('T')[0];
+      const { data: newPedido, error: pedidoError } = await supabase.from('pedidos').insert({
+        cliente_id: pr.cliente_id,
+        fecha: hoy,
+        fecha_entrega: hoy,
+        estado: 'pendiente',
+        notas: `Generado desde pedido recurrente: ${pr.nombre}`,
+        total
+      }).select().single();
+
+      if (pedidoError) {
+        alert('Error al crear pedido: ' + pedidoError.message);
+        return;
+      }
+
+      // Insertar items
+      for (const item of itemsData) {
+        await supabase.from('pedido_items').insert({ pedido_id: newPedido.id, ...item });
+      }
+
+      // Actualizar fecha de última ejecución
+      await supabase.from('pedidos_recurrentes').update({ 
+        ultima_ejecucion: hoy,
+        proxima_ejecucion: calcularProximaEjecucion(pr.frecuencia, pr.dia_semana)
+      }).eq('id', pr.id);
+
+      refetchPedidos();
+      refetchPedidoItems();
+      refetchPedidosRecurrentes();
+      alert(`✅ Pedido #${newPedido.id} creado para ${cliente?.nombre}`);
+    };
+
+    const calcularProximaEjecucion = (frecuencia, diaSemana) => {
+      const hoy = new Date();
+      let proxima = new Date(hoy);
+      
+      if (frecuencia === 'semanal') {
+        proxima.setDate(hoy.getDate() + 7);
+      } else if (frecuencia === 'quincenal') {
+        proxima.setDate(hoy.getDate() + 14);
+      } else {
+        proxima.setMonth(hoy.getMonth() + 1);
+      }
+      
+      // Ajustar al día de la semana
+      while (proxima.getDay() !== diaSemana) {
+        proxima.setDate(proxima.getDate() + 1);
+      }
+      
+      return proxima.toISOString().split('T')[0];
+    };
+
+    const toggleActivoPedidoRecurrente = async (pr) => {
+      await supabase.from('pedidos_recurrentes').update({ activo: !pr.activo }).eq('id', pr.id);
+      refetchPedidosRecurrentes();
+    };
+
+    const eliminarPedidoRecurrente = async (id) => {
+      if (window.confirm('¿Eliminar este pedido recurrente?')) {
+        await supabase.from('pedidos_recurrentes_items').delete().eq('pedido_recurrente_id', id);
+        await supabase.from('pedidos_recurrentes').delete().eq('id', id);
+        refetchPedidosRecurrentes();
+        refetchPedidosRecurrentesItems();
+      }
+    };
+
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Pedidos</h1><p className="text-neutral-500 font-medium">{pedidos.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
-            <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={20} /> Nuevo Pedido</Button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Pedidos</h1>
+            <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{pedidos.length} pedidos • {pedidosRecurrentes.filter(p => p.activo).length} recurrentes activos</p>
+          </div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
+            {pedidosTab === 'lista' ? (
+              <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo Pedido</span></Button>
+            ) : (
+              <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} /><span className="hidden sm:inline">Nuevo Recurrente</span></Button>
+            )}
           </div>
         </div>
-        <Card className="p-4 flex items-center gap-4">
-          <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className="px-4 py-2.5 rounded-xl border font-medium"><option value="todos">Todos</option>{Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
-        </Card>
-        <Card className="overflow-hidden">
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[600px]">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Entrega</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Total</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Estado</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
-            <tbody>
-              {filtered.map(pedido => {
-                const cliente = clientes.find(c => c.id === pedido.cliente_id);
-                const config = estadoConfig[pedido.estado];
-                const Icon = config?.icon || Clock;
-                return (
-                  <tr key={pedido.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-black text-neutral-900 text-sm">#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4 font-semibold text-sm">{cliente?.nombre}</td>
-                    <td className="px-3 md:px-5 py-3 md:py-4 text-sm hidden sm:table-cell">{formatDate(pedido.fecha_entrega)}</td>
-                    <td className="px-3 md:px-5 py-3 md:py-4 font-bold text-sm">{formatCurrency(pedido.total)}</td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+
+        {/* Pestañas */}
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setPedidosTab('lista')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors ${pedidosTab === 'lista' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <ShoppingCart size={18} className="inline mr-2" />Pedidos
+          </button>
+          <button 
+            onClick={() => setPedidosTab('recurrentes')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${pedidosTab === 'recurrentes' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Repeat size={18} />Recurrentes
+            {pedidosRecurrentes.filter(p => p.activo).length > 0 && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${pedidosTab === 'recurrentes' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
+                {pedidosRecurrentes.filter(p => p.activo).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {pedidosTab === 'lista' ? (
+          <>
+            <Card className={`p-4 flex items-center gap-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <div className="flex-1 relative">
+                <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input type="text" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className={`w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`} />
+              </div>
+              <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className={`px-4 py-2.5 rounded-xl border font-medium ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}>
+                <option value="todos">Todos</option>
+                {Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </Card>
+            <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px]">
+                <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Entrega</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Total</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Estado</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
+                <tbody>
+                  {filtered.map(pedido => {
+                    const cliente = clientes.find(c => c.id === pedido.cliente_id);
+                    const config = estadoConfig[pedido.estado];
+                    const Icon = config?.icon || Clock;
+                    return (
+                      <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'}`}>
+                        <td className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
+                        <td className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>
+                        <td className="px-3 md:px-5 py-3 md:py-4 text-sm hidden sm:table-cell">{formatDate(pedido.fecha_entrega)}</td>
+                        <td className={`px-3 md:px-5 py-3 md:py-4 font-bold text-sm ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</td>
+                        <td className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>
+                        <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              </div>
+              {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
+            </Card>
+          </>
+        ) : (
+          /* Vista de Pedidos Recurrentes */
+          <div className="space-y-4">
+            {pedidosRecurrentes.length === 0 ? (
+              <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <Repeat size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className={`text-lg font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>No hay pedidos recurrentes</h3>
+                <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Crea pedidos que se repiten automáticamente cada semana, quincena o mes</p>
+                <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} />Crear Pedido Recurrente</Button>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {pedidosRecurrentes.map(pr => {
+                  const cliente = clientes.find(c => c.id === pr.cliente_id);
+                  const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+                  const totalEstimado = items.reduce((sum, item) => {
+                    const prod = productos.find(p => p.id === item.producto_id);
+                    return sum + ((prod?.precio || 0) * item.cantidad);
+                  }, 0);
+                  const frecConfig = frecuenciaConfig[pr.frecuencia] || frecuenciaConfig.semanal;
+
+                  return (
+                    <Card key={pr.id} className={`overflow-hidden ${!pr.activo ? 'opacity-60' : ''} ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                      <div className={`p-4 ${pr.activo ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-neutral-400'} text-white`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Repeat size={20} />
+                            <h3 className="font-bold truncate">{pr.nombre}</h3>
+                          </div>
+                          <Badge className={frecConfig.color}>{frecConfig.label}</Badge>
+                        </div>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Users size={16} className="text-neutral-400" />
+                          <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{cliente?.nombre || 'Cliente'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar size={16} className="text-neutral-400" />
+                          <span className={`text-sm ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                            {diasSemana[pr.dia_semana] || 'Lunes'} • {frecConfig.label}
+                          </span>
+                        </div>
+                        <div className={`p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
+                          <p className={`text-xs font-medium mb-2 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Productos ({items.length})</p>
+                          {items.slice(0, 3).map(item => {
+                            const prod = productos.find(p => p.id === item.producto_id);
+                            return (
+                              <p key={item.id} className={`text-sm truncate ${darkMode ? 'text-neutral-200' : ''}`}>
+                                • {prod?.nombre || 'Producto'} x{item.cantidad}
+                              </p>
+                            );
+                          })}
+                          {items.length > 3 && <p className="text-xs text-neutral-400">+{items.length - 3} más...</p>}
+                        </div>
+                        <div className="flex items-center justify-between pt-2 border-t border-neutral-200">
+                          <span className={`text-lg font-black ${darkMode ? 'text-white' : ''}`}>{formatCurrency(totalEstimado)}</span>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => toggleActivoPedidoRecurrente(pr)} 
+                              className={`p-2 rounded-lg ${pr.activo ? 'text-green-600 hover:bg-green-50' : 'text-neutral-400 hover:bg-neutral-100'}`}
+                              title={pr.activo ? 'Desactivar' : 'Activar'}
+                            >
+                              {pr.activo ? <CheckCircle size={18} /> : <XCircle size={18} />}
+                            </button>
+                            <button 
+                              onClick={() => ejecutarPedidoRecurrente(pr)} 
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                              title="Ejecutar ahora"
+                            >
+                              <Zap size={18} />
+                            </button>
+                            <button 
+                              onClick={() => eliminarPedidoRecurrente(pr.id)} 
+                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                              title="Eliminar"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
-        </Card>
+        )}
       </div>
     );
   };
@@ -2318,55 +2954,330 @@ const MainApp = () => {
     );
   };
 
+  // Estado para pestaña de producción
+  const [produccionTab, setProduccionTab] = useState('lotes');
+
   const renderProduccion = () => {
     const exportColumns = [{ header: 'Lote', accessor: l => l.id },{ header: 'Producto', accessor: l => productos.find(p => p.id === l.producto_id)?.nombre },{ header: 'Siembra', accessor: l => formatDate(l.fecha_siembra) },{ header: 'Cosecha', accessor: l => formatDate(l.fecha_cosecha_prevista) },{ header: 'Bandejas', accessor: l => l.bandejas },{ header: 'Estado', accessor: l => estadoLoteConfig[l.estado]?.label }];
+    
+    // Función para imprimir etiquetas
+    const imprimirEtiquetas = (lote) => {
+      const producto = productos.find(p => p.id === lote.producto_id);
+      const fechaCosecha = new Date(lote.fecha_cosecha_prevista);
+      const fechaCaducidad = new Date(fechaCosecha);
+      fechaCaducidad.setDate(fechaCaducidad.getDate() + 7); // Caducidad: 7 días después de cosecha
+      
+      const etiquetas = [];
+      for (let i = 0; i < lote.bandejas; i++) {
+        etiquetas.push(`
+          <div class="etiqueta">
+            <div class="logo">🌱 RootFlow</div>
+            <div class="producto">${producto?.nombre || 'Microgreens'}</div>
+            <div class="info">
+              <span><strong>Lote:</strong> ${lote.codigo || 'L-'+lote.id}</span>
+              <span><strong>Peso:</strong> 100g</span>
+            </div>
+            <div class="info">
+              <span><strong>Cosecha:</strong> ${formatDate(lote.fecha_cosecha_prevista)}</span>
+              <span><strong>Caduca:</strong> ${formatDate(fechaCaducidad.toISOString().split('T')[0])}</span>
+            </div>
+            <div class="conservar">Conservar entre 2°C y 5°C</div>
+            <div class="empresa">RootFlow Hydroponics SL • Las Rozas, Madrid</div>
+          </div>
+        `);
+      }
+
+      const ventana = window.open('', '_blank');
+      ventana.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Etiquetas - ${lote.codigo || 'L-'+lote.id}</title>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: Arial, sans-serif; padding: 10mm; }
+            .etiquetas-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; }
+            .etiqueta { 
+              border: 1px solid #ccc; 
+              padding: 8px; 
+              border-radius: 8px;
+              page-break-inside: avoid;
+              font-size: 10px;
+            }
+            .logo { font-weight: bold; color: #2D6A4F; font-size: 14px; margin-bottom: 4px; }
+            .producto { font-size: 16px; font-weight: bold; margin-bottom: 6px; color: #1a1a1a; }
+            .info { display: flex; justify-content: space-between; margin-bottom: 4px; }
+            .conservar { background: #e3f2fd; padding: 4px 8px; border-radius: 4px; text-align: center; margin: 6px 0; font-size: 9px; }
+            .empresa { text-align: center; color: #666; font-size: 8px; margin-top: 4px; }
+            @media print {
+              body { padding: 5mm; }
+              .etiqueta { border: 1px solid #000; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="etiquetas-grid">
+            ${etiquetas.join('')}
+          </div>
+        </body>
+        </html>
+      `);
+      ventana.document.close();
+      ventana.print();
+    };
+
+    // Planificación de siembras
+    const calcularPlanificacion = () => {
+      const plan = [];
+      const hoy = new Date();
+      
+      // Analizar pedidos recurrentes activos
+      pedidosRecurrentes.filter(pr => pr.activo).forEach(pr => {
+        const cliente = clientes.find(c => c.id === pr.cliente_id);
+        const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+        
+        items.forEach(item => {
+          const producto = productos.find(p => p.id === item.producto_id);
+          if (!producto) return;
+          
+          const diasCrecimiento = producto.dias_crecimiento || 7;
+          
+          // Calcular próxima entrega
+          let proximaEntrega = new Date(hoy);
+          proximaEntrega.setDate(proximaEntrega.getDate() + (7 - proximaEntrega.getDay() + pr.dia_semana) % 7);
+          if (proximaEntrega <= hoy) proximaEntrega.setDate(proximaEntrega.getDate() + 7);
+          
+          // Fecha de siembra necesaria
+          const fechaSiembra = new Date(proximaEntrega);
+          fechaSiembra.setDate(fechaSiembra.getDate() - diasCrecimiento);
+          
+          const diasParaSembrar = Math.ceil((fechaSiembra - hoy) / (1000 * 60 * 60 * 24));
+          
+          plan.push({
+            producto: producto.nombre,
+            cliente: cliente?.nombre || 'Cliente',
+            cantidad: item.cantidad,
+            fechaSiembra: fechaSiembra.toISOString().split('T')[0],
+            fechaEntrega: proximaEntrega.toISOString().split('T')[0],
+            diasParaSembrar,
+            diasCrecimiento,
+            frecuencia: pr.frecuencia,
+            urgente: diasParaSembrar <= 2
+          });
+        });
+      });
+      
+      // Ordenar por fecha de siembra
+      return plan.sort((a, b) => new Date(a.fechaSiembra) - new Date(b.fechaSiembra));
+    };
+
+    const planificacion = calcularPlanificacion();
+    const siembrasUrgentes = planificacion.filter(p => p.urgente).length;
+
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Producción</h1><p className="text-neutral-500 font-medium">{lotes.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(lotes, 'produccion', exportColumns)}><FileSpreadsheet size={16} /> Excel</Button>
-            <Button onClick={() => { setEditingItem(null); setShowModal('lote'); }}><Plus size={20} /> Nuevo Lote</Button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Producción</h1>
+            <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+              {lotes.length} lotes • {lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).reduce((sum, l) => sum + l.bandejas, 0)} bandejas activas
+            </p>
+          </div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(lotes, 'produccion', exportColumns)}><FileSpreadsheet size={16} /></Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('lote'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo Lote</span></Button>
           </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard icon={Sprout} label="Sembrados" value={lotes.filter(l => l.estado === 'sembrado').length} color="bg-amber-100 text-amber-600" />
-          <StatCard icon={Sun} label="Creciendo" value={lotes.filter(l => l.estado === 'creciendo').length} color="bg-green-100 text-green-600" />
-          <StatCard icon={Check} label="Cosechados" value={lotes.filter(l => l.estado === 'cosechado').length} color="bg-blue-100 text-blue-600" />
-          <StatCard icon={Layers} label="Bandejas Activas" value={lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).reduce((sum, l) => sum + l.bandejas, 0)} color="bg-orange-100 text-orange-600" />
+
+        {/* Pestañas */}
+        <div className="flex gap-2 flex-wrap">
+          <button 
+            onClick={() => setProduccionTab('lotes')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'lotes' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Sprout size={18} />Lotes
+          </button>
+          <button 
+            onClick={() => setProduccionTab('etiquetas')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'etiquetas' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <FileText size={18} />Etiquetas
+          </button>
+          <button 
+            onClick={() => setProduccionTab('planificacion')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'planificacion' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Calendar size={18} />Planificación
+            {siembrasUrgentes > 0 && <span className={`text-xs px-2 py-0.5 rounded-full ${produccionTab === 'planificacion' ? 'bg-white/20' : 'bg-red-500 text-white'}`}>{siembrasUrgentes}</span>}
+          </button>
         </div>
-        <Card className="overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Lote</th><th className="text-left px-5 py-4 text-sm font-bold">Producto</th><th className="text-left px-5 py-4 text-sm font-bold">Siembra</th><th className="text-left px-5 py-4 text-sm font-bold">Cosecha</th><th className="text-left px-5 py-4 text-sm font-bold">Bandejas</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
-            <tbody>
-              {lotes.map(lote => {
+
+        {produccionTab === 'lotes' && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <StatCard icon={Sprout} label="Sembrados" value={lotes.filter(l => l.estado === 'sembrado').length} color="bg-amber-100 text-amber-600" />
+              <StatCard icon={Sun} label="Creciendo" value={lotes.filter(l => l.estado === 'creciendo').length} color="bg-green-100 text-green-600" />
+              <StatCard icon={Check} label="Cosechados" value={lotes.filter(l => l.estado === 'cosechado').length} color="bg-blue-100 text-blue-600" />
+              <StatCard icon={Layers} label="Bandejas Activas" value={lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).reduce((sum, l) => sum + l.bandejas, 0)} color="bg-orange-100 text-orange-600" />
+            </div>
+            <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px]">
+                <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-4 py-3 text-sm font-bold">Lote</th><th className="text-left px-4 py-3 text-sm font-bold">Producto</th><th className="text-left px-4 py-3 text-sm font-bold">Siembra</th><th className="text-left px-4 py-3 text-sm font-bold">Cosecha</th><th className="text-left px-4 py-3 text-sm font-bold">Bandejas</th><th className="text-left px-4 py-3 text-sm font-bold">Estado</th><th className="text-right px-4 py-3 text-sm font-bold">Acciones</th></tr></thead>
+                <tbody>
+                  {lotes.map(lote => {
+                    const producto = productos.find(p => p.id === lote.producto_id);
+                    const config = estadoLoteConfig[lote.estado];
+                    const Icon = config?.icon || Sprout;
+                    const diasRestantes = Math.ceil((new Date(lote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+                    return (
+                      <tr key={lote.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'}`}>
+                        <td className={`px-4 py-3 font-black ${darkMode ? 'text-white' : ''}`}>{lote.codigo || `L-${lote.id}`}</td>
+                        <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-7 h-7 rounded-lg bg-green-500 flex items-center justify-center text-white"><Leaf size={12} /></div><span className={`font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{producto?.nombre}</span></div></td>
+                        <td className={`px-4 py-3 text-sm ${darkMode ? 'text-neutral-300' : ''}`}>{formatDate(lote.fecha_siembra)}</td>
+                        <td className="px-4 py-3"><p className={`text-sm ${darkMode ? 'text-neutral-300' : ''}`}>{formatDate(lote.fecha_cosecha_prevista)}</p>{lote.estado !== 'cosechado' && diasRestantes <= 2 && <p className="text-xs text-amber-600 font-bold">{diasRestantes <= 0 ? '¡Hoy!' : `En ${diasRestantes}d`}</p>}</td>
+                        <td className={`px-4 py-3 font-bold ${darkMode ? 'text-white' : ''}`}>{lote.bandejas}</td>
+                        <td className="px-4 py-3"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-1">
+                            {lote.estado === 'cosechado' && <button onClick={() => imprimirEtiquetas(lote)} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" title="Imprimir etiquetas"><Printer size={16} /></button>}
+                            {lote.estado === 'creciendo' && <button onClick={() => handleCosecharLote(lote)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Cosechar"><Check size={16} /></button>}
+                            {lote.estado === 'sembrado' && <button onClick={() => handleCambiarEstadoLote(lote, 'creciendo')} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Marcar creciendo"><Sun size={16} /></button>}
+                            <button onClick={() => { setEditingItem(lote); setShowModal('lote'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                            <button onClick={() => handleDelete('lotes', lote.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              </div>
+              {lotes.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
+            </Card>
+          </>
+        )}
+
+        {produccionTab === 'etiquetas' && (
+          <div className="space-y-4">
+            <Card className={`p-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <h3 className={`font-bold mb-2 ${darkMode ? 'text-white' : ''}`}>📦 Generar Etiquetas</h3>
+              <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                Selecciona un lote cosechado para imprimir etiquetas para cada bandeja. 
+                Incluyen: producto, lote, fecha de cosecha, caducidad y conservación.
+              </p>
+            </Card>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {lotes.filter(l => l.estado === 'cosechado').map(lote => {
                 const producto = productos.find(p => p.id === lote.producto_id);
-                const config = estadoLoteConfig[lote.estado];
-                const Icon = config?.icon || Sprout;
-                const diasRestantes = Math.ceil((new Date(lote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
                 return (
-                  <tr key={lote.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-5 py-4 font-black">{lote.codigo || `L-${lote.id}`}</td>
-                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-green-500 flex items-center justify-center text-white"><Leaf size={14} /></div><span className="font-semibold">{producto?.nombre}</span></div></td>
-                    <td className="px-5 py-4 text-sm">{formatDate(lote.fecha_siembra)}</td>
-                    <td className="px-5 py-4"><p className="text-sm">{formatDate(lote.fecha_cosecha_prevista)}</p>{lote.estado !== 'cosechado' && diasRestantes <= 2 && <p className="text-xs text-amber-600 font-bold">{diasRestantes <= 0 ? '¡Hoy!' : `En ${diasRestantes}d`}</p>}</td>
-                    <td className="px-5 py-4 font-bold">{lote.bandejas}</td>
-                    <td className="px-5 py-4"><Badge className={config?.color}><Icon size={12} />{config?.label}</Badge></td>
-                    <td className="px-5 py-4">
-                      <div className="flex justify-end gap-1">
-                        {lote.estado === 'creciendo' && <button onClick={() => handleCosecharLote(lote)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Cosechar (añade stock)"><Check size={16} /></button>}
-                        {lote.estado === 'sembrado' && <button onClick={() => handleCambiarEstadoLote(lote, 'creciendo')} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Marcar creciendo"><Sun size={16} /></button>}
-                        <button onClick={() => { setEditingItem(lote); setShowModal('lote'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                        <button onClick={() => handleDelete('lotes', lote.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                  <Card key={lote.id} className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                    <div className="p-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm opacity-80">Lote {lote.codigo || 'L-'+lote.id}</p>
+                          <h3 className="font-bold text-lg">{producto?.nombre}</h3>
+                        </div>
+                        <Leaf size={32} className="opacity-50" />
                       </div>
-                    </td>
-                  </tr>
+                    </div>
+                    <div className="p-4 space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>Bandejas:</span>
+                        <span className={`font-bold ${darkMode ? 'text-white' : ''}`}>{lote.bandejas}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>Cosecha:</span>
+                        <span className={darkMode ? 'text-neutral-200' : ''}>{formatDate(lote.fecha_cosecha_prevista)}</span>
+                      </div>
+                      <Button className="w-full mt-3" onClick={() => imprimirEtiquetas(lote)}>
+                        <Printer size={18} /> Imprimir {lote.bandejas} Etiquetas
+                      </Button>
+                    </div>
+                  </Card>
                 );
               })}
-            </tbody>
-          </table>
-          {lotes.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
-        </Card>
+            </div>
+            
+            {lotes.filter(l => l.estado === 'cosechado').length === 0 && (
+              <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <FileText size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className={`text-lg font-bold ${darkMode ? 'text-white' : ''}`}>No hay lotes cosechados</h3>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Cosecha un lote para poder generar etiquetas</p>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {produccionTab === 'planificacion' && (
+          <div className="space-y-4">
+            <Card className={`p-4 bg-gradient-to-r ${siembrasUrgentes > 0 ? 'from-red-50 to-amber-50 border-red-200' : 'from-green-50 to-emerald-50 border-green-200'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-xl ${siembrasUrgentes > 0 ? 'bg-red-500' : 'bg-green-500'} text-white`}>
+                  <Calendar size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-neutral-900">
+                    {siembrasUrgentes > 0 ? `⚠️ ${siembrasUrgentes} siembras urgentes` : '✅ Sin siembras urgentes'}
+                  </h3>
+                  <p className="text-sm text-neutral-600">
+                    Planificación basada en {pedidosRecurrentes.filter(p => p.activo).length} pedidos recurrentes activos
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {planificacion.length === 0 ? (
+              <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <Calendar size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className={`text-lg font-bold ${darkMode ? 'text-white' : ''}`}>Sin planificación disponible</h3>
+                <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Crea pedidos recurrentes para generar la planificación automática de siembras</p>
+                <Button onClick={() => { setActiveSection('pedidos'); setPedidosTab('recurrentes'); }}>
+                  <Repeat size={18} /> Ir a Pedidos Recurrentes
+                </Button>
+              </Card>
+            ) : (
+              <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead className="bg-neutral-900 text-white">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Producto</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Cliente</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Cantidad</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Sembrar</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Entrega</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {planificacion.map((p, idx) => (
+                      <tr key={idx} className={`border-b ${darkMode ? 'border-neutral-700' : 'border-neutral-100'} ${p.urgente ? 'bg-red-50' : ''}`}>
+                        <td className={`px-4 py-3 font-semibold ${darkMode && !p.urgente ? 'text-neutral-200' : ''}`}>{p.producto}</td>
+                        <td className={`px-4 py-3 text-sm ${darkMode && !p.urgente ? 'text-neutral-300' : ''}`}>{p.cliente}</td>
+                        <td className={`px-4 py-3 font-bold ${darkMode && !p.urgente ? 'text-white' : ''}`}>{p.cantidad} uds</td>
+                        <td className="px-4 py-3">
+                          <p className={`text-sm font-medium ${p.urgente ? 'text-red-600' : darkMode ? 'text-neutral-200' : ''}`}>{formatDate(p.fechaSiembra)}</p>
+                          <p className={`text-xs ${p.urgente ? 'text-red-500 font-bold' : 'text-neutral-400'}`}>
+                            {p.diasParaSembrar <= 0 ? '¡HOY!' : p.diasParaSembrar === 1 ? 'Mañana' : `En ${p.diasParaSembrar} días`}
+                          </p>
+                        </td>
+                        <td className={`px-4 py-3 text-sm ${darkMode && !p.urgente ? 'text-neutral-300' : ''}`}>{formatDate(p.fechaEntrega)}</td>
+                        <td className="px-4 py-3">
+                          <Badge className={p.urgente ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
+                            {p.urgente ? '⚠️ Urgente' : '✓ Planificado'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -3083,6 +3994,550 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== TRAZABILIDAD ====================
+  const [trazabilidadLoteId, setTrazabilidadLoteId] = useState('');
+  
+  const renderTrazabilidad = () => {
+    const loteSeleccionado = trazabilidadLoteId ? lotes.find(l => l.id === parseInt(trazabilidadLoteId) || l.codigo === trazabilidadLoteId) : null;
+    
+    // Obtener toda la trazabilidad del lote
+    const getTrazabilidad = (lote) => {
+      if (!lote) return null;
+      
+      const producto = productos.find(p => p.id === lote.producto_id);
+      
+      // Encontrar pedidos que podrían contener este producto desde la fecha de cosecha
+      const pedidosRelacionados = pedidos.filter(p => {
+        const items = pedidoItems.filter(i => i.pedido_id === p.id && i.producto_id === lote.producto_id);
+        if (items.length === 0) return false;
+        // El pedido debe ser posterior o igual a la fecha de cosecha
+        if (lote.fecha_cosecha_real || lote.fecha_cosecha_prevista) {
+          const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+          const fechaPedido = new Date(p.fecha);
+          return fechaPedido >= fechaCosecha;
+        }
+        return true;
+      }).slice(0, 10); // Limitar a 10 pedidos
+      
+      // Mermas relacionadas
+      const mermasRelacionadas = mermas.filter(m => m.lote_id === lote.id);
+      
+      // Clientes que han recibido el producto
+      const clientesRelacionados = [...new Set(pedidosRelacionados.map(p => p.cliente_id))]
+        .map(id => clientes.find(c => c.id === id))
+        .filter(Boolean);
+      
+      return {
+        lote,
+        producto,
+        pedidos: pedidosRelacionados,
+        mermas: mermasRelacionadas,
+        clientes: clientesRelacionados
+      };
+    };
+
+    const trazabilidad = getTrazabilidad(loteSeleccionado);
+
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Trazabilidad</h1>
+          <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Seguimiento completo: semilla → lote → pedido → cliente</p>
+        </div>
+
+        {/* Buscador */}
+        <Card className={`p-6 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+          <div className="flex flex-col md:flex-row gap-4 items-end">
+            <div className="flex-1">
+              <label className={`block text-sm font-semibold mb-2 ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                Buscar por Lote
+              </label>
+              <select 
+                value={trazabilidadLoteId}
+                onChange={e => setTrazabilidadLoteId(e.target.value)}
+                className={`w-full px-4 py-3 rounded-xl border text-lg ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white'}`}
+              >
+                <option value="">Selecciona un lote...</option>
+                {lotes.map(l => {
+                  const prod = productos.find(p => p.id === l.producto_id);
+                  return (
+                    <option key={l.id} value={l.id}>
+                      {l.codigo || `L-${l.id}`} — {prod?.nombre || 'Producto'} — {formatDate(l.fecha_siembra)}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            {trazabilidadLoteId && (
+              <Button variant="secondary" onClick={() => setTrazabilidadLoteId('')}>
+                <X size={18} /> Limpiar
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        {!trazabilidad ? (
+          <Card className={`p-12 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+            <History size={64} className="mx-auto text-neutral-300 mb-4" />
+            <h3 className={`text-xl font-bold mb-2 ${darkMode ? 'text-white' : ''}`}>Selecciona un lote para ver su trazabilidad</h3>
+            <p className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>
+              Podrás ver todo el recorrido: desde la siembra hasta los clientes finales
+            </p>
+          </Card>
+        ) : (
+          <div className="space-y-6">
+            {/* Timeline visual */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {/* Paso 1: Producto/Semilla */}
+              <Card className={`p-4 border-l-4 border-l-green-500 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-green-100 rounded-lg text-green-600"><Leaf size={20} /></div>
+                  <span className="text-xs font-bold text-green-600 uppercase">1. Producto</span>
+                </div>
+                <h4 className={`font-bold ${darkMode ? 'text-white' : ''}`}>{trazabilidad.producto?.nombre}</h4>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  {trazabilidad.producto?.dias_crecimiento || 7} días crecimiento
+                </p>
+              </Card>
+
+              {/* Paso 2: Lote */}
+              <Card className={`p-4 border-l-4 border-l-amber-500 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-amber-100 rounded-lg text-amber-600"><Sprout size={20} /></div>
+                  <span className="text-xs font-bold text-amber-600 uppercase">2. Lote</span>
+                </div>
+                <h4 className={`font-bold ${darkMode ? 'text-white' : ''}`}>{trazabilidad.lote.codigo || `L-${trazabilidad.lote.id}`}</h4>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  Siembra: {formatDate(trazabilidad.lote.fecha_siembra)}
+                </p>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  {trazabilidad.lote.bandejas} bandejas
+                </p>
+                <Badge className={estadoLoteConfig[trazabilidad.lote.estado]?.color || 'bg-neutral-100'}>
+                  {estadoLoteConfig[trazabilidad.lote.estado]?.label || trazabilidad.lote.estado}
+                </Badge>
+              </Card>
+
+              {/* Paso 3: Pedidos */}
+              <Card className={`p-4 border-l-4 border-l-blue-500 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-blue-100 rounded-lg text-blue-600"><ShoppingCart size={20} /></div>
+                  <span className="text-xs font-bold text-blue-600 uppercase">3. Pedidos</span>
+                </div>
+                <h4 className={`font-bold text-2xl ${darkMode ? 'text-white' : ''}`}>{trazabilidad.pedidos.length}</h4>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  pedidos relacionados
+                </p>
+                {trazabilidad.pedidos.length > 0 && (
+                  <p className={`text-sm font-semibold ${darkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                    {formatCurrency(trazabilidad.pedidos.reduce((sum, p) => sum + (p.total || 0), 0))}
+                  </p>
+                )}
+              </Card>
+
+              {/* Paso 4: Clientes */}
+              <Card className={`p-4 border-l-4 border-l-purple-500 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="p-2 bg-purple-100 rounded-lg text-purple-600"><Users size={20} /></div>
+                  <span className="text-xs font-bold text-purple-600 uppercase">4. Clientes</span>
+                </div>
+                <h4 className={`font-bold text-2xl ${darkMode ? 'text-white' : ''}`}>{trazabilidad.clientes.length}</h4>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                  clientes alcanzados
+                </p>
+              </Card>
+            </div>
+
+            {/* Detalles */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Lista de clientes */}
+              <Card className={`p-5 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <h3 className={`font-bold mb-4 flex items-center gap-2 ${darkMode ? 'text-white' : ''}`}>
+                  <Users size={20} className="text-purple-500" /> Clientes que recibieron este lote
+                </h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {trazabilidad.clientes.length > 0 ? trazabilidad.clientes.map(cliente => (
+                    <div key={cliente.id} className={`p-3 rounded-lg flex items-center justify-between ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-purple-500 flex items-center justify-center text-white font-bold">
+                          {cliente.nombre?.charAt(0)}
+                        </div>
+                        <div>
+                          <p className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{cliente.nombre}</p>
+                          <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{cliente.tipo}</p>
+                        </div>
+                      </div>
+                      <Badge className={zonaConfig[cliente.zona]?.color || 'bg-neutral-100'}>
+                        {zonaConfig[cliente.zona]?.label || cliente.zona}
+                      </Badge>
+                    </div>
+                  )) : (
+                    <p className={`text-center py-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                      No hay clientes relacionados aún
+                    </p>
+                  )}
+                </div>
+              </Card>
+
+              {/* Pedidos relacionados */}
+              <Card className={`p-5 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <h3 className={`font-bold mb-4 flex items-center gap-2 ${darkMode ? 'text-white' : ''}`}>
+                  <ShoppingCart size={20} className="text-blue-500" /> Pedidos relacionados
+                </h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {trazabilidad.pedidos.length > 0 ? trazabilidad.pedidos.map(pedido => {
+                    const cliente = clientes.find(c => c.id === pedido.cliente_id);
+                    const config = estadoConfig[pedido.estado];
+                    return (
+                      <div key={pedido.id} className={`p-3 rounded-lg flex items-center justify-between ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
+                        <div>
+                          <p className={`font-semibold ${darkMode ? 'text-white' : ''}`}>Pedido #{pedido.id}</p>
+                          <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                            {cliente?.nombre} • {formatDate(pedido.fecha_entrega)}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-bold ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</p>
+                          <Badge className={config?.color}>{config?.label}</Badge>
+                        </div>
+                      </div>
+                    );
+                  }) : (
+                    <p className={`text-center py-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                      No hay pedidos relacionados
+                    </p>
+                  )}
+                </div>
+              </Card>
+            </div>
+
+            {/* Mermas */}
+            {trazabilidad.mermas.length > 0 && (
+              <Card className={`p-5 border-l-4 border-l-red-500 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <h3 className={`font-bold mb-4 flex items-center gap-2 text-red-600`}>
+                  <AlertTriangle size={20} /> Mermas registradas
+                </h3>
+                <div className="flex flex-wrap gap-3">
+                  {trazabilidad.mermas.map(m => (
+                    <div key={m.id} className="px-4 py-2 bg-red-50 border border-red-200 rounded-lg">
+                      <span className="font-bold text-red-700">-{m.cantidad}</span>
+                      <span className="text-red-600 ml-2">{m.motivo}</span>
+                      <span className="text-red-400 ml-2 text-sm">{formatDate(m.fecha)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ==================== CONTROL AMBIENTAL ====================
+  const renderAmbiente = () => {
+    // Rangos óptimos para microgreens
+    const rangosOptimos = {
+      temperatura: { min: 18, max: 24, unidad: '°C', label: 'Temperatura' },
+      humedad: { min: 50, max: 70, unidad: '%', label: 'Humedad' },
+      co2: { min: 400, max: 1200, unidad: 'ppm', label: 'CO₂' },
+      luz: { min: 8000, max: 15000, unidad: 'lux', label: 'Luz' }
+    };
+
+    // Última lectura
+    const ultimaLectura = condiciones.length > 0 ? condiciones[0] : null;
+
+    // Evaluar si está en rango
+    const evaluarRango = (valor, tipo) => {
+      const rango = rangosOptimos[tipo];
+      if (!rango || valor === null || valor === undefined) return 'unknown';
+      if (valor < rango.min) return 'bajo';
+      if (valor > rango.max) return 'alto';
+      return 'optimo';
+    };
+
+    // Colores según estado
+    const colorEstado = {
+      optimo: 'bg-green-500',
+      alto: 'bg-red-500',
+      bajo: 'bg-blue-500',
+      unknown: 'bg-neutral-400'
+    };
+
+    const bgEstado = {
+      optimo: 'bg-green-50 border-green-200',
+      alto: 'bg-red-50 border-red-200',
+      bajo: 'bg-blue-50 border-blue-200',
+      unknown: 'bg-neutral-50 border-neutral-200'
+    };
+
+    // Datos para gráfico (últimas 24 horas)
+    const datosGrafico = condiciones.slice(0, 24).reverse().map(c => ({
+      hora: new Date(c.fecha).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }),
+      temperatura: c.temperatura,
+      humedad: c.humedad
+    }));
+
+    // Formulario para nueva lectura
+    const [formCondicion, setFormCondicion] = useState({
+      temperatura: 22,
+      humedad: 60,
+      co2: 800,
+      luz: 10000,
+      notas: ''
+    });
+
+    const guardarLectura = async () => {
+      const { error } = await supabase.from('condiciones_ambientales').insert({
+        ...formCondicion,
+        fecha: new Date().toISOString()
+      });
+      if (error) {
+        alert('Error: ' + error.message);
+      } else {
+        refetchCondiciones();
+        alert('✅ Lectura guardada');
+      }
+    };
+
+    // Alertas actuales
+    const alertasAmbiente = [];
+    if (ultimaLectura) {
+      Object.entries(rangosOptimos).forEach(([tipo, rango]) => {
+        const valor = ultimaLectura[tipo];
+        const estado = evaluarRango(valor, tipo);
+        if (estado === 'alto') {
+          alertasAmbiente.push({ tipo, mensaje: `${rango.label} alta: ${valor}${rango.unidad} (máx: ${rango.max})`, color: 'text-red-600' });
+        } else if (estado === 'bajo') {
+          alertasAmbiente.push({ tipo, mensaje: `${rango.label} baja: ${valor}${rango.unidad} (mín: ${rango.min})`, color: 'text-blue-600' });
+        }
+      });
+    }
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Control Ambiental</h1>
+            <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+              Monitoreo de condiciones del invernadero
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {ultimaLectura && (
+              <span className={`text-xs px-3 py-1 rounded-full ${darkMode ? 'bg-neutral-700 text-neutral-300' : 'bg-neutral-100'}`}>
+                Última: {new Date(ultimaLectura.fecha).toLocaleString('es-ES')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Alertas activas */}
+        {alertasAmbiente.length > 0 && (
+          <Card className={`p-4 border-l-4 border-l-amber-500 ${darkMode ? 'bg-amber-900/20 border-amber-700' : 'bg-amber-50 border-amber-200'}`}>
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
+              <div>
+                <h3 className={`font-bold ${darkMode ? 'text-amber-400' : 'text-amber-700'}`}>Condiciones fuera de rango</h3>
+                <ul className="mt-1 space-y-1">
+                  {alertasAmbiente.map((a, i) => (
+                    <li key={i} className={`text-sm ${a.color}`}>• {a.mensaje}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Tarjetas de condiciones actuales */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Object.entries(rangosOptimos).map(([tipo, config]) => {
+            const valor = ultimaLectura?.[tipo];
+            const estado = evaluarRango(valor, tipo);
+            const IconMap = { temperatura: Sun, humedad: Sprout, co2: Leaf, luz: Zap };
+            const Icon = IconMap[tipo] || Sun;
+            
+            return (
+              <Card key={tipo} className={`p-4 border-2 ${bgEstado[estado]} ${darkMode && estado === 'unknown' ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className={`p-2 rounded-lg ${colorEstado[estado]} text-white`}>
+                    <Icon size={20} />
+                  </div>
+                  <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                    estado === 'optimo' ? 'bg-green-100 text-green-700' :
+                    estado === 'alto' ? 'bg-red-100 text-red-700' :
+                    estado === 'bajo' ? 'bg-blue-100 text-blue-700' :
+                    'bg-neutral-100 text-neutral-500'
+                  }`}>
+                    {estado === 'optimo' ? '✓ Óptimo' : estado === 'alto' ? '↑ Alto' : estado === 'bajo' ? '↓ Bajo' : '—'}
+                  </span>
+                </div>
+                <p className={`text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>
+                  {valor !== undefined && valor !== null ? valor : '—'}
+                  <span className="text-lg font-normal text-neutral-400">{config.unidad}</span>
+                </p>
+                <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{config.label}</p>
+                <p className={`text-xs ${darkMode ? 'text-neutral-500' : 'text-neutral-400'} mt-1`}>
+                  Rango: {config.min}–{config.max} {config.unidad}
+                </p>
+              </Card>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Gráfico */}
+          <Card className={`p-5 lg:col-span-2 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+            <h3 className={`font-bold mb-4 ${darkMode ? 'text-white' : ''}`}>📊 Histórico (últimas lecturas)</h3>
+            {datosGrafico.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <AreaChart data={datosGrafico}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
+                  <XAxis dataKey="hora" tick={{ fontSize: 11 }} stroke={darkMode ? '#9ca3af' : '#6b7280'} />
+                  <YAxis yAxisId="temp" orientation="left" domain={[15, 30]} tick={{ fontSize: 11 }} stroke="#f97316" />
+                  <YAxis yAxisId="hum" orientation="right" domain={[40, 80]} tick={{ fontSize: 11 }} stroke="#3b82f6" />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: darkMode ? '#1f2937' : '#fff',
+                      border: darkMode ? '1px solid #374151' : '1px solid #e5e7eb',
+                      borderRadius: '8px'
+                    }}
+                  />
+                  <Area yAxisId="temp" type="monotone" dataKey="temperatura" stroke="#f97316" fill="#fed7aa" name="Temp °C" />
+                  <Area yAxisId="hum" type="monotone" dataKey="humedad" stroke="#3b82f6" fill="#bfdbfe" name="Humedad %" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-64 flex items-center justify-center">
+                <p className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>Sin datos históricos</p>
+              </div>
+            )}
+          </Card>
+
+          {/* Formulario nueva lectura */}
+          <Card className={`p-5 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+            <h3 className={`font-bold mb-4 ${darkMode ? 'text-white' : ''}`}>➕ Nueva Lectura</h3>
+            <div className="space-y-3">
+              <div>
+                <label className={`text-sm font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>Temperatura (°C)</label>
+                <input 
+                  type="number" 
+                  step="0.1"
+                  value={formCondicion.temperatura} 
+                  onChange={e => setFormCondicion({...formCondicion, temperatura: parseFloat(e.target.value)})}
+                  className={`w-full mt-1 px-3 py-2 rounded-lg border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}
+                />
+              </div>
+              <div>
+                <label className={`text-sm font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>Humedad (%)</label>
+                <input 
+                  type="number" 
+                  value={formCondicion.humedad} 
+                  onChange={e => setFormCondicion({...formCondicion, humedad: parseInt(e.target.value)})}
+                  className={`w-full mt-1 px-3 py-2 rounded-lg border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}
+                />
+              </div>
+              <div>
+                <label className={`text-sm font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>CO₂ (ppm)</label>
+                <input 
+                  type="number" 
+                  value={formCondicion.co2} 
+                  onChange={e => setFormCondicion({...formCondicion, co2: parseInt(e.target.value)})}
+                  className={`w-full mt-1 px-3 py-2 rounded-lg border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}
+                />
+              </div>
+              <div>
+                <label className={`text-sm font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>Luz (lux)</label>
+                <input 
+                  type="number" 
+                  value={formCondicion.luz} 
+                  onChange={e => setFormCondicion({...formCondicion, luz: parseInt(e.target.value)})}
+                  className={`w-full mt-1 px-3 py-2 rounded-lg border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}
+                />
+              </div>
+              <div>
+                <label className={`text-sm font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-700'}`}>Notas</label>
+                <input 
+                  type="text" 
+                  value={formCondicion.notas} 
+                  onChange={e => setFormCondicion({...formCondicion, notas: e.target.value})}
+                  placeholder="Observaciones..."
+                  className={`w-full mt-1 px-3 py-2 rounded-lg border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}
+                />
+              </div>
+              <Button className="w-full" onClick={guardarLectura}>
+                <Plus size={18} /> Guardar Lectura
+              </Button>
+            </div>
+          </Card>
+        </div>
+
+        {/* Historial de lecturas */}
+        <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+          <div className={`p-4 border-b ${darkMode ? 'border-neutral-700' : 'border-neutral-200'}`}>
+            <h3 className={`font-bold ${darkMode ? 'text-white' : ''}`}>📋 Historial de Lecturas</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px]">
+              <thead className="bg-neutral-900 text-white">
+                <tr>
+                  <th className="text-left px-4 py-3 text-sm font-bold">Fecha</th>
+                  <th className="text-center px-4 py-3 text-sm font-bold">🌡️ Temp</th>
+                  <th className="text-center px-4 py-3 text-sm font-bold">💧 Humedad</th>
+                  <th className="text-center px-4 py-3 text-sm font-bold">🌿 CO₂</th>
+                  <th className="text-center px-4 py-3 text-sm font-bold">💡 Luz</th>
+                  <th className="text-left px-4 py-3 text-sm font-bold">Notas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {condiciones.slice(0, 20).map(c => (
+                  <tr key={c.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'}`}>
+                    <td className={`px-4 py-3 text-sm ${darkMode ? 'text-neutral-200' : ''}`}>
+                      {new Date(c.fecha).toLocaleString('es-ES')}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-1 rounded text-sm font-bold ${
+                        evaluarRango(c.temperatura, 'temperatura') === 'optimo' ? 'bg-green-100 text-green-700' :
+                        evaluarRango(c.temperatura, 'temperatura') === 'alto' ? 'bg-red-100 text-red-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        {c.temperatura}°C
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-1 rounded text-sm font-bold ${
+                        evaluarRango(c.humedad, 'humedad') === 'optimo' ? 'bg-green-100 text-green-700' :
+                        evaluarRango(c.humedad, 'humedad') === 'alto' ? 'bg-red-100 text-red-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        {c.humedad}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-1 rounded text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{c.co2} ppm</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`px-2 py-1 rounded text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{c.luz} lux</span>
+                    </td>
+                    <td className={`px-4 py-3 text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                      {c.notas || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {condiciones.length === 0 && (
+            <div className="p-8 text-center">
+              <Sun size={48} className="mx-auto text-neutral-300 mb-4" />
+              <p className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>Sin lecturas registradas</p>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  };
+
   // ==================== CONTABILIDAD ====================
   const renderContabilidad = () => {
     const year = new Date().getFullYear();
@@ -3227,7 +4682,7 @@ Firma repartidor: _________________
   if (loading) return <LoadingScreen />;
 
   return (
-    <div className="min-h-screen bg-neutral-100 flex">
+    <div className={`min-h-screen ${darkMode ? 'bg-neutral-900' : 'bg-neutral-100'} flex transition-colors duration-300`}>
       {/* Overlay para móvil cuando sidebar está abierto */}
       {sidebarOpen && (
         <div 
@@ -3265,6 +4720,8 @@ Firma repartidor: _________________
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
           <NavItem icon={Sprout} label="Producción" section="produccion" badge={lotesActivos} />
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
+          <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
+          <NavItem icon={Sun} label="Ambiente" section="ambiente" />
         </nav>
         <div className="pt-4 border-t border-neutral-700 space-y-1">
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="hidden md:flex w-full items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
@@ -3274,18 +4731,105 @@ Firma repartidor: _________________
 
       {/* Main */}
       <main className={`flex-1 w-full md:${sidebarOpen ? 'ml-64' : 'ml-20'} transition-all duration-300`}>
-        <header className="bg-white border-b border-neutral-200 px-4 md:px-8 py-3 md:py-4 sticky top-0 z-30">
+        <header className={`${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border-b px-4 md:px-8 py-3 md:py-4 sticky top-0 z-30`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {/* Botón hamburguesa solo en móvil */}
-              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="md:hidden p-2 text-neutral-600 hover:bg-neutral-100 rounded-xl">
+              <button onClick={() => setSidebarOpen(!sidebarOpen)} className={`md:hidden p-2 ${darkMode ? 'text-neutral-300 hover:bg-neutral-700' : 'text-neutral-600 hover:bg-neutral-100'} rounded-xl`}>
                 <Menu size={24} />
               </button>
-              <h2 className="text-base md:text-lg font-bold text-neutral-900 capitalize">{activeSection}</h2>
+              <h2 className={`text-base md:text-lg font-bold capitalize ${darkMode ? 'text-white' : 'text-neutral-900'}`}>{activeSection}</h2>
             </div>
             <div className="flex items-center gap-2 md:gap-3">
-              <button className="p-2 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 rounded-xl relative"><Bell size={20} />{alertasNoLeidas > 0 && <span className="absolute -top-1 -right-1 w-5 h-5 bg-orange-500 text-white text-xs rounded-full flex items-center justify-center font-bold">{alertasNoLeidas}</span>}</button>
-              <div className="flex items-center gap-2 px-2 md:px-3 py-2 bg-neutral-100 rounded-xl"><div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div><span className="hidden md:inline text-sm font-semibold text-neutral-700">{userProfile?.nombre?.split(' ')[0]}</span></div>
+              {/* Toggle modo oscuro */}
+              <button 
+                onClick={toggleDarkMode} 
+                className={`p-2 rounded-xl transition-colors ${darkMode ? 'text-amber-400 hover:bg-neutral-700' : 'text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100'}`}
+                title={darkMode ? 'Modo claro' : 'Modo oscuro'}
+              >
+                {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+              </button>
+              
+              {/* Botón alertas */}
+              <div className="relative">
+                <button 
+                  onClick={() => setShowAlertasPanel(!showAlertasPanel)}
+                  className={`p-2 rounded-xl relative transition-colors ${darkMode ? 'text-neutral-300 hover:bg-neutral-700' : 'text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100'}`}
+                >
+                  <Bell size={20} />
+                  {alertasNoLeidas > 0 && (
+                    <span className={`absolute -top-1 -right-1 w-5 h-5 ${alertasCriticas > 0 ? 'bg-red-500 animate-pulse' : 'bg-orange-500'} text-white text-xs rounded-full flex items-center justify-center font-bold`}>
+                      {alertasNoLeidas > 9 ? '9+' : alertasNoLeidas}
+                    </span>
+                  )}
+                </button>
+                
+                {/* Panel de alertas desplegable */}
+                {showAlertasPanel && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowAlertasPanel(false)} />
+                    <div className={`absolute right-0 top-12 w-80 md:w-96 ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border rounded-2xl shadow-2xl z-50 overflow-hidden`}>
+                      <div className={`p-4 border-b ${darkMode ? 'border-neutral-700' : 'border-neutral-200'} flex items-center justify-between`}>
+                        <div className="flex items-center gap-2">
+                          <BellRing size={20} className="text-orange-500" />
+                          <h3 className={`font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Alertas</h3>
+                          {alertasCriticas > 0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full font-bold">{alertasCriticas} críticas</span>}
+                        </div>
+                        <button onClick={() => setShowAlertasPanel(false)} className={`p-1 rounded-lg ${darkMode ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}>
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <div className="max-h-96 overflow-y-auto">
+                        {alertas.length === 0 ? (
+                          <div className="p-8 text-center">
+                            <CheckCircle size={40} className="mx-auto text-green-500 mb-2" />
+                            <p className={`font-medium ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>¡Todo en orden!</p>
+                            <p className={`text-sm ${darkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>No hay alertas pendientes</p>
+                          </div>
+                        ) : (
+                          alertas.map(alerta => (
+                            <button
+                              key={alerta.id}
+                              onClick={() => { alerta.accion(); setShowAlertasPanel(false); }}
+                              className={`w-full p-3 flex items-start gap-3 border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} transition-colors text-left`}
+                            >
+                              <div className={`p-2 rounded-lg ${alerta.color} text-white flex-shrink-0`}>
+                                <alerta.icono size={16} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className={`font-semibold text-sm ${darkMode ? 'text-white' : 'text-neutral-900'} ${alerta.prioridad === 'critica' ? 'text-red-500' : ''}`}>
+                                  {alerta.titulo}
+                                </p>
+                                <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'} truncate`}>{alerta.mensaje}</p>
+                              </div>
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                alerta.prioridad === 'critica' ? 'bg-red-100 text-red-700' :
+                                alerta.prioridad === 'alta' ? 'bg-amber-100 text-amber-700' :
+                                alerta.prioridad === 'media' ? 'bg-blue-100 text-blue-700' :
+                                'bg-neutral-100 text-neutral-600'
+                              }`}>
+                                {alerta.prioridad}
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                      {alertas.length > 0 && (
+                        <div className={`p-3 border-t ${darkMode ? 'border-neutral-700 bg-neutral-750' : 'border-neutral-200 bg-neutral-50'}`}>
+                          <p className={`text-xs text-center ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                            Haz clic en una alerta para ir a la sección
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              
+              <div className={`flex items-center gap-2 px-2 md:px-3 py-2 ${darkMode ? 'bg-neutral-700' : 'bg-neutral-100'} rounded-xl`}>
+                <div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div>
+                <span className={`hidden md:inline text-sm font-semibold ${darkMode ? 'text-neutral-200' : 'text-neutral-700'}`}>{userProfile?.nombre?.split(' ')[0]}</span>
+              </div>
             </div>
           </div>
         </header>
@@ -3305,6 +4849,8 @@ Firma repartidor: _________________
           {activeSection === 'contabilidad' && renderContabilidad()}
           {activeSection === 'produccion' && renderProduccion()}
           {activeSection === 'mermas' && renderMermas()}
+          {activeSection === 'trazabilidad' && renderTrazabilidad()}
+          {activeSection === 'ambiente' && renderAmbiente()}
         </div>
       </main>
 
@@ -3318,6 +4864,7 @@ Firma repartidor: _________________
       {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}><TareaForm tarea={editingItem} onSave={form => handleSave('tareas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'pedido_recurrente' && <Modal title="Nuevo Pedido Recurrente" onClose={() => setShowModal(null)} size="max-w-2xl"><PedidoRecurrenteForm onSave={() => setShowModal(null)} onCancel={() => setShowModal(null)} /></Modal>}
     </div>
   );
 };
