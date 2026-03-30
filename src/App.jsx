@@ -2973,10 +2973,14 @@ const MainApp = () => {
           <div class="etiqueta">
             <div class="header">
               <div class="logo">🌱 RootFlow</div>
-              <div class="categoria">Brotes tiernos</div>
+              <div class="categoria">PRODUCTO AGRÍCOLA FRESCO</div>
             </div>
-            
             <div class="producto">${producto?.nombre || 'Brotes Tiernos'}</div>
+            <div class="descripcion">Brotes tiernos cultivados en invernadero</div>
+            
+            <div class="aviso-lavar">
+              LAVAR ANTES DE CONSUMIR
+            </div>
             
             <div class="info-grid">
               <div class="info-item">
@@ -2998,14 +3002,13 @@ const MainApp = () => {
             </div>
             
             <div class="conservacion">
-              Conservar refrigerado entre 2°C y 5°C.<br>
-              <strong>Lavar antes de consumir.</strong>
+              <strong>Conservación:</strong> Mantener refrigerado entre 2°C y 5°C
             </div>
             
             <div class="footer">
               <div class="origen">Origen: Madrid, España</div>
               <div class="productor">
-                ROOTFLOW HYDROPONICS SL<br>
+                <strong>Productor:</strong> ROOTFLOW HYDROPONICS SL<br>
                 C. Nueva, 16 • 28231 Las Rozas de Madrid<br>
                 CIF: B12345678
               </div>
@@ -3022,40 +3025,46 @@ const MainApp = () => {
           <title>Etiquetas - ${lote.codigo || 'L-'+lote.id}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; padding: 8mm; background: #f5f5f5; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; padding: 8mm; background: #f5f5f5; }
             .etiquetas-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6mm; }
             .etiqueta { 
               background: white;
-              border: 1px solid #999; 
-              padding: 12px;
-              border-radius: 4px;
+              border: 1.5px solid #333; 
+              padding: 10px;
+              border-radius: 6px;
               page-break-inside: avoid;
               font-size: 9px;
-              line-height: 1.4;
+              line-height: 1.3;
             }
-            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #ccc; }
-            .logo { font-weight: bold; color: #2D6A4F; font-size: 14px; }
-            .categoria { font-size: 8px; color: #555; }
-            .producto { font-size: 16px; font-weight: bold; color: #000; margin-bottom: 10px; }
-            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
-            .info-item { }
-            .info-item .label { display: block; font-size: 7px; color: #666; text-transform: uppercase; margin-bottom: 1px; }
-            .info-item .value { display: block; font-size: 9px; font-weight: 600; color: #000; }
-            .conservacion { 
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
+            .logo { font-weight: bold; color: #2D6A4F; font-size: 13px; }
+            .categoria { font-size: 7px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+            .producto { font-size: 15px; font-weight: bold; color: #1a1a1a; margin-bottom: 2px; }
+            .descripcion { font-size: 8px; color: #666; margin-bottom: 8px; font-style: italic; }
+            .aviso-lavar { 
               background: #f5f5f5; 
-              padding: 8px; 
-              border-radius: 3px; 
-              font-size: 8px; 
-              color: #333; 
-              margin-bottom: 10px;
-              border-left: 3px solid #2D6A4F;
+              border: 2px solid #000;
+              color: #000;
+              padding: 6px 8px; 
+              border-radius: 4px; 
+              text-align: center; 
+              font-weight: bold;
+              font-size: 10px;
+              margin: 8px 0;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
             }
-            .footer { border-top: 1px solid #ccc; padding-top: 8px; }
-            .origen { font-size: 9px; font-weight: bold; color: #000; margin-bottom: 4px; }
-            .productor { font-size: 7px; color: #555; line-height: 1.5; }
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 8px 0; }
+            .info-item { background: #f8f8f8; padding: 4px 6px; border-radius: 3px; }
+            .info-item .label { display: block; font-size: 7px; color: #666; text-transform: uppercase; }
+            .info-item .value { display: block; font-size: 9px; font-weight: 600; color: #333; }
+            .conservacion { background: #E0F2FE; padding: 6px 8px; border-radius: 4px; font-size: 8px; color: #0369A1; margin: 8px 0; }
+            .footer { border-top: 1px solid #ddd; padding-top: 6px; margin-top: 8px; }
+            .origen { font-size: 9px; font-weight: bold; color: #2D6A4F; margin-bottom: 4px; }
+            .productor { font-size: 7px; color: #666; line-height: 1.4; }
             @media print {
               body { padding: 5mm; background: white; }
-              .etiqueta { border: 1px solid #000; }
+              .etiqueta { border: 1.5px solid #000; }
               .etiquetas-grid { gap: 4mm; }
             }
           </style>
