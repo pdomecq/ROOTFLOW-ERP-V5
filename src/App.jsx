@@ -32,38 +32,25 @@ const EMPRESA = {
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
+const LOGO_URL = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
+
 const RootFlowLogo = ({ size = 40, showERP = true }) => (
   <div className="relative">
-    <svg width={size} height={size * 1.4} viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
-      {/* Cápsula verde */}
-      <rect x="5" y="5" width="90" height="130" rx="45" fill="#2D6A4F"/>
-      {/* Microgreens - hojas en abanico */}
-      <g fill="white">
-        {/* Hoja central larga */}
-        <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
-        {/* Hojas internas */}
-        <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
-        <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
-        {/* Hojas medias */}
-        <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
-        <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
-        {/* Hojas externas */}
-        <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
-        <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
-        {/* Hojas más externas */}
-        <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
-        <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
-      </g>
-    </svg>
+    <img 
+      src={LOGO_URL} 
+      alt="RootFlow" 
+      style={{ width: size, height: 'auto' }}
+      className="object-contain"
+    />
     {showERP && <span className="absolute -bottom-1 -right-1 bg-neutral-900 text-white text-[8px] font-black px-1.5 py-0.5 rounded">ERP</span>}
   </div>
 );
 
 const RootFlowLogoFull = ({ showERP = true }) => (
   <div className="flex items-center gap-3">
-    <RootFlowLogo size={32} showERP={showERP} />
+    <RootFlowLogo size={36} showERP={showERP} />
     <div>
-      <h1 className="font-black text-lg tracking-tight"><span className="text-white">Root</span><span className="text-orange-500">Flow</span></h1>
+      <h1 className="font-black text-lg tracking-tight"><span className="text-neutral-900">Root</span><span className="text-orange-500">Flow</span></h1>
       <p className="text-[9px] text-neutral-400 tracking-wider uppercase">Hydroponics</p>
     </div>
   </div>
@@ -71,20 +58,11 @@ const RootFlowLogoFull = ({ showERP = true }) => (
 
 // Logo para facturas (sin badge ERP)
 const RootFlowLogoFactura = () => (
-  <svg width="60" height="84" viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg">
-    <rect x="5" y="5" width="90" height="130" rx="45" fill="#2D6A4F"/>
-    <g fill="white">
-      <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
-      <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
-      <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
-      <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
-      <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
-      <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
-      <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
-      <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
-      <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
-    </g>
-  </svg>
+  <img 
+    src={LOGO_URL} 
+    alt="RootFlow" 
+    style={{ width: 60, height: 'auto' }}
+  />
 );
 
 // ==================== AUTH CONTEXT ====================
@@ -2416,6 +2394,7 @@ const MainApp = () => {
   // Componente para ver factura
   const FacturaPreview = ({ factura, cliente, pedidoItemsList, onClose }) => {
     const items = pedidoItemsList.filter(i => i.pedido_id === factura.pedido_id);
+    const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
     
     const handlePrint = () => {
       const printWindow = window.open('', '_blank');
@@ -2429,8 +2408,8 @@ const MainApp = () => {
             body { padding: 40px; background: white; color: #333; }
             .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
             .logo-section { display: flex; align-items: center; gap: 15px; }
-            .logo { width: 50px; height: 70px; background: #2D6A4F; border-radius: 25px; display: flex; align-items: center; justify-content: center; }
-            .logo svg { width: 44px; height: 60px; }
+            .logo { width: 50px; }
+            .logo img { width: 50px; height: auto; }
             .company-name { font-size: 24px; font-weight: 800; }
             .company-name .root { color: #1a1a1a; }
             .company-name .flow { color: #f97316; }
@@ -2458,19 +2437,7 @@ const MainApp = () => {
           <div class="header">
             <div class="logo-section">
               <div class="logo">
-                <svg viewBox="0 0 100 140" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <g fill="white">
-                    <path d="M50 30 L53 90 L50 95 L47 90 Z"/>
-                    <path d="M50 95 L40 40 L44 38 L50 85 Z"/>
-                    <path d="M50 95 L60 40 L56 38 L50 85 Z"/>
-                    <path d="M50 95 L30 50 L35 46 L50 88 Z"/>
-                    <path d="M50 95 L70 50 L65 46 L50 88 Z"/>
-                    <path d="M50 95 L22 62 L28 58 L50 90 Z"/>
-                    <path d="M50 95 L78 62 L72 58 L50 90 Z"/>
-                    <path d="M50 98 L18 78 L24 72 L50 94 Z"/>
-                    <path d="M50 98 L82 78 L76 72 L50 94 Z"/>
-                  </g>
-                </svg>
+                <img src="${logoUrl}" alt="RootFlow">
               </div>
               <div>
                 <div class="company-name"><span class="root">Root</span><span class="flow">Flow</span></div>
@@ -2967,12 +2934,14 @@ const MainApp = () => {
       const fechaConsumo = new Date(fechaCosecha);
       fechaConsumo.setDate(fechaConsumo.getDate() + 7);
       
+      const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
+      
       const etiquetas = [];
       for (let i = 0; i < lote.bandejas; i++) {
         etiquetas.push(`
           <div class="etiqueta">
             <div class="header">
-              <div class="logo">🌱 RootFlow</div>
+              <div class="logo"><img src="${logoUrl}" alt="RootFlow" class="logo-img"><span class="logo-text"><span class="root">Root</span><span class="flow">Flow</span></span></div>
               <div class="categoria">PRODUCTO AGRÍCOLA FRESCO</div>
             </div>
             <div class="producto">${producto?.nombre || 'Brotes Tiernos'}</div>
@@ -3037,7 +3006,11 @@ const MainApp = () => {
               line-height: 1.3;
             }
             .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
-            .logo { font-weight: bold; color: #2D6A4F; font-size: 13px; }
+            .logo { display: flex; align-items: center; gap: 6px; }
+            .logo-img { width: 24px; height: auto; }
+            .logo-text { font-weight: bold; font-size: 13px; }
+            .logo-text .root { color: #000; }
+            .logo-text .flow { color: #f97316; }
             .categoria { font-size: 7px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
             .producto { font-size: 15px; font-weight: bold; color: #1a1a1a; margin-bottom: 2px; }
             .descripcion { font-size: 8px; color: #666; margin-bottom: 8px; font-style: italic; }
