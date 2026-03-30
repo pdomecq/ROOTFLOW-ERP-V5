@@ -2963,26 +2963,56 @@ const MainApp = () => {
     // Función para imprimir etiquetas
     const imprimirEtiquetas = (lote) => {
       const producto = productos.find(p => p.id === lote.producto_id);
-      const fechaCosecha = new Date(lote.fecha_cosecha_prevista);
-      const fechaCaducidad = new Date(fechaCosecha);
-      fechaCaducidad.setDate(fechaCaducidad.getDate() + 7); // Caducidad: 7 días después de cosecha
+      const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+      const fechaConsumo = new Date(fechaCosecha);
+      fechaConsumo.setDate(fechaConsumo.getDate() + 7);
       
       const etiquetas = [];
       for (let i = 0; i < lote.bandejas; i++) {
         etiquetas.push(`
           <div class="etiqueta">
-            <div class="logo">🌱 RootFlow</div>
-            <div class="producto">${producto?.nombre || 'Microgreens'}</div>
-            <div class="info">
-              <span><strong>Lote:</strong> ${lote.codigo || 'L-'+lote.id}</span>
-              <span><strong>Peso:</strong> 100g</span>
+            <div class="header">
+              <div class="logo">🌱 RootFlow</div>
+              <div class="categoria">PRODUCTO AGRÍCOLA FRESCO</div>
             </div>
-            <div class="info">
-              <span><strong>Cosecha:</strong> ${formatDate(lote.fecha_cosecha_prevista)}</span>
-              <span><strong>Caduca:</strong> ${formatDate(fechaCaducidad.toISOString().split('T')[0])}</span>
+            <div class="producto">${producto?.nombre || 'Brotes Tiernos'}</div>
+            <div class="descripcion">Brotes tiernos cultivados en invernadero</div>
+            
+            <div class="aviso-lavar">
+              ⚠️ LAVAR ANTES DE CONSUMIR
             </div>
-            <div class="conservar">Conservar entre 2°C y 5°C</div>
-            <div class="empresa">RootFlow Hydroponics SL • Las Rozas, Madrid</div>
+            
+            <div class="info-grid">
+              <div class="info-item">
+                <span class="label">Lote</span>
+                <span class="value">${lote.codigo || 'L-'+lote.id}</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Peso neto</span>
+                <span class="value">100g aprox.</span>
+              </div>
+              <div class="info-item">
+                <span class="label">F. Recolección</span>
+                <span class="value">${formatDate(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista)}</span>
+              </div>
+              <div class="info-item">
+                <span class="label">Consumir antes de</span>
+                <span class="value">${formatDate(fechaConsumo.toISOString().split('T')[0])}</span>
+              </div>
+            </div>
+            
+            <div class="conservacion">
+              <strong>Conservación:</strong> Mantener refrigerado entre 2°C y 5°C
+            </div>
+            
+            <div class="footer">
+              <div class="origen">🇪🇸 Origen: ESPAÑA</div>
+              <div class="productor">
+                <strong>Productor:</strong> ROOTFLOW HYDROPONICS SL<br>
+                C. Nueva, 16 • 28231 Las Rozas de Madrid<br>
+                CIF: B12345678
+              </div>
+            </div>
           </div>
         `);
       }
@@ -2995,23 +3025,45 @@ const MainApp = () => {
           <title>Etiquetas - ${lote.codigo || 'L-'+lote.id}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; padding: 10mm; }
-            .etiquetas-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; }
+            body { font-family: 'Segoe UI', Arial, sans-serif; padding: 8mm; background: #f5f5f5; }
+            .etiquetas-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6mm; }
             .etiqueta { 
-              border: 1px solid #ccc; 
-              padding: 8px; 
-              border-radius: 8px;
+              background: white;
+              border: 1.5px solid #333; 
+              padding: 10px;
+              border-radius: 6px;
               page-break-inside: avoid;
-              font-size: 10px;
+              font-size: 9px;
+              line-height: 1.3;
             }
-            .logo { font-weight: bold; color: #2D6A4F; font-size: 14px; margin-bottom: 4px; }
-            .producto { font-size: 16px; font-weight: bold; margin-bottom: 6px; color: #1a1a1a; }
-            .info { display: flex; justify-content: space-between; margin-bottom: 4px; }
-            .conservar { background: #e3f2fd; padding: 4px 8px; border-radius: 4px; text-align: center; margin: 6px 0; font-size: 9px; }
-            .empresa { text-align: center; color: #666; font-size: 8px; margin-top: 4px; }
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
+            .logo { font-weight: bold; color: #2D6A4F; font-size: 13px; }
+            .categoria { font-size: 7px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+            .producto { font-size: 15px; font-weight: bold; color: #1a1a1a; margin-bottom: 2px; }
+            .descripcion { font-size: 8px; color: #666; margin-bottom: 8px; font-style: italic; }
+            .aviso-lavar { 
+              background: #FEF3C7; 
+              border: 2px solid #F59E0B;
+              color: #92400E;
+              padding: 6px 8px; 
+              border-radius: 4px; 
+              text-align: center; 
+              font-weight: bold;
+              font-size: 10px;
+              margin: 8px 0;
+            }
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 8px 0; }
+            .info-item { background: #f8f8f8; padding: 4px 6px; border-radius: 3px; }
+            .info-item .label { display: block; font-size: 7px; color: #666; text-transform: uppercase; }
+            .info-item .value { display: block; font-size: 9px; font-weight: 600; color: #333; }
+            .conservacion { background: #E0F2FE; padding: 6px 8px; border-radius: 4px; font-size: 8px; color: #0369A1; margin: 8px 0; }
+            .footer { border-top: 1px solid #ddd; padding-top: 6px; margin-top: 8px; }
+            .origen { font-size: 9px; font-weight: bold; color: #2D6A4F; margin-bottom: 4px; }
+            .productor { font-size: 7px; color: #666; line-height: 1.4; }
             @media print {
-              body { padding: 5mm; }
-              .etiqueta { border: 1px solid #000; }
+              body { padding: 5mm; background: white; }
+              .etiqueta { border: 1.5px solid #000; }
+              .etiquetas-grid { gap: 4mm; }
             }
           </style>
         </head>
@@ -3997,6 +4049,15 @@ Firma repartidor: _________________
   // ==================== TRAZABILIDAD ====================
   const [trazabilidadLoteId, setTrazabilidadLoteId] = useState('');
   
+  // Estado para formulario de condiciones ambientales
+  const [formCondicion, setFormCondicion] = useState({
+    temperatura: 22,
+    humedad: 60,
+    co2: 800,
+    luz: 10000,
+    notas: ''
+  });
+  
   const renderTrazabilidad = () => {
     const loteSeleccionado = trazabilidadLoteId ? lotes.find(l => l.id === parseInt(trazabilidadLoteId) || l.codigo === trazabilidadLoteId) : null;
     
@@ -4277,15 +4338,6 @@ Firma repartidor: _________________
       temperatura: c.temperatura,
       humedad: c.humedad
     }));
-
-    // Formulario para nueva lectura
-    const [formCondicion, setFormCondicion] = useState({
-      temperatura: 22,
-      humedad: 60,
-      co2: 800,
-      luz: 10000,
-      notas: ''
-    });
 
     const guardarLectura = async () => {
       const { error } = await supabase.from('condiciones_ambientales').insert({
@@ -4767,19 +4819,19 @@ Firma repartidor: _________________
                 {/* Panel de alertas desplegable */}
                 {showAlertasPanel && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowAlertasPanel(false)} />
-                    <div className={`absolute right-0 top-12 w-80 md:w-96 ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border rounded-2xl shadow-2xl z-50 overflow-hidden`}>
-                      <div className={`p-4 border-b ${darkMode ? 'border-neutral-700' : 'border-neutral-200'} flex items-center justify-between`}>
+                    <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setShowAlertasPanel(false)} />
+                    <div className={`fixed md:absolute right-2 md:right-0 top-16 md:top-12 left-2 md:left-auto w-auto md:w-96 max-h-[70vh] ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col`}>
+                      <div className={`p-4 border-b ${darkMode ? 'border-neutral-700' : 'border-neutral-200'} flex items-center justify-between flex-shrink-0`}>
                         <div className="flex items-center gap-2">
                           <BellRing size={20} className="text-orange-500" />
                           <h3 className={`font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Alertas</h3>
                           {alertasCriticas > 0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full font-bold">{alertasCriticas} críticas</span>}
                         </div>
-                        <button onClick={() => setShowAlertasPanel(false)} className={`p-1 rounded-lg ${darkMode ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}>
-                          <X size={18} />
+                        <button onClick={() => setShowAlertasPanel(false)} className={`p-2 rounded-lg ${darkMode ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-neutral-100 text-neutral-500'}`}>
+                          <X size={20} />
                         </button>
                       </div>
-                      <div className="max-h-96 overflow-y-auto">
+                      <div className="flex-1 overflow-y-auto">
                         {alertas.length === 0 ? (
                           <div className="p-8 text-center">
                             <CheckCircle size={40} className="mx-auto text-green-500 mb-2" />
@@ -4802,7 +4854,7 @@ Firma repartidor: _________________
                                 </p>
                                 <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'} truncate`}>{alerta.mensaje}</p>
                               </div>
-                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
                                 alerta.prioridad === 'critica' ? 'bg-red-100 text-red-700' :
                                 alerta.prioridad === 'alta' ? 'bg-amber-100 text-amber-700' :
                                 alerta.prioridad === 'media' ? 'bg-blue-100 text-blue-700' :
@@ -4815,7 +4867,7 @@ Firma repartidor: _________________
                         )}
                       </div>
                       {alertas.length > 0 && (
-                        <div className={`p-3 border-t ${darkMode ? 'border-neutral-700 bg-neutral-750' : 'border-neutral-200 bg-neutral-50'}`}>
+                        <div className={`p-3 border-t ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-neutral-50'} flex-shrink-0`}>
                           <p className={`text-xs text-center ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
                             Haz clic en una alerta para ir a la sección
                           </p>
