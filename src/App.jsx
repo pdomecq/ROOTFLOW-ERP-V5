@@ -28,7 +28,7 @@ const EMPRESA = {
   telefono: '+34 638 161 990',
   email: 'info@rootflow.es',
   web: 'www.rootflow.es',
-  cif: 'B12345678'
+  cif: 'B27535137'
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
@@ -2979,7 +2979,7 @@ const MainApp = () => {
               <div class="productor">
                 <strong>Productor:</strong> ROOTFLOW HYDROPONICS SL<br>
                 C. Nueva, 16 • 28231 Las Rozas de Madrid<br>
-                CIF: B12345678
+                CIF: B27535137
               </div>
             </div>
           </div>
