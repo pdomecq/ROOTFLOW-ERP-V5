@@ -9,7 +9,7 @@ import {
   Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
-  Moon, Repeat, History, BellRing, XCircle
+  Moon, Repeat, History, BellRing, XCircle, Settings, Navigation
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -737,6 +737,451 @@ const MainApp = () => {
     );
   };
 
+  // ==================== SISTEMA DE FILTROS AVANZADO ====================
+  const [filtrosActivos, setFiltrosActivos] = useState({});
+  const [filtroAbierto, setFiltroAbierto] = useState(null);
+
+  // Componente cabecera con filtro y ordenación
+  const FilterableHeader = ({ label, field, sortConfig, onSort, filters, onFilter, options, type = 'text' }) => {
+    const isActive = sortConfig?.field === field;
+    const tieneFiltroPendiente = filters?.[field] && filters[field] !== '';
+    const ref = useRef(null);
+    
+    // Cerrar al hacer clic fuera
+    useEffect(() => {
+      const handleClickOutside = (e) => {
+        if (ref.current && !ref.current.contains(e.target)) {
+          setFiltroAbierto(null);
+        }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    return (
+      <th className="text-left px-4 py-3 text-sm font-bold relative" ref={ref}>
+        <div className="flex items-center gap-1">
+          <span 
+            className="cursor-pointer hover:text-orange-400 select-none flex items-center gap-1"
+            onClick={() => onSort?.({ field, direction: isActive && sortConfig.direction === 'asc' ? 'desc' : 'asc' })}
+          >
+            {label}
+            {onSort && (
+              <span className="text-neutral-400 text-xs">
+                {isActive ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+              </span>
+            )}
+          </span>
+          <button 
+            onClick={() => setFiltroAbierto(filtroAbierto === field ? null : field)}
+            className={`p-1 rounded hover:bg-neutral-700 ${tieneFiltroPendiente ? 'text-orange-400' : 'text-neutral-500'}`}
+          >
+            <Filter size={12} />
+          </button>
+        </div>
+        
+        {filtroAbierto === field && (
+          <div className="absolute top-full left-0 mt-1 bg-white dark:bg-neutral-800 border rounded-xl shadow-xl z-50 p-3 min-w-[200px]">
+            {type === 'select' && options ? (
+              <select
+                value={filters?.[field] || ''}
+                onChange={e => { onFilter(field, e.target.value); setFiltroAbierto(null); }}
+                className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+              >
+                <option value="">-- Todos --</option>
+                {options.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            ) : type === 'date' ? (
+              <div className="space-y-2">
+                <input
+                  type="date"
+                  placeholder="Desde"
+                  value={filters?.[`${field}_desde`] || ''}
+                  onChange={e => onFilter(`${field}_desde`, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+                />
+                <input
+                  type="date"
+                  placeholder="Hasta"
+                  value={filters?.[`${field}_hasta`] || ''}
+                  onChange={e => onFilter(`${field}_hasta`, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+                />
+                <button 
+                  onClick={() => { onFilter(`${field}_desde`, ''); onFilter(`${field}_hasta`, ''); setFiltroAbierto(null); }}
+                  className="w-full text-xs text-red-500 hover:text-red-600"
+                >
+                  Limpiar
+                </button>
+              </div>
+            ) : type === 'number' ? (
+              <div className="space-y-2">
+                <input
+                  type="number"
+                  placeholder="Mínimo"
+                  value={filters?.[`${field}_min`] || ''}
+                  onChange={e => onFilter(`${field}_min`, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+                />
+                <input
+                  type="number"
+                  placeholder="Máximo"
+                  value={filters?.[`${field}_max`] || ''}
+                  onChange={e => onFilter(`${field}_max`, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+                />
+                <button 
+                  onClick={() => { onFilter(`${field}_min`, ''); onFilter(`${field}_max`, ''); setFiltroAbierto(null); }}
+                  className="w-full text-xs text-red-500 hover:text-red-600"
+                >
+                  Limpiar
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  placeholder={`Filtrar ${label}...`}
+                  value={filters?.[field] || ''}
+                  onChange={e => onFilter(field, e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border text-sm dark:bg-neutral-700 dark:border-neutral-600 dark:text-white"
+                  autoFocus
+                />
+                {filters?.[field] && (
+                  <button 
+                    onClick={() => { onFilter(field, ''); setFiltroAbierto(null); }}
+                    className="w-full text-xs text-red-500 hover:text-red-600"
+                  >
+                    Limpiar
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </th>
+    );
+  };
+
+  // Función genérica para aplicar filtros a datos
+  const aplicarFiltros = (data, filters, fieldGetters = {}) => {
+    if (!filters || Object.keys(filters).length === 0) return data;
+    
+    return data.filter(item => {
+      return Object.entries(filters).every(([key, value]) => {
+        if (!value && value !== 0) return true;
+        
+        // Filtros de rango para fechas
+        if (key.endsWith('_desde')) {
+          const field = key.replace('_desde', '');
+          const getter = fieldGetters[field] || (i => i[field]);
+          const itemValue = getter(item);
+          if (!itemValue) return true;
+          return new Date(itemValue) >= new Date(value);
+        }
+        if (key.endsWith('_hasta')) {
+          const field = key.replace('_hasta', '');
+          const getter = fieldGetters[field] || (i => i[field]);
+          const itemValue = getter(item);
+          if (!itemValue) return true;
+          return new Date(itemValue) <= new Date(value);
+        }
+        
+        // Filtros de rango para números
+        if (key.endsWith('_min')) {
+          const field = key.replace('_min', '');
+          const getter = fieldGetters[field] || (i => i[field]);
+          const itemValue = getter(item);
+          return itemValue >= parseFloat(value);
+        }
+        if (key.endsWith('_max')) {
+          const field = key.replace('_max', '');
+          const getter = fieldGetters[field] || (i => i[field]);
+          const itemValue = getter(item);
+          return itemValue <= parseFloat(value);
+        }
+        
+        // Filtro de texto/selección normal
+        const getter = fieldGetters[key] || (i => i[key]);
+        const itemValue = getter(item);
+        
+        if (typeof itemValue === 'string') {
+          return itemValue.toLowerCase().includes(value.toString().toLowerCase());
+        }
+        return itemValue === value || itemValue?.toString() === value.toString();
+      });
+    });
+  };
+
+  // Estados de filtros por sección
+  const [filtrosClientes, setFiltrosClientes] = useState({});
+  const [filtrosProductos, setFiltrosProductos] = useState({});
+  const [filtrosPedidos, setFiltrosPedidos] = useState({});
+  const [filtrosGastos, setFiltrosGastos] = useState({});
+  const [filtrosFacturas, setFiltrosFacturas] = useState({});
+  const [filtrosLeads, setFiltrosLeads] = useState({});
+  const [filtrosProveedores, setFiltrosProveedores] = useState({});
+  const [filtrosTareas, setFiltrosTareas] = useState({});
+  const [filtrosLotes, setFiltrosLotes] = useState({});
+  const [filtrosAsientos, setFiltrosAsientos] = useState({});
+
+  // Función helper para actualizar filtros
+  const updateFilter = (setter) => (field, value) => {
+    setter(prev => ({ ...prev, [field]: value }));
+  };
+
+  // ==================== CONTABILIDAD PARTIDA DOBLE ====================
+  // Plan General Contable simplificado para PYME agrícola
+  const PLAN_CUENTAS = {
+    // Grupo 1 - Financiación básica
+    '100': { nombre: 'Capital social', tipo: 'P', grupo: '1' },
+    '129': { nombre: 'Resultado del ejercicio', tipo: 'P', grupo: '1' },
+    '170': { nombre: 'Deudas a L/P con entidades de crédito', tipo: 'P', grupo: '1' },
+    // Grupo 2 - Activo no corriente
+    '210': { nombre: 'Terrenos y bienes naturales', tipo: 'A', grupo: '2' },
+    '211': { nombre: 'Construcciones', tipo: 'A', grupo: '2' },
+    '213': { nombre: 'Maquinaria', tipo: 'A', grupo: '2' },
+    '216': { nombre: 'Mobiliario', tipo: 'A', grupo: '2' },
+    '217': { nombre: 'Equipos informáticos', tipo: 'A', grupo: '2' },
+    '218': { nombre: 'Elementos de transporte', tipo: 'A', grupo: '2' },
+    '281': { nombre: 'Amortización acum. inmovilizado material', tipo: 'A', grupo: '2' },
+    // Grupo 3 - Existencias
+    '300': { nombre: 'Mercaderías', tipo: 'A', grupo: '3' },
+    '310': { nombre: 'Materias primas', tipo: 'A', grupo: '3' },
+    '326': { nombre: 'Embalajes', tipo: 'A', grupo: '3' },
+    '350': { nombre: 'Productos terminados', tipo: 'A', grupo: '3' },
+    // Grupo 4 - Acreedores y deudores
+    '400': { nombre: 'Proveedores', tipo: 'P', grupo: '4' },
+    '410': { nombre: 'Acreedores por prestación de servicios', tipo: 'P', grupo: '4' },
+    '430': { nombre: 'Clientes', tipo: 'A', grupo: '4' },
+    '440': { nombre: 'Deudores varios', tipo: 'A', grupo: '4' },
+    '472': { nombre: 'HP IVA soportado', tipo: 'A', grupo: '4' },
+    '473': { nombre: 'HP retenciones y pagos a cuenta', tipo: 'A', grupo: '4' },
+    '475': { nombre: 'HP acreedora por IVA', tipo: 'P', grupo: '4' },
+    '476': { nombre: 'Organismos SS acreedores', tipo: 'P', grupo: '4' },
+    '477': { nombre: 'HP IVA repercutido', tipo: 'P', grupo: '4' },
+    // Grupo 5 - Cuentas financieras
+    '520': { nombre: 'Deudas a C/P con entidades de crédito', tipo: 'P', grupo: '5' },
+    '570': { nombre: 'Caja', tipo: 'A', grupo: '5' },
+    '572': { nombre: 'Bancos c/c', tipo: 'A', grupo: '5' },
+    // Grupo 6 - Compras y gastos
+    '600': { nombre: 'Compras de mercaderías', tipo: 'G', grupo: '6' },
+    '601': { nombre: 'Compras de materias primas', tipo: 'G', grupo: '6' },
+    '602': { nombre: 'Compras de otros aprovisionamientos', tipo: 'G', grupo: '6' },
+    '607': { nombre: 'Trabajos realizados por otras empresas', tipo: 'G', grupo: '6' },
+    '621': { nombre: 'Arrendamientos y cánones', tipo: 'G', grupo: '6' },
+    '622': { nombre: 'Reparaciones y conservación', tipo: 'G', grupo: '6' },
+    '623': { nombre: 'Servicios profesionales independientes', tipo: 'G', grupo: '6' },
+    '624': { nombre: 'Transportes', tipo: 'G', grupo: '6' },
+    '625': { nombre: 'Primas de seguros', tipo: 'G', grupo: '6' },
+    '626': { nombre: 'Servicios bancarios', tipo: 'G', grupo: '6' },
+    '627': { nombre: 'Publicidad y propaganda', tipo: 'G', grupo: '6' },
+    '628': { nombre: 'Suministros (agua, luz, gas)', tipo: 'G', grupo: '6' },
+    '629': { nombre: 'Otros servicios', tipo: 'G', grupo: '6' },
+    '640': { nombre: 'Sueldos y salarios', tipo: 'G', grupo: '6' },
+    '642': { nombre: 'Seguridad Social a cargo empresa', tipo: 'G', grupo: '6' },
+    '681': { nombre: 'Amortización inmovilizado material', tipo: 'G', grupo: '6' },
+    // Grupo 7 - Ventas e ingresos
+    '700': { nombre: 'Ventas de mercaderías', tipo: 'I', grupo: '7' },
+    '701': { nombre: 'Ventas de productos terminados', tipo: 'I', grupo: '7' },
+    '705': { nombre: 'Prestaciones de servicios', tipo: 'I', grupo: '7' },
+    '708': { nombre: 'Devoluciones de ventas', tipo: 'I', grupo: '7' },
+    '709': { nombre: 'Rappels sobre ventas', tipo: 'I', grupo: '7' },
+    '759': { nombre: 'Ingresos por servicios diversos', tipo: 'I', grupo: '7' },
+    '769': { nombre: 'Otros ingresos financieros', tipo: 'I', grupo: '7' },
+  };
+
+  // Estado para formulario de asientos
+  const [showAsientoForm, setShowAsientoForm] = useState(false);
+  const [editingAsiento, setEditingAsiento] = useState(null);
+  const [vistaContable, setVistaContable] = useState('diario'); // diario, mayor, balance
+
+  // Guardar asiento en Supabase
+  const guardarAsiento = async (asiento) => {
+    try {
+      if (editingAsiento) {
+        // Actualizar asiento existente
+        await supabase.from('asientos_contables').update({
+          fecha: asiento.fecha,
+          numero: asiento.numero,
+          concepto: asiento.concepto,
+          referencia: asiento.referencia,
+        }).eq('id', editingAsiento.id);
+        
+        // Eliminar líneas antiguas y crear nuevas
+        await supabase.from('asiento_lineas').delete().eq('asiento_id', editingAsiento.id);
+        
+        const lineasConId = asiento.lineas.map(l => ({
+          asiento_id: editingAsiento.id,
+          cuenta: l.cuenta,
+          concepto: l.concepto,
+          debe: l.debe || 0,
+          haber: l.haber || 0,
+        }));
+        await supabase.from('asiento_lineas').insert(lineasConId);
+      } else {
+        // Crear nuevo asiento
+        const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+          fecha: asiento.fecha,
+          numero: asiento.numero,
+          concepto: asiento.concepto,
+          referencia: asiento.referencia,
+        }).select().single();
+        
+        if (error) throw error;
+        
+        // Crear líneas del asiento
+        const lineasConId = asiento.lineas.map(l => ({
+          asiento_id: nuevoAsiento.id,
+          cuenta: l.cuenta,
+          concepto: l.concepto,
+          debe: l.debe || 0,
+          haber: l.haber || 0,
+        }));
+        await supabase.from('asiento_lineas').insert(lineasConId);
+      }
+      
+      refetchAsientos();
+      refetchAsientoLineas();
+      setShowAsientoForm(false);
+      setEditingAsiento(null);
+    } catch (error) {
+      console.error('Error guardando asiento:', error);
+      alert('Error al guardar el asiento');
+    }
+  };
+
+  const eliminarAsiento = async (id) => {
+    if (confirm('¿Eliminar este asiento?')) {
+      try {
+        // Las líneas se eliminan automáticamente por ON DELETE CASCADE
+        await supabase.from('asientos_contables').delete().eq('id', id);
+        refetchAsientos();
+        refetchAsientoLineas();
+      } catch (error) {
+        console.error('Error eliminando asiento:', error);
+      }
+    }
+  };
+
+  // Generar asientos automáticos desde facturas y gastos
+  const generarAsientosAutomaticos = async () => {
+    const nuevosAsientos = [];
+    const asientosExistentes = new Set(asientosContables.map(a => a.referencia));
+    
+    // Asientos de ventas (facturas emitidas)
+    facturas.forEach(f => {
+      const ref = `FAC-${f.id}`;
+      if (!asientosExistentes.has(ref)) {
+        const cliente = clientes.find(c => c.id === f.cliente_id);
+        nuevosAsientos.push({
+          fecha: f.fecha,
+          numero: `A${nuevosAsientos.length + asientosContables.length + 1}`,
+          concepto: `Factura ${f.id} - ${cliente?.nombre || 'Cliente'}`,
+          referencia: ref,
+          lineas: [
+            { cuenta: '430', concepto: 'Clientes', debe: f.total || 0, haber: 0 },
+            { cuenta: '700', concepto: 'Ventas', debe: 0, haber: f.subtotal || 0 },
+            { cuenta: '477', concepto: 'IVA Repercutido', debe: 0, haber: f.iva || 0 },
+          ]
+        });
+      }
+    });
+    
+    // Asientos de compras (gastos)
+    gastos.forEach(g => {
+      const ref = `GAS-${g.id}`;
+      if (!asientosExistentes.has(ref)) {
+        const proveedor = proveedores.find(p => p.id === g.proveedor_id);
+        const base = g.importe / 1.21;
+        const iva = g.importe - base;
+        const cuentaGasto = g.categoria === 'semillas' ? '601' : 
+                           g.categoria === 'suministros' ? '628' :
+                           g.categoria === 'transporte' ? '624' :
+                           g.categoria === 'servicios' ? '629' : '602';
+        nuevosAsientos.push({
+          fecha: g.fecha,
+          numero: `A${nuevosAsientos.length + asientosContables.length + 1}`,
+          concepto: `${g.concepto} - ${proveedor?.nombre || 'Proveedor'}`,
+          referencia: ref,
+          lineas: [
+            { cuenta: cuentaGasto, concepto: PLAN_CUENTAS[cuentaGasto]?.nombre || 'Gasto', debe: base, haber: 0 },
+            { cuenta: '472', concepto: 'IVA Soportado', debe: iva, haber: 0 },
+            { cuenta: '400', concepto: 'Proveedores', debe: 0, haber: g.importe },
+          ]
+        });
+      }
+    });
+    
+    if (nuevosAsientos.length > 0) {
+      try {
+        for (const asiento of nuevosAsientos) {
+          const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+            fecha: asiento.fecha,
+            numero: asiento.numero,
+            concepto: asiento.concepto,
+            referencia: asiento.referencia,
+          }).select().single();
+          
+          if (error) throw error;
+          
+          const lineasConId = asiento.lineas.map(l => ({
+            asiento_id: nuevoAsiento.id,
+            cuenta: l.cuenta,
+            concepto: l.concepto,
+            debe: l.debe || 0,
+            haber: l.haber || 0,
+          }));
+          await supabase.from('asiento_lineas').insert(lineasConId);
+        }
+        
+        refetchAsientos();
+        refetchAsientoLineas();
+        alert(`✅ Se han generado ${nuevosAsientos.length} asientos automáticos`);
+      } catch (error) {
+        console.error('Error generando asientos:', error);
+        alert('Error al generar asientos');
+      }
+    } else {
+      alert('No hay nuevos asientos para generar');
+    }
+  };
+
+  // Estado para exportación contable con selector de fechas
+  const [exportPeriodo, setExportPeriodo] = useState('mes_actual');
+  const [exportFechaInicio, setExportFechaInicio] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]);
+  const [exportFechaFin, setExportFechaFin] = useState(new Date().toISOString().split('T')[0]);
+
+  // Configuración de notificaciones por email (guardado en localStorage)
+  const [configNotificaciones, setConfigNotificaciones] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('configNotificaciones');
+      return saved ? JSON.parse(saved) : {
+        stock_bajo: true,
+        stock_agotado: true,
+        pedidos_atrasados: true,
+        pedidos_hoy: false,
+        facturas_vencidas: true,
+        facturas_por_vencer: false,
+        lotes_cosechar: true,
+        tareas_vencidas: true,
+        ambiente_alerta: true,
+        recordatorio_iva: true,
+        recordatorio_asesoria: true,
+      };
+    }
+    return {};
+  });
+
+  // Guardar config en localStorage cuando cambie
+  const updateConfigNotificaciones = (key, value) => {
+    const newConfig = { ...configNotificaciones, [key]: value };
+    setConfigNotificaciones(newConfig);
+    localStorage.setItem('configNotificaciones', JSON.stringify(newConfig));
+  };
+
   const { data: clientesData, loading: l1, refetch: refetchClientes } = useRealtime('clientes');
   const { data: leadsData, setData: setLeadsData, refetch: refetchLeads } = useRealtime('leads');
   const { data: productosData, loading: l2, refetch: refetchProductos } = useRealtime('productos');
@@ -752,6 +1197,8 @@ const MainApp = () => {
   const { data: pedidosRecurrentesItemsData, refetch: refetchPedidosRecurrentesItems } = useRealtime('pedidos_recurrentes_items');
   const { data: historicoPreciosData, refetch: refetchHistoricoPrecios } = useRealtime('historico_precios');
   const { data: condicionesData, refetch: refetchCondiciones } = useRealtime('condiciones_ambientales');
+  const { data: asientosData, refetch: refetchAsientos } = useRealtime('asientos_contables');
+  const { data: asientoLineasData, refetch: refetchAsientoLineas } = useRealtime('asiento_lineas');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -767,6 +1214,7 @@ const MainApp = () => {
     refetchTareas();
     refetchMermas();
     refetchPedidosRecurrentes();
+    refetchAsientos();
   };
 
   // Variables seguras (nunca undefined)
@@ -785,7 +1233,17 @@ const MainApp = () => {
   const pedidosRecurrentesItems = pedidosRecurrentesItemsData || [];
   const historicoPrecios = historicoPreciosData || [];
   const condiciones = condicionesData || [];
+  const asientosDB = asientosData || [];
+  const asientoLineasDB = asientoLineasData || [];
   const setLeads = setLeadsData;
+
+  // Combinar asientos con sus líneas
+  const asientosContables = useMemo(() => {
+    return asientosDB.map(a => ({
+      ...a,
+      lineas: asientoLineasDB.filter(l => l.asiento_id === a.id)
+    }));
+  }, [asientosDB, asientoLineasDB]);
 
   const loading = l1 || l2 || l3;
 
@@ -1042,6 +1500,41 @@ const MainApp = () => {
           accion: () => setActiveSection('ambiente')
         });
       }
+    }
+
+    // 7. Alertas de IVA trimestral y asesoría
+    const diaDelMes = hoy.getDate();
+    const mesActual = hoy.getMonth();
+    
+    // Recordatorio IVA trimestral (días 1-20 de Abril, Julio, Octubre, Enero)
+    const mesesIVA = [0, 3, 6, 9]; // Enero, Abril, Julio, Octubre
+    if (mesesIVA.includes(mesActual) && diaDelMes <= 20) {
+      const trimestre = mesActual === 0 ? 'T4' : `T${Math.floor((mesActual) / 3)}`;
+      alertasList.push({
+        id: 'iva-trimestral',
+        tipo: 'fiscal',
+        prioridad: diaDelMes >= 15 ? 'critica' : 'alta',
+        titulo: `Presentar IVA ${trimestre}`,
+        mensaje: `Modelo 303 - Fecha límite: día 20`,
+        icono: Euro,
+        color: diaDelMes >= 15 ? 'bg-red-500' : 'bg-amber-500',
+        accion: () => setActiveSection('contabilidad')
+      });
+    }
+    
+    // Recordatorio envío mensual a asesoría (primeros 5 días del mes)
+    if (diaDelMes <= 5) {
+      const mesAnterior = new Date(hoy.getFullYear(), mesActual - 1).toLocaleDateString('es-ES', { month: 'long' });
+      alertasList.push({
+        id: 'asesoria-mensual',
+        tipo: 'fiscal',
+        prioridad: diaDelMes >= 3 ? 'alta' : 'media',
+        titulo: `Enviar docs a asesoría`,
+        mensaje: `Documentación de ${mesAnterior}`,
+        icono: Mail,
+        color: diaDelMes >= 3 ? 'bg-amber-500' : 'bg-blue-500',
+        accion: () => setActiveSection('contabilidad')
+      });
     }
 
     // Ordenar por prioridad
@@ -1910,8 +2403,26 @@ const MainApp = () => {
   };
 
   const renderClientes = () => {
-    const filtered = clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase()));
+    // Aplicar filtros
+    const clientesFiltrados = aplicarFiltros(
+      clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase())),
+      filtrosClientes,
+      {
+        tipo: c => c.tipo,
+        zona: c => c.zona,
+        descuento: c => c.descuento,
+        codigo_postal: c => c.codigo_postal,
+      }
+    );
+    const filtered = clientesFiltrados;
     const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
+    
+    const tipoOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const zonaOptions = Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    
+    // Limpiar todos los filtros
+    const limpiarFiltrosClientes = () => setFiltrosClientes({});
+    const hayFiltrosActivos = Object.values(filtrosClientes).some(v => v && v !== '');
 
     // Vista Grid (tarjetas)
     const renderGridView = () => (
@@ -1975,18 +2486,24 @@ const MainApp = () => {
       </div>
     );
 
-    // Vista Tabla
+    // Vista Tabla con filtros
     const renderTableView = () => (
       <Card className="overflow-hidden">
+        {hayFiltrosActivos && (
+          <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+            <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+            <button onClick={limpiarFiltrosClientes} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+          </div>
+        )}
         <div className="overflow-x-auto">
         <table className="w-full min-w-[600px]">
           <thead className="bg-neutral-900 text-white">
             <tr>
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th>
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Tipo</th>
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Zona</th>
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Contacto</th>
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Dto</th>
+              <FilterableHeader label="Cliente" field="nombre" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
+              <FilterableHeader label="Tipo" field="tipo" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={tipoOptions} />
+              <FilterableHeader label="Zona" field="zona" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={zonaOptions} />
+              <FilterableHeader label="CP" field="codigo_postal" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
+              <FilterableHeader label="Dto" field="descuento" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="number" />
               <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acciones</th>
             </tr>
           </thead>
@@ -1997,14 +2514,11 @@ const MainApp = () => {
                 <tr key={cliente.id} className="border-b border-neutral-100 hover:bg-neutral-50">
                   <td className="px-3 md:px-5 py-3 md:py-4">
                     <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
-                    <p className="text-xs text-neutral-400">{cliente.cif || cliente.codigo_postal}</p>
+                    <p className="text-xs text-neutral-400">{cliente.cif || cliente.email}</p>
                   </td>
                   <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
                   <td className="px-5 py-4"><Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label || '-'}</Badge></td>
-                  <td className="px-5 py-4">
-                    <p className="text-sm">{cliente.email || '-'}</p>
-                    <p className="text-xs text-neutral-400">{cliente.telefono}</p>
-                  </td>
+                  <td className="px-5 py-4 text-sm">{cliente.codigo_postal || '-'}</td>
                   <td className="px-5 py-4 font-bold text-orange-600">{cliente.descuento}%</td>
                   <td className="px-5 py-4">
                     <div className="flex justify-end gap-1">
@@ -2056,8 +2570,30 @@ const MainApp = () => {
   };
 
   const renderLeads = () => {
-    const filtered = leads.filter(l => { const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; return matchesSearch && matchesFilter; });
+    // Aplicar filtros
+    let filtered = leads.filter(l => { 
+      const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); 
+      const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; 
+      return matchesSearch && matchesFilter; 
+    });
+    
+    // Aplicar filtros de columna
+    filtered = aplicarFiltros(filtered, filtrosLeads, {
+      nombre: l => l.nombre,
+      tipo: l => l.tipo,
+      estado: l => l.estado,
+      origen: l => l.origen,
+      codigo_postal: l => l.codigo_postal,
+      valor_estimado: l => l.valor_estimado,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosLeads).some(v => v && v !== '');
+    
     const exportColumns = [{ header: 'Nombre', accessor: l => l.nombre },{ header: 'Empresa', accessor: l => l.empresa },{ header: 'Tipo', accessor: l => tipoClienteConfig[l.tipo]?.label },{ header: 'CP', accessor: l => l.codigo_postal },{ header: 'Estado', accessor: l => estadoLeadConfig[l.estado]?.label },{ header: 'Origen', accessor: l => origenLeadConfig[l.origen]?.label },{ header: 'Valor', accessor: l => l.valor_estimado },{ header: 'Email', accessor: l => l.email },{ header: 'Teléfono', accessor: l => l.telefono }];
+
+    const estadoOptions = Object.entries(estadoLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const origenOptions = Object.entries(origenLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const tipoLeadOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
 
     const handleConvertToClient = async (lead) => {
       if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
@@ -2113,16 +2649,22 @@ const MainApp = () => {
         </Card>
 
         <Card className="overflow-hidden">
+          {hayFiltrosActivos && (
+            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+              <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+              <button onClick={() => setFiltrosLeads({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+            </div>
+          )}
           <table className="w-full">
             <thead className="bg-neutral-900 text-white">
               <tr>
-                <SortableHeader label="Lead" field="nombre" sortConfig={sortLeads} onSort={setSortLeads} />
-                <th className="text-left px-5 py-4 text-sm font-bold">Tipo</th>
-                <SortableHeader label="Contacto" field="email" sortConfig={sortLeads} onSort={setSortLeads} />
-                <SortableHeader label="CP" field="codigo_postal" sortConfig={sortLeads} onSort={setSortLeads} />
-                <SortableHeader label="Estado" field="estado" sortConfig={sortLeads} onSort={setSortLeads} />
-                <th className="text-left px-5 py-4 text-sm font-bold">Origen</th>
-                <SortableHeader label="Valor" field="valor_estimado" sortConfig={sortLeads} onSort={setSortLeads} />
+                <FilterableHeader label="Lead" field="nombre" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="Tipo" field="tipo" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={tipoLeadOptions} />
+                <FilterableHeader label="Contacto" field="email" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="CP" field="codigo_postal" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="Estado" field="estado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={estadoOptions} />
+                <FilterableHeader label="Origen" field="origen" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={origenOptions} />
+                <FilterableHeader label="Valor" field="valor_estimado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="number" />
                 <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
               </tr>
             </thead>
@@ -2163,7 +2705,25 @@ const MainApp = () => {
   const [pedidosTab, setPedidosTab] = useState('lista');
 
   const renderPedidos = () => {
-    const filtered = pedidos.filter(p => { const cliente = clientes.find(c => c.id === p.cliente_id); const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; return matchesSearch && matchesFilter; });
+    // Aplicar filtros
+    let filtered = pedidos.filter(p => { 
+      const cliente = clientes.find(c => c.id === p.cliente_id); 
+      const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); 
+      const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; 
+      return matchesSearch && matchesFilter; 
+    });
+    
+    // Aplicar filtros de columna
+    filtered = aplicarFiltros(filtered, filtrosPedidos, {
+      cliente_id: p => clientes.find(c => c.id === p.cliente_id)?.nombre?.toLowerCase(),
+      estado: p => p.estado,
+      total: p => p.total,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosPedidos).some(v => v && v !== '');
+    const estadoOptions = Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const clienteOptions = clientes.map(c => ({ value: c.nombre?.toLowerCase(), label: c.nombre }));
+    
     const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
     
     const frecuenciaConfig = {
@@ -2314,8 +2874,21 @@ const MainApp = () => {
             </Card>
             <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
               <div className="overflow-x-auto">
+              {hayFiltrosActivos && (
+                <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+                  <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+                  <button onClick={() => setFiltrosPedidos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+                </div>
+              )}
               <table className="w-full min-w-[600px]">
-                <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Cliente</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Entrega</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Total</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Estado</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
+                <thead className="bg-neutral-900 text-white"><tr>
+                  <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th>
+                  <FilterableHeader label="Cliente" field="cliente_id" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="text" />
+                  <FilterableHeader label="Entrega" field="fecha_entrega" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="date" />
+                  <FilterableHeader label="Total" field="total" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="number" />
+                  <FilterableHeader label="Estado" field="estado" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="select" options={estadoOptions} />
+                  <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
+                </tr></thead>
                 <tbody>
                   {filtered.map(pedido => {
                     const cliente = clientes.find(c => c.id === pedido.cliente_id);
@@ -2432,28 +3005,53 @@ const MainApp = () => {
   };
 
   const renderProductos = () => {
+    const categoriaOptions = [...new Set(productos.map(p => p.categoria).filter(Boolean))].map(c => ({ value: c, label: c }));
+    
+    const productosFiltrados = aplicarFiltros(productos, filtrosProductos, {
+      nombre: p => p.nombre,
+      categoria: p => p.categoria,
+      precio: p => p.precio,
+      stock: p => p.stock,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosProductos).some(v => v && v !== '');
+    const limpiarFiltros = () => setFiltrosProductos({});
+    
     const exportColumns = [{ header: 'Nombre', accessor: p => p.nombre },{ header: 'Categoría', accessor: p => p.categoria },{ header: 'Precio', accessor: p => p.precio },{ header: 'Coste', accessor: p => p.coste },{ header: 'Stock', accessor: p => p.stock },{ header: 'Stock Mínimo', accessor: p => p.stock_minimo }];
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div><h1 className="text-2xl md:text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium text-sm">{productos.length} registros</p></div>
+          <div><h1 className="text-2xl md:text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium text-sm">{productosFiltrados.length} de {productos.length} registros</p></div>
           <div className="flex items-center gap-2 md:gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productos, 'productos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productosFiltrados, 'productos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
             <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo</span></Button>
           </div>
         </div>
         <Card className="overflow-hidden">
+          {hayFiltrosActivos && (
+            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+              <span className="text-sm text-orange-700">🔍 Filtros activos - {productosFiltrados.length} resultados</span>
+              <button onClick={limpiarFiltros} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+            </div>
+          )}
           <div className="overflow-x-auto">
           <table className="w-full min-w-[500px]">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Producto</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden sm:table-cell">Categoría</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Precio</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Stock</th><th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Margen</th><th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th></tr></thead>
+            <thead className="bg-neutral-900 text-white"><tr>
+              <FilterableHeader label="Producto" field="nombre" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="text" />
+              <FilterableHeader label="Categoría" field="categoria" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="select" options={categoriaOptions} />
+              <FilterableHeader label="Precio" field="precio" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="number" />
+              <FilterableHeader label="Stock" field="stock" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="number" />
+              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Margen</th>
+              <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
+            </tr></thead>
             <tbody>
-              {productos.map(producto => {
+              {productosFiltrados.map(producto => {
                 const margen = producto.precio > 0 && producto.coste > 0 ? ((producto.precio - producto.coste) / producto.precio * 100).toFixed(0) : '-';
                 const stockBajoFlag = producto.stock < (producto.stock_minimo || 20);
                 return (
                   <tr key={producto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
                     <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2 md:gap-3"><div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={16} /></div><div><p className="font-semibold text-sm">{producto.nombre}</p><p className="text-xs text-neutral-400 hidden sm:block">{producto.unidad}</p></div></div></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4 hidden sm:table-cell"><Badge>{producto.categoria}</Badge></td>
+                    <td className="px-3 md:px-5 py-3 md:py-4"><Badge>{producto.categoria}</Badge></td>
                     <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-bold text-sm">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400 hidden md:block">Coste: {formatCurrency(producto.coste)}</p></td>
                     <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2"><div className={`w-2 h-2 md:w-2.5 md:h-2.5 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} /><span className={`text-sm ${stockBajoFlag ? 'text-red-600 font-bold' : 'font-medium'}`}>{producto.stock}</span></div></td>
                     <td className="px-3 md:px-5 py-3 md:py-4 hidden md:table-cell"><Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge></td>
@@ -2692,7 +3290,17 @@ const MainApp = () => {
 
   const renderFacturacion = () => {
     // Filtrar facturas por mes
-    const facturasFiltradas = filtrarPorPeriodo(facturas, 'fecha', filtroFacturasMes);
+    let facturasFiltradas = filtrarPorPeriodo(facturas, 'fecha', filtroFacturasMes);
+    
+    // Aplicar filtros de columna
+    facturasFiltradas = aplicarFiltros(facturasFiltradas, filtrosFacturas, {
+      cliente_id: f => clientes.find(c => c.id === f.cliente_id)?.nombre?.toLowerCase(),
+      estado: f => f.estado,
+      total: f => f.total,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosFacturas).some(v => v && v !== '');
+    const estadoFacturaOptions = Object.entries(estadoFacturaConfig).map(([k, v]) => ({ value: k, label: v.label }));
     
     // Exportar seleccionadas
     const exportColumns = [
@@ -2778,6 +3386,12 @@ const MainApp = () => {
         )}
 
         <Card className="overflow-hidden">
+          {hayFiltrosActivos && (
+            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+              <span className="text-sm text-orange-700">🔍 Filtros activos - {facturasFiltradas.length} resultados</span>
+              <button onClick={() => setFiltrosFacturas({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+            </div>
+          )}
           <table className="w-full">
             <thead className="bg-neutral-900 text-white">
               <tr>
@@ -2789,11 +3403,11 @@ const MainApp = () => {
                     className="w-4 h-4 rounded"
                   />
                 </th>
-                <SortableHeader label="Factura" field="id" sortConfig={sortFacturas} onSort={setSortFacturas} />
-                <SortableHeader label="Cliente" field="cliente_id" sortConfig={sortFacturas} onSort={setSortFacturas} />
-                <SortableHeader label="Fecha" field="fecha" sortConfig={sortFacturas} onSort={setSortFacturas} />
-                <SortableHeader label="Total" field="total" sortConfig={sortFacturas} onSort={setSortFacturas} />
-                <SortableHeader label="Estado" field="estado" sortConfig={sortFacturas} onSort={setSortFacturas} />
+                <FilterableHeader label="Factura" field="id" sortConfig={sortFacturas} onSort={setSortFacturas} filters={filtrosFacturas} onFilter={updateFilter(setFiltrosFacturas)} type="text" />
+                <FilterableHeader label="Cliente" field="cliente_id" sortConfig={sortFacturas} onSort={setSortFacturas} filters={filtrosFacturas} onFilter={updateFilter(setFiltrosFacturas)} type="text" />
+                <FilterableHeader label="Fecha" field="fecha" sortConfig={sortFacturas} onSort={setSortFacturas} filters={filtrosFacturas} onFilter={updateFilter(setFiltrosFacturas)} type="date" />
+                <FilterableHeader label="Total" field="total" sortConfig={sortFacturas} onSort={setSortFacturas} filters={filtrosFacturas} onFilter={updateFilter(setFiltrosFacturas)} type="number" />
+                <FilterableHeader label="Estado" field="estado" sortConfig={sortFacturas} onSort={setSortFacturas} filters={filtrosFacturas} onFilter={updateFilter(setFiltrosFacturas)} type="select" options={estadoFacturaOptions} />
                 <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
               </tr>
             </thead>
@@ -2846,8 +3460,17 @@ const MainApp = () => {
   };
 
   const renderGastos = () => {
-    // Filtrar gastos por mes
-    const gastosFiltradosPorMes = filtrarPorPeriodo(gastos, 'fecha', filtroGastosMes);
+    // Filtrar gastos por mes y luego por filtros de columna
+    let gastosFiltradosPorMes = filtrarPorPeriodo(gastos, 'fecha', filtroGastosMes);
+    
+    // Aplicar filtros de columna
+    gastosFiltradosPorMes = aplicarFiltros(gastosFiltradosPorMes, filtrosGastos, {
+      concepto: g => g.concepto,
+      categoria: g => g.categoria,
+      proveedor_id: g => g.proveedor_id,
+      importe: g => g.importe,
+      pagado: g => g.pagado?.toString(),
+    });
     
     const exportColumns = [
       { header: 'Fecha', accessor: g => formatDate(g.fecha) },
@@ -2929,6 +3552,12 @@ const MainApp = () => {
         )}
 
         <Card className="overflow-hidden">
+          {Object.values(filtrosGastos).some(v => v && v !== '') && (
+            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+              <span className="text-sm text-orange-700">🔍 Filtros activos</span>
+              <button onClick={() => setFiltrosGastos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+            </div>
+          )}
           <table className="w-full">
             <thead className="bg-neutral-900 text-white">
               <tr>
@@ -2940,13 +3569,13 @@ const MainApp = () => {
                     className="w-4 h-4 rounded"
                   />
                 </th>
-                <SortableHeader label="Fecha" field="fecha" sortConfig={sortGastos} onSort={setSortGastos} />
-                <SortableHeader label="Concepto" field="concepto" sortConfig={sortGastos} onSort={setSortGastos} />
-                <th className="text-left px-5 py-4 text-sm font-bold">Categoría</th>
-                <SortableHeader label="Proveedor" field="proveedor_id" sortConfig={sortGastos} onSort={setSortGastos} />
-                <SortableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} />
+                <FilterableHeader label="Fecha" field="fecha" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="date" />
+                <FilterableHeader label="Concepto" field="concepto" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="text" />
+                <FilterableHeader label="Categoría" field="categoria" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
+                <FilterableHeader label="Proveedor" field="proveedor_id" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} />
+                <FilterableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="number" />
                 <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
-                <SortableHeader label="Estado" field="pagado" sortConfig={sortGastos} onSort={setSortGastos} />
+                <FilterableHeader label="Estado" field="pagado" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={[{ value: 'true', label: 'Pagado' }, { value: 'false', label: 'Pendiente' }]} />
                 <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
               </tr>
             </thead>
@@ -3003,6 +3632,18 @@ const MainApp = () => {
   const [produccionTab, setProduccionTab] = useState('lotes');
 
   const renderProduccion = () => {
+    // Aplicar filtros de columna
+    const lotesFiltrados = aplicarFiltros(lotes, filtrosLotes, {
+      codigo: l => l.codigo || `L-${l.id}`,
+      producto_id: l => productos.find(p => p.id === l.producto_id)?.nombre?.toLowerCase(),
+      estado: l => l.estado,
+      bandejas: l => l.bandejas,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosLotes).some(v => v && v !== '');
+    const estadoLoteOptions = Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const productoOptions = productos.map(p => ({ value: p.nombre?.toLowerCase(), label: p.nombre }));
+    
     const exportColumns = [{ header: 'Lote', accessor: l => l.id },{ header: 'Producto', accessor: l => productos.find(p => p.id === l.producto_id)?.nombre },{ header: 'Siembra', accessor: l => formatDate(l.fecha_siembra) },{ header: 'Cosecha', accessor: l => formatDate(l.fecha_cosecha_prevista) },{ header: 'Bandejas', accessor: l => l.bandejas },{ header: 'Estado', accessor: l => estadoLoteConfig[l.estado]?.label }];
     
     // Función para imprimir etiquetas
@@ -3226,11 +3867,25 @@ const MainApp = () => {
               <StatCard icon={Layers} label="Bandejas Activas" value={lotes.filter(l => ['sembrado', 'creciendo'].includes(l.estado)).reduce((sum, l) => sum + l.bandejas, 0)} color="bg-orange-100 text-orange-600" />
             </div>
             <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              {hayFiltrosActivos && (
+                <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+                  <span className="text-sm text-orange-700">🔍 Filtros activos - {lotesFiltrados.length} resultados</span>
+                  <button onClick={() => setFiltrosLotes({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+                </div>
+              )}
               <div className="overflow-x-auto">
               <table className="w-full min-w-[700px]">
-                <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-4 py-3 text-sm font-bold">Lote</th><th className="text-left px-4 py-3 text-sm font-bold">Producto</th><th className="text-left px-4 py-3 text-sm font-bold">Siembra</th><th className="text-left px-4 py-3 text-sm font-bold">Cosecha</th><th className="text-left px-4 py-3 text-sm font-bold">Bandejas</th><th className="text-left px-4 py-3 text-sm font-bold">Estado</th><th className="text-right px-4 py-3 text-sm font-bold">Acciones</th></tr></thead>
+                <thead className="bg-neutral-900 text-white"><tr>
+                  <FilterableHeader label="Lote" field="codigo" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="text" />
+                  <FilterableHeader label="Producto" field="producto_id" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="text" />
+                  <FilterableHeader label="Siembra" field="fecha_siembra" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="date" />
+                  <FilterableHeader label="Cosecha" field="fecha_cosecha_prevista" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="date" />
+                  <FilterableHeader label="Bandejas" field="bandejas" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="number" />
+                  <FilterableHeader label="Estado" field="estado" filters={filtrosLotes} onFilter={updateFilter(setFiltrosLotes)} type="select" options={estadoLoteOptions} />
+                  <th className="text-right px-4 py-3 text-sm font-bold">Acciones</th>
+                </tr></thead>
                 <tbody>
-                  {lotes.map(lote => {
+                  {lotesFiltrados.map(lote => {
                     const producto = productos.find(p => p.id === lote.producto_id);
                     const config = estadoLoteConfig[lote.estado];
                     const Icon = config?.icon || Sprout;
@@ -3258,7 +3913,7 @@ const MainApp = () => {
                 </tbody>
               </table>
               </div>
-              {lotes.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
+              {lotesFiltrados.length === 0 && <EmptyState icon={Sprout} title="No hay lotes" description="Crea un lote" action={<Button onClick={() => setShowModal('lote')}><Plus size={16} />Nuevo</Button>} />}
             </Card>
           </>
         )}
@@ -3554,14 +4209,70 @@ const MainApp = () => {
     const fechaActual = fechaRuta || new Date().toISOString().split('T')[0];
     const pedidosDelDia = pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaActual && ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado));
     
+    // Ubicación del local (Las Rozas)
+    const LOCAL = { lat: 40.4932, lng: -3.8737, nombre: 'RootFlow - Las Rozas' };
+    
+    // Función para calcular distancia entre dos puntos (Haversine)
+    const calcularDistancia = (lat1, lon1, lat2, lon2) => {
+      const R = 6371; // Radio de la Tierra en km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    };
+    
+    // Optimizar ruta usando algoritmo del vecino más cercano
+    const optimizarRuta = (pedidosZona) => {
+      if (pedidosZona.length <= 1) return pedidosZona;
+      
+      const pedidosConCoords = pedidosZona.map(p => {
+        const cliente = clientes.find(c => c.id === p.cliente_id);
+        const coords = getCoordsByCP(cliente?.codigo_postal);
+        return { ...p, cliente, coords };
+      });
+      
+      const rutaOptimizada = [];
+      const pendientes = [...pedidosConCoords];
+      let puntoActual = LOCAL;
+      
+      while (pendientes.length > 0) {
+        // Encontrar el pedido más cercano al punto actual
+        let indiceMasCercano = 0;
+        let distanciaMinima = Infinity;
+        
+        pendientes.forEach((pedido, index) => {
+          const distancia = calcularDistancia(
+            puntoActual.lat, puntoActual.lng,
+            pedido.coords.lat, pedido.coords.lng
+          );
+          if (distancia < distanciaMinima) {
+            distanciaMinima = distancia;
+            indiceMasCercano = index;
+          }
+        });
+        
+        const pedidoMasCercano = pendientes.splice(indiceMasCercano, 1)[0];
+        pedidoMasCercano.distanciaDesdeAnterior = distanciaMinima;
+        rutaOptimizada.push(pedidoMasCercano);
+        puntoActual = pedidoMasCercano.coords;
+      }
+      
+      return rutaOptimizada;
+    };
+    
     // Agrupar por todas las zonas disponibles
     const zonasDisponibles = Object.keys(zonaConfig);
     const pedidosPorZona = {};
     zonasDisponibles.forEach(zona => {
-      pedidosPorZona[zona] = pedidosDelDia.filter(p => {
+      const pedidosZona = pedidosDelDia.filter(p => {
         const cliente = clientes.find(c => c.id === p.cliente_id);
         return cliente?.zona === zona;
       });
+      // Optimizar la ruta de cada zona
+      pedidosPorZona[zona] = optimizarRuta(pedidosZona);
     });
 
     const totalPedidos = pedidosDelDia.length;
@@ -3572,10 +4283,11 @@ const MainApp = () => {
       if (pedidosZona.length === 0) return;
       
       const contenido = pedidosZona.map((p, idx) => {
-        const cliente = clientes.find(c => c.id === p.cliente_id);
+        const cliente = p.cliente || clientes.find(c => c.id === p.cliente_id);
         const items = pedidoItems.filter(i => i.pedido_id === p.id);
+        const distancia = p.distanciaDesdeAnterior ? `(${p.distanciaDesdeAnterior.toFixed(1)} km)` : '';
         return `
-${idx + 1}. ${cliente?.nombre || 'Cliente'}
+${idx + 1}. ${cliente?.nombre || 'Cliente'} ${distancia}
    📍 ${cliente?.direccion || 'Sin dirección'}, ${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}
    📞 ${cliente?.telefono || 'Sin teléfono'}
    💰 Total: ${formatCurrency(p.total)}
@@ -3584,6 +4296,9 @@ ${items.map(i => `      - ${productos.find(pr => pr.id === i.producto_id)?.nombr
    📝 Notas: ${p.notas || 'Ninguna'}
 ─────────────────────────────────`;
       }).join('\n');
+      
+      // Calcular distancia total de la ruta
+      const distanciaTotal = pedidosZona.reduce((sum, p) => sum + (p.distanciaDesdeAnterior || 0), 0);
 
       const ventana = window.open('', '_blank');
       if (!ventana) {
@@ -3600,6 +4315,8 @@ ROOTFLOW HYDROPONICS SL
 HOJA DE RUTA - ${formatDate(fechaActual)}
 ZONA: ${(zonaConfig[zona]?.label || zona).toUpperCase()}
 Total entregas: ${pedidosZona.length}
+Distancia estimada: ${distanciaTotal.toFixed(1)} km
+🗺️ RUTA OPTIMIZADA POR CERCANÍA
 ═══════════════════════════════════
 
 ${contenido}
@@ -3610,6 +4327,26 @@ Firma repartidor: _________________
       `);
       ventana.document.close();
       ventana.print();
+    };
+    
+    // Abrir ruta en Google Maps
+    const abrirEnGoogleMaps = (zona) => {
+      const pedidosZona = pedidosPorZona[zona] || [];
+      if (pedidosZona.length === 0) return;
+      
+      // Construir URL de Google Maps con waypoints
+      const waypoints = pedidosZona.map(p => {
+        const cliente = p.cliente || clientes.find(c => c.id === p.cliente_id);
+        return encodeURIComponent(`${cliente?.direccion || ''}, ${cliente?.codigo_postal || ''} Madrid`);
+      });
+      
+      // Google Maps permite hasta 10 waypoints en la URL
+      const origin = encodeURIComponent('Calle Nueva 16, Las Rozas de Madrid');
+      const destination = waypoints[waypoints.length - 1];
+      const waypointsStr = waypoints.slice(0, -1).join('|');
+      
+      const url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&waypoints=${waypointsStr}&travelmode=driving`;
+      window.open(url, '_blank');
     };
 
     // Zonas con pedidos
@@ -3662,23 +4399,37 @@ Firma repartidor: _________________
                     <Badge className="bg-white/30 text-inherit">{pedidosZona.length}</Badge>
                   </div>
                   {pedidosZona.length > 0 && (
-                    <button onClick={() => imprimirHojaRuta(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Imprimir hoja de ruta">
-                      <Printer size={18} />
-                    </button>
+                    <div className="flex gap-1">
+                      <button onClick={() => abrirEnGoogleMaps(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Abrir en Google Maps">
+                        <Navigation size={18} />
+                      </button>
+                      <button onClick={() => imprimirHojaRuta(zona)} className="p-2 hover:bg-white/20 rounded-lg" title="Imprimir hoja de ruta">
+                        <Printer size={18} />
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="p-4 space-y-3 max-h-72 overflow-y-auto">
+                  {pedidosZona.length > 0 && (
+                    <div className="text-xs text-green-600 font-medium bg-green-50 p-2 rounded-lg flex items-center gap-2">
+                      <Navigation size={14} />
+                      Ruta optimizada por cercanía
+                    </div>
+                  )}
                   {pedidosZona.map((p, idx) => {
-                    const cliente = clientes.find(c => c.id === p.cliente_id);
+                    const cliente = p.cliente || clientes.find(c => c.id === p.cliente_id);
                     return (
-                      <div key={p.id} className="p-3 bg-neutral-50 rounded-xl border-l-4 border-neutral-300">
+                      <div key={p.id} className="p-3 bg-neutral-50 rounded-xl border-l-4 border-green-400">
                         <div className="flex items-start justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-full bg-neutral-200 flex items-center justify-center text-xs font-bold">{idx + 1}</span>
+                            <span className="w-6 h-6 rounded-full bg-green-500 text-white flex items-center justify-center text-xs font-bold">{idx + 1}</span>
                             <div>
                               <p className="font-semibold text-neutral-900">{cliente?.nombre || 'Cliente'}</p>
                               <p className="text-xs text-neutral-500">{cliente?.direccion || 'Sin dirección'}</p>
                               <p className="text-xs text-neutral-400">{cliente?.codigo_postal || ''} • {cliente?.telefono || ''}</p>
+                              {p.distanciaDesdeAnterior && (
+                                <p className="text-xs text-green-600 font-medium mt-1">📍 {p.distanciaDesdeAnterior.toFixed(1)} km desde anterior</p>
+                              )}
                             </div>
                           </div>
                           <p className="font-bold text-neutral-900">{formatCurrency(p.total)}</p>
@@ -4647,6 +5398,163 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== AJUSTES ====================
+  const renderAjustes = () => {
+    const notificacionesConfig = [
+      { key: 'stock_bajo', label: 'Stock bajo', descripcion: 'Cuando un producto tiene stock bajo' },
+      { key: 'stock_agotado', label: 'Stock agotado', descripcion: 'Cuando un producto se agota' },
+      { key: 'pedidos_atrasados', label: 'Pedidos atrasados', descripcion: 'Pedidos no entregados a tiempo' },
+      { key: 'pedidos_hoy', label: 'Pedidos del día', descripcion: 'Resumen de pedidos para hoy' },
+      { key: 'facturas_vencidas', label: 'Facturas vencidas', descripcion: 'Facturas pasadas de fecha' },
+      { key: 'facturas_por_vencer', label: 'Facturas por vencer', descripcion: 'Facturas próximas a vencer' },
+      { key: 'lotes_cosechar', label: 'Lotes para cosechar', descripcion: 'Lotes listos para cosecha' },
+      { key: 'tareas_vencidas', label: 'Tareas vencidas', descripcion: 'Tareas pasadas de fecha límite' },
+      { key: 'ambiente_alerta', label: 'Alertas ambientales', descripcion: 'Condiciones fuera de rango' },
+      { key: 'recordatorio_iva', label: 'Recordatorio IVA', descripcion: 'Aviso de presentación trimestral' },
+      { key: 'recordatorio_asesoria', label: 'Recordatorio asesoría', descripcion: 'Aviso de envío mensual' },
+    ];
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Ajustes</h1>
+            <p className="text-neutral-500 font-medium">Configuración del ERP</p>
+          </div>
+        </div>
+
+        {/* Configuración de Notificaciones por Email */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-orange-100 rounded-xl">
+              <Bell size={24} className="text-orange-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-neutral-900">Notificaciones por Email</h3>
+              <p className="text-sm text-neutral-500">Selecciona qué alertas quieres recibir en tu correo</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {notificacionesConfig.map(notif => (
+              <div 
+                key={notif.key}
+                className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                  configNotificaciones[notif.key] 
+                    ? 'border-orange-500 bg-orange-50' 
+                    : 'border-neutral-200 bg-white hover:border-neutral-300'
+                }`}
+                onClick={() => updateConfigNotificaciones(notif.key, !configNotificaciones[notif.key])}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded flex items-center justify-center ${
+                      configNotificaciones[notif.key] ? 'bg-orange-500' : 'border-2 border-neutral-300'
+                    }`}>
+                      {configNotificaciones[notif.key] && <Check size={14} className="text-white" />}
+                    </div>
+                    <div>
+                      <p className="font-semibold text-neutral-900">{notif.label}</p>
+                      <p className="text-xs text-neutral-500">{notif.descripcion}</p>
+                    </div>
+                  </div>
+                  <Mail size={18} className={configNotificaciones[notif.key] ? 'text-orange-500' : 'text-neutral-300'} />
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-200">
+            <p className="text-sm text-blue-700">
+              <strong>📧 Email configurado:</strong> {user?.email || 'No disponible'}
+            </p>
+            <p className="text-xs text-blue-600 mt-1">
+              Las notificaciones se enviarán a este correo cuando las alertas se activen.
+            </p>
+          </div>
+        </Card>
+
+        {/* Socios */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-green-100 rounded-xl">
+              <Users size={24} className="text-green-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-neutral-900">Equipo</h3>
+              <p className="text-sm text-neutral-500">Socios y empleados del sistema</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {SOCIOS.map(socio => (
+              <div key={socio.id} className="p-4 rounded-xl bg-neutral-50 border">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${socio.color}`}>
+                    <User size={20} />
+                  </div>
+                  <div>
+                    <p className="font-bold text-neutral-900">{socio.nombre}</p>
+                    <p className="text-xs text-neutral-500 capitalize">{socio.id}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-neutral-500 mt-3">
+            Para añadir más socios, edita la constante SOCIOS en el código fuente.
+          </p>
+        </Card>
+
+        {/* Empresa */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-purple-100 rounded-xl">
+              <Building2 size={24} className="text-purple-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-neutral-900">Datos de Empresa</h3>
+              <p className="text-sm text-neutral-500">Información que aparece en facturas y etiquetas</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div><span className="text-sm text-neutral-500">Nombre:</span><p className="font-semibold">{EMPRESA.nombre}</p></div>
+            <div><span className="text-sm text-neutral-500">CIF:</span><p className="font-semibold">{EMPRESA.cif}</p></div>
+            <div><span className="text-sm text-neutral-500">Dirección:</span><p className="font-semibold">{EMPRESA.direccion}</p></div>
+            <div><span className="text-sm text-neutral-500">Ciudad:</span><p className="font-semibold">{EMPRESA.cp} {EMPRESA.ciudad}</p></div>
+            <div><span className="text-sm text-neutral-500">Teléfono:</span><p className="font-semibold">{EMPRESA.telefono}</p></div>
+            <div><span className="text-sm text-neutral-500">Email:</span><p className="font-semibold">{EMPRESA.email}</p></div>
+          </div>
+        </Card>
+
+        {/* VeriFactu - Info */}
+        <Card className="p-5 bg-amber-50 border-amber-200">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-amber-100 rounded-xl">
+              <FileText size={24} className="text-amber-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-amber-900">VeriFactu</h3>
+              <p className="text-sm text-amber-700">Sistema de verificación de facturas del gobierno</p>
+            </div>
+          </div>
+          
+          <div className="space-y-2 text-sm text-amber-800">
+            <p>⚠️ <strong>Pendiente de implementación</strong></p>
+            <p>La integración con VeriFactu requiere:</p>
+            <ul className="list-disc ml-6 space-y-1">
+              <li>Certificado digital de la empresa</li>
+              <li>Alta en el sistema de la AEAT</li>
+              <li>API de terceros homologada</li>
+            </ul>
+            <p className="mt-3">Contacta con tu asesor para más información sobre los requisitos.</p>
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
   // ==================== CONTABILIDAD ====================
   const renderContabilidad = () => {
     const year = new Date().getFullYear();
@@ -4707,10 +5615,37 @@ Firma repartidor: _________________
       };
     });
 
+    // Filtrar datos por periodo seleccionado
+    const filtrarPorPeriodoExport = (data, campoFecha) => {
+      const hoy = new Date();
+      return data.filter(item => {
+        const fecha = new Date(item[campoFecha]);
+        if (exportPeriodo === 'mes_actual') {
+          return fecha.getMonth() === hoy.getMonth() && fecha.getFullYear() === hoy.getFullYear();
+        } else if (exportPeriodo === 'trimestre_actual') {
+          const trimestreActual = Math.floor(hoy.getMonth() / 3);
+          const trimestreFecha = Math.floor(fecha.getMonth() / 3);
+          return trimestreFecha === trimestreActual && fecha.getFullYear() === hoy.getFullYear();
+        } else if (exportPeriodo === 'año_actual') {
+          return fecha.getFullYear() === hoy.getFullYear();
+        } else if (exportPeriodo === 'personalizado') {
+          const inicio = new Date(exportFechaInicio);
+          const fin = new Date(exportFechaFin);
+          fin.setHours(23, 59, 59);
+          return fecha >= inicio && fecha <= fin;
+        }
+        return true;
+      });
+    };
+
     // Exportar para asesoría contable
     const exportarParaAsesoria = (tipo) => {
-      const facturasYear = facturas.filter(f => new Date(f.fecha).getFullYear() === year);
-      const gastosYear = gastos.filter(g => new Date(g.fecha).getFullYear() === year);
+      const facturasFiltradas = filtrarPorPeriodoExport(facturas, 'fecha');
+      const gastosFiltrados = filtrarPorPeriodoExport(gastos, 'fecha');
+      
+      const periodoLabel = exportPeriodo === 'personalizado' 
+        ? `${exportFechaInicio}_${exportFechaFin}`
+        : exportPeriodo;
       
       if (tipo === 'facturas_emitidas') {
         const columns = [
@@ -4724,7 +5659,7 @@ Firma repartidor: _________________
           { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label || f.estado },
           { header: 'Fecha Cobro', accessor: f => f.estado === 'pagada' ? formatDate(f.updated_at) : '' },
         ];
-        exportToExcel(facturasYear, `facturas_emitidas_${year}`, columns);
+        exportToExcel(facturasFiltradas, `facturas_emitidas_${periodoLabel}`, columns);
       } else if (tipo === 'facturas_recibidas') {
         const columns = [
           { header: 'Fecha', accessor: g => formatDate(g.fecha) },
@@ -4736,13 +5671,12 @@ Firma repartidor: _________________
           { header: 'IVA (21%)', accessor: g => (g.importe - (g.importe / 1.21)).toFixed(2) },
           { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
           { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
-          { header: 'Tiene Factura', accessor: g => g.factura_url ? 'Sí' : 'No' },
+          { header: 'URL Factura', accessor: g => g.factura_url || '' },
         ];
-        exportToExcel(gastosYear, `facturas_recibidas_${year}`, columns);
+        exportToExcel(gastosFiltrados, `facturas_recibidas_${periodoLabel}`, columns);
       } else if (tipo === 'registro_contable') {
-        // Combinar facturas y gastos en un solo registro
         const registros = [
-          ...facturasYear.map(f => ({
+          ...facturasFiltradas.map(f => ({
             fecha: f.fecha,
             tipo: 'INGRESO',
             documento: f.id,
@@ -4753,7 +5687,7 @@ Firma repartidor: _________________
             iva: f.iva || 0,
             total: f.total || 0,
           })),
-          ...gastosYear.map(g => ({
+          ...gastosFiltrados.map(g => ({
             fecha: g.fecha,
             tipo: 'GASTO',
             documento: g.id,
@@ -4777,9 +5711,57 @@ Firma repartidor: _________________
           { header: 'IVA', accessor: r => r.iva?.toFixed(2) },
           { header: 'Total', accessor: r => r.total?.toFixed(2) },
         ];
-        exportToExcel(registros, `registro_contable_${year}`, columns);
+        exportToExcel(registros, `registro_contable_${periodoLabel}`, columns);
+      } else if (tipo === 'paquete_completo') {
+        // Exportar todo: facturas emitidas, recibidas y registro
+        exportarParaAsesoria('facturas_emitidas');
+        setTimeout(() => exportarParaAsesoria('facturas_recibidas'), 500);
+        setTimeout(() => exportarParaAsesoria('registro_contable'), 1000);
+        
+        // Crear lista de URLs de facturas adjuntas para descargar manualmente
+        const facturasConArchivo = gastosFiltrados.filter(g => g.factura_url);
+        if (facturasConArchivo.length > 0) {
+          const listaUrls = facturasConArchivo.map(g => ({
+            fecha: formatDate(g.fecha),
+            concepto: g.concepto,
+            url: g.factura_url,
+          }));
+          const columns = [
+            { header: 'Fecha', accessor: r => r.fecha },
+            { header: 'Concepto', accessor: r => r.concepto },
+            { header: 'URL Archivo', accessor: r => r.url },
+          ];
+          setTimeout(() => exportToExcel(listaUrls, `archivos_facturas_${periodoLabel}`, columns), 1500);
+        }
       }
     };
+
+    // Alertas de asesoría contable
+    const alertasAsesoria = [];
+    const hoy = new Date();
+    const diaDelMes = hoy.getDate();
+    const mes = hoy.getMonth();
+    
+    // Recordatorio IVA trimestral (días 1-20 de Abril, Julio, Octubre, Enero)
+    const mesesIVA = [0, 3, 6, 9]; // Enero, Abril, Julio, Octubre
+    if (mesesIVA.includes(mes) && diaDelMes <= 20) {
+      const trimestre = mes === 0 ? 'T4' : `T${Math.floor((mes) / 3)}`;
+      alertasAsesoria.push({
+        tipo: 'iva',
+        mensaje: `📋 Presentar modelo 303 (IVA ${trimestre}) antes del día 20`,
+        urgente: diaDelMes >= 15,
+      });
+    }
+    
+    // Recordatorio envío mensual a asesoría (primeros 5 días del mes)
+    if (diaDelMes <= 5) {
+      const mesAnterior = new Date(year, mes - 1).toLocaleDateString('es-ES', { month: 'long' });
+      alertasAsesoria.push({
+        tipo: 'asesoria',
+        mensaje: `📧 Enviar documentación de ${mesAnterior} a la asesoría`,
+        urgente: diaDelMes >= 3,
+      });
+    }
 
     return (
       <div className="space-y-6">
@@ -4788,19 +5770,36 @@ Firma repartidor: _________________
             <h1 className="text-3xl font-black text-neutral-900">Contabilidad</h1>
             <p className="text-neutral-500 font-medium">Resumen fiscal y flujo de caja - Año {year}</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-neutral-500 font-medium">Exportar para asesoría:</span>
-            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_emitidas')}>
-              <Download size={14} /> Facturas Emitidas
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_recibidas')}>
-              <Download size={14} /> Facturas Recibidas
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('registro_contable')}>
-              <Download size={14} /> Registro Contable
-            </Button>
-          </div>
+          <Button variant="secondary" onClick={() => setActiveSection('ajustes')}>
+            <Settings size={16} /> Ajustes
+          </Button>
         </div>
+
+        {/* Alertas de asesoría */}
+        {alertasAsesoria.length > 0 && (
+          <div className="space-y-2">
+            {alertasAsesoria.map((alerta, idx) => (
+              <Card key={idx} className={`p-4 ${alerta.urgente ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${alerta.urgente ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
+                      {alerta.tipo === 'iva' ? <Euro size={20} /> : <Mail size={20} />}
+                    </div>
+                    <div>
+                      <p className={`font-semibold ${alerta.urgente ? 'text-red-700' : 'text-amber-700'}`}>{alerta.mensaje}</p>
+                      {alerta.urgente && <p className="text-xs text-red-600 font-medium">⚠️ Urgente - Fecha límite próxima</p>}
+                    </div>
+                  </div>
+                  {alerta.tipo === 'asesoria' && (
+                    <Button size="sm" onClick={() => exportarParaAsesoria('paquete_completo')}>
+                      <Download size={14} /> Preparar envío
+                    </Button>
+                  )}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard icon={Euro} label="Ingresos Año" value={formatCurrency(totalAnual.ingresos)} color="bg-green-100 text-green-600" />
@@ -4808,6 +5807,65 @@ Firma repartidor: _________________
           <StatCard icon={TrendingUp} label="IVA Repercutido" value={formatCurrency(totalAnual.ivaRepercutido)} color="bg-blue-100 text-blue-600" />
           <StatCard icon={TrendingDown} label="IVA Soportado" value={formatCurrency(totalAnual.ivaSoportado)} color="bg-amber-100 text-amber-600" />
         </div>
+
+        {/* Exportar para asesoría con selector de fechas */}
+        <Card className="p-5">
+          <h3 className="text-lg font-bold text-neutral-900 mb-4">📤 Exportar para Asesoría Contable</h3>
+          <div className="flex flex-wrap items-end gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Periodo</label>
+              <select 
+                value={exportPeriodo} 
+                onChange={e => setExportPeriodo(e.target.value)}
+                className="px-3 py-2 rounded-xl border font-medium text-sm min-w-[180px]"
+              >
+                <option value="mes_actual">Este mes</option>
+                <option value="trimestre_actual">Este trimestre</option>
+                <option value="año_actual">Este año</option>
+                <option value="personalizado">Personalizado</option>
+              </select>
+            </div>
+            {exportPeriodo === 'personalizado' && (
+              <>
+                <div>
+                  <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Desde</label>
+                  <input 
+                    type="date" 
+                    value={exportFechaInicio} 
+                    onChange={e => setExportFechaInicio(e.target.value)}
+                    className="px-3 py-2 rounded-xl border font-medium text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Hasta</label>
+                  <input 
+                    type="date" 
+                    value={exportFechaFin} 
+                    onChange={e => setExportFechaFin(e.target.value)}
+                    className="px-3 py-2 rounded-xl border font-medium text-sm"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_emitidas')}>
+              <Download size={14} /> Facturas Emitidas
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_recibidas')}>
+              <Download size={14} /> Facturas Recibidas (Gastos)
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('registro_contable')}>
+              <Download size={14} /> Registro Contable
+            </Button>
+            <Button onClick={() => exportarParaAsesoria('paquete_completo')}>
+              <Download size={16} /> 📦 Paquete Completo
+            </Button>
+          </div>
+          <p className="text-xs text-neutral-500 mt-3">
+            El paquete completo incluye: Facturas emitidas, Facturas recibidas, Registro contable y Lista de archivos adjuntos
+          </p>
+        </Card>
 
         <Card className="p-5">
           <h3 className="text-lg font-bold text-neutral-900 mb-4">📊 Resumen IVA Trimestral</h3>
@@ -4871,6 +5929,344 @@ Firma repartidor: _________________
             <strong>⚠️ Nota:</strong> El IVA soportado es una estimación al 21%. Para datos exactos, asegúrate de registrar el IVA real en cada gasto.
           </p>
         </Card>
+
+        {/* CONTABILIDAD PARTIDA DOBLE */}
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-purple-100 rounded-xl">
+                <FileText size={24} className="text-purple-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">📒 Contabilidad por Partida Doble</h3>
+                <p className="text-sm text-neutral-500">Libro Diario, Mayor y Plan de Cuentas (PGC)</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={generarAsientosAutomaticos}>
+                <Zap size={14} /> Generar desde Facturas/Gastos
+              </Button>
+              <Button onClick={() => { setEditingAsiento(null); setShowAsientoForm(true); }}>
+                <Plus size={16} /> Nuevo Asiento
+              </Button>
+            </div>
+          </div>
+
+          {/* Pestañas */}
+          <div className="flex gap-2 mb-4 border-b pb-3">
+            <button 
+              onClick={() => setVistaContable('diario')}
+              className={`px-4 py-2 rounded-lg font-medium text-sm ${vistaContable === 'diario' ? 'bg-purple-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}
+            >
+              📖 Libro Diario
+            </button>
+            <button 
+              onClick={() => setVistaContable('mayor')}
+              className={`px-4 py-2 rounded-lg font-medium text-sm ${vistaContable === 'mayor' ? 'bg-purple-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}
+            >
+              📚 Libro Mayor
+            </button>
+            <button 
+              onClick={() => setVistaContable('cuentas')}
+              className={`px-4 py-2 rounded-lg font-medium text-sm ${vistaContable === 'cuentas' ? 'bg-purple-600 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}
+            >
+              📋 Plan de Cuentas
+            </button>
+          </div>
+
+          {/* Libro Diario */}
+          {vistaContable === 'diario' && (
+            <div className="space-y-4">
+              {asientosContables.length === 0 ? (
+                <div className="text-center py-8 text-neutral-500">
+                  <FileText size={48} className="mx-auto mb-3 text-neutral-300" />
+                  <p>No hay asientos contables</p>
+                  <p className="text-sm">Pulsa "Generar desde Facturas/Gastos" o "Nuevo Asiento"</p>
+                </div>
+              ) : (
+                asientosContables.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(asiento => {
+                  const totalDebe = asiento.lineas?.reduce((sum, l) => sum + (l.debe || 0), 0) || 0;
+                  const totalHaber = asiento.lineas?.reduce((sum, l) => sum + (l.haber || 0), 0) || 0;
+                  const cuadrado = Math.abs(totalDebe - totalHaber) < 0.01;
+                  
+                  return (
+                    <div key={asiento.id} className="border rounded-xl overflow-hidden">
+                      <div className={`p-3 flex items-center justify-between ${cuadrado ? 'bg-green-50' : 'bg-red-50'}`}>
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-sm bg-white px-2 py-1 rounded">{asiento.numero}</span>
+                          <span className="text-sm text-neutral-600">{formatDate(asiento.fecha)}</span>
+                          <span className="font-medium">{asiento.concepto}</span>
+                          {!cuadrado && <Badge className="bg-red-500 text-white">⚠️ Descuadrado</Badge>}
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => { setEditingAsiento(asiento); setShowAsientoForm(true); }} className="p-2 hover:bg-white rounded"><Edit2 size={14} /></button>
+                          <button onClick={() => eliminarAsiento(asiento.id)} className="p-2 hover:bg-white rounded text-red-500"><Trash2 size={14} /></button>
+                        </div>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead className="bg-neutral-100">
+                          <tr>
+                            <th className="text-left px-3 py-2 w-20">Cuenta</th>
+                            <th className="text-left px-3 py-2">Concepto</th>
+                            <th className="text-right px-3 py-2 w-28">Debe</th>
+                            <th className="text-right px-3 py-2 w-28">Haber</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {asiento.lineas?.map((linea, idx) => (
+                            <tr key={idx} className="border-t">
+                              <td className="px-3 py-2 font-mono text-purple-600">{linea.cuenta}</td>
+                              <td className="px-3 py-2">{linea.concepto || PLAN_CUENTAS[linea.cuenta]?.nombre}</td>
+                              <td className="px-3 py-2 text-right font-medium">{linea.debe > 0 ? formatCurrency(linea.debe) : ''}</td>
+                              <td className="px-3 py-2 text-right font-medium">{linea.haber > 0 ? formatCurrency(linea.haber) : ''}</td>
+                            </tr>
+                          ))}
+                          <tr className="bg-neutral-50 font-bold">
+                            <td colSpan="2" className="px-3 py-2 text-right">TOTALES:</td>
+                            <td className="px-3 py-2 text-right text-green-600">{formatCurrency(totalDebe)}</td>
+                            <td className="px-3 py-2 text-right text-blue-600">{formatCurrency(totalHaber)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {/* Libro Mayor */}
+          {vistaContable === 'mayor' && (
+            <div className="space-y-4">
+              {Object.entries(PLAN_CUENTAS).map(([codigo, cuenta]) => {
+                // Calcular movimientos de esta cuenta
+                const movimientos = asientosContables.flatMap(a => 
+                  (a.lineas || []).filter(l => l.cuenta === codigo).map(l => ({ ...l, fecha: a.fecha, asiento: a.numero }))
+                );
+                if (movimientos.length === 0) return null;
+                
+                const totalDebe = movimientos.reduce((sum, m) => sum + (m.debe || 0), 0);
+                const totalHaber = movimientos.reduce((sum, m) => sum + (m.haber || 0), 0);
+                const saldo = cuenta.tipo === 'A' || cuenta.tipo === 'G' ? totalDebe - totalHaber : totalHaber - totalDebe;
+                
+                return (
+                  <div key={codigo} className="border rounded-xl overflow-hidden">
+                    <div className="p-3 bg-neutral-100 flex items-center justify-between">
+                      <div>
+                        <span className="font-mono text-purple-600 font-bold">{codigo}</span>
+                        <span className="ml-2 font-medium">{cuenta.nombre}</span>
+                        <Badge className="ml-2 text-xs">{cuenta.tipo === 'A' ? 'Activo' : cuenta.tipo === 'P' ? 'Pasivo' : cuenta.tipo === 'G' ? 'Gasto' : 'Ingreso'}</Badge>
+                      </div>
+                      <span className={`font-bold ${saldo >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        Saldo: {formatCurrency(Math.abs(saldo))} {saldo >= 0 ? 'D' : 'H'}
+                      </span>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead className="bg-neutral-50">
+                        <tr>
+                          <th className="text-left px-3 py-2">Fecha</th>
+                          <th className="text-left px-3 py-2">Asiento</th>
+                          <th className="text-right px-3 py-2">Debe</th>
+                          <th className="text-right px-3 py-2">Haber</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {movimientos.map((m, idx) => (
+                          <tr key={idx} className="border-t">
+                            <td className="px-3 py-2">{formatDate(m.fecha)}</td>
+                            <td className="px-3 py-2 font-mono">{m.asiento}</td>
+                            <td className="px-3 py-2 text-right">{m.debe > 0 ? formatCurrency(m.debe) : ''}</td>
+                            <td className="px-3 py-2 text-right">{m.haber > 0 ? formatCurrency(m.haber) : ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              }).filter(Boolean)}
+            </div>
+          )}
+
+          {/* Plan de Cuentas */}
+          {vistaContable === 'cuentas' && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-100">
+                  <tr>
+                    <th className="text-left px-3 py-2">Código</th>
+                    <th className="text-left px-3 py-2">Nombre</th>
+                    <th className="text-center px-3 py-2">Tipo</th>
+                    <th className="text-center px-3 py-2">Grupo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(PLAN_CUENTAS).map(([codigo, cuenta]) => (
+                    <tr key={codigo} className="border-t hover:bg-neutral-50">
+                      <td className="px-3 py-2 font-mono text-purple-600 font-bold">{codigo}</td>
+                      <td className="px-3 py-2">{cuenta.nombre}</td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge className={
+                          cuenta.tipo === 'A' ? 'bg-green-100 text-green-700' :
+                          cuenta.tipo === 'P' ? 'bg-blue-100 text-blue-700' :
+                          cuenta.tipo === 'G' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }>
+                          {cuenta.tipo === 'A' ? 'Activo' : cuenta.tipo === 'P' ? 'Pasivo' : cuenta.tipo === 'G' ? 'Gasto' : 'Ingreso'}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2 text-center font-mono">{cuenta.grupo}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        {/* Modal Formulario Asiento */}
+        {showAsientoForm && (
+          <Modal title={editingAsiento ? 'Editar Asiento' : 'Nuevo Asiento'} onClose={() => setShowAsientoForm(false)} size="max-w-3xl">
+            <AsientoForm 
+              asiento={editingAsiento} 
+              onSave={guardarAsiento} 
+              onCancel={() => setShowAsientoForm(false)} 
+              planCuentas={PLAN_CUENTAS}
+            />
+          </Modal>
+        )}
+      </div>
+    );
+  };
+
+  // Formulario de Asiento Contable
+  const AsientoForm = ({ asiento, onSave, onCancel, planCuentas }) => {
+    const [form, setForm] = useState({
+      fecha: asiento?.fecha || new Date().toISOString().split('T')[0],
+      numero: asiento?.numero || `A${asientosContables.length + 1}`,
+      concepto: asiento?.concepto || '',
+      referencia: asiento?.referencia || '',
+      lineas: asiento?.lineas || [
+        { cuenta: '', concepto: '', debe: 0, haber: 0 },
+        { cuenta: '', concepto: '', debe: 0, haber: 0 },
+      ]
+    });
+
+    const addLinea = () => setForm({ ...form, lineas: [...form.lineas, { cuenta: '', concepto: '', debe: 0, haber: 0 }] });
+    const removeLinea = (idx) => setForm({ ...form, lineas: form.lineas.filter((_, i) => i !== idx) });
+    const updateLinea = (idx, field, value) => {
+      const nuevasLineas = [...form.lineas];
+      nuevasLineas[idx] = { ...nuevasLineas[idx], [field]: value };
+      // Auto-rellenar concepto desde plan de cuentas
+      if (field === 'cuenta' && planCuentas[value]) {
+        nuevasLineas[idx].concepto = planCuentas[value].nombre;
+      }
+      setForm({ ...form, lineas: nuevasLineas });
+    };
+
+    const totalDebe = form.lineas.reduce((sum, l) => sum + (parseFloat(l.debe) || 0), 0);
+    const totalHaber = form.lineas.reduce((sum, l) => sum + (parseFloat(l.haber) || 0), 0);
+    const cuadrado = Math.abs(totalDebe - totalHaber) < 0.01;
+
+    const handleSubmit = () => {
+      if (!cuadrado) {
+        alert('El asiento no está cuadrado. Debe = Haber');
+        return;
+      }
+      if (!form.concepto || form.lineas.some(l => !l.cuenta)) {
+        alert('Completa todos los campos requeridos');
+        return;
+      }
+      onSave({
+        ...form,
+        lineas: form.lineas.map(l => ({ ...l, debe: parseFloat(l.debe) || 0, haber: parseFloat(l.haber) || 0 }))
+      });
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Fecha</label>
+            <input type="date" value={form.fecha} onChange={e => setForm({ ...form, fecha: e.target.value })} className="w-full px-3 py-2 rounded-xl border" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Nº Asiento</label>
+            <input type="text" value={form.numero} onChange={e => setForm({ ...form, numero: e.target.value })} className="w-full px-3 py-2 rounded-xl border font-mono" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Referencia</label>
+            <input type="text" value={form.referencia} onChange={e => setForm({ ...form, referencia: e.target.value })} placeholder="FAC-001, GAS-002..." className="w-full px-3 py-2 rounded-xl border" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Concepto *</label>
+          <input type="text" value={form.concepto} onChange={e => setForm({ ...form, concepto: e.target.value })} placeholder="Descripción del asiento" className="w-full px-3 py-2 rounded-xl border" />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-semibold text-neutral-700">Líneas del asiento</label>
+            <button type="button" onClick={addLinea} className="text-sm text-orange-600 hover:text-orange-700 font-medium">+ Añadir línea</button>
+          </div>
+          <div className="space-y-2">
+            {form.lineas.map((linea, idx) => (
+              <div key={idx} className="flex gap-2 items-center">
+                <select 
+                  value={linea.cuenta} 
+                  onChange={e => updateLinea(idx, 'cuenta', e.target.value)}
+                  className="w-32 px-2 py-2 rounded-lg border text-sm font-mono"
+                >
+                  <option value="">Cuenta</option>
+                  {Object.entries(planCuentas).map(([cod, cta]) => (
+                    <option key={cod} value={cod}>{cod} - {cta.nombre.substring(0, 20)}</option>
+                  ))}
+                </select>
+                <input 
+                  type="text" 
+                  value={linea.concepto} 
+                  onChange={e => updateLinea(idx, 'concepto', e.target.value)}
+                  placeholder="Concepto"
+                  className="flex-1 px-2 py-2 rounded-lg border text-sm"
+                />
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={linea.debe || ''} 
+                  onChange={e => updateLinea(idx, 'debe', e.target.value)}
+                  placeholder="Debe"
+                  className="w-24 px-2 py-2 rounded-lg border text-sm text-right"
+                />
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={linea.haber || ''} 
+                  onChange={e => updateLinea(idx, 'haber', e.target.value)}
+                  placeholder="Haber"
+                  className="w-24 px-2 py-2 rounded-lg border text-sm text-right"
+                />
+                {form.lineas.length > 2 && (
+                  <button type="button" onClick={() => removeLinea(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded"><X size={16} /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={`p-3 rounded-xl flex items-center justify-between ${cuadrado ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+          <div className="flex gap-6">
+            <span>Total Debe: <strong className="text-green-600">{formatCurrency(totalDebe)}</strong></span>
+            <span>Total Haber: <strong className="text-blue-600">{formatCurrency(totalHaber)}</strong></span>
+          </div>
+          <Badge className={cuadrado ? 'bg-green-500 text-white' : 'bg-red-500 text-white'}>
+            {cuadrado ? '✓ Cuadrado' : '✗ Descuadrado'}
+          </Badge>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={handleSubmit} disabled={!cuadrado}>
+            <Check size={16} /> Guardar Asiento
+          </Button>
+        </div>
       </div>
     );
   };
@@ -5048,6 +6444,7 @@ Firma repartidor: _________________
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
+          {activeSection === 'ajustes' && renderAjustes()}
         </div>
       </main>
 
