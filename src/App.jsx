@@ -28,7 +28,7 @@ const EMPRESA = {
   telefono: '+34 638 161 990',
   email: 'info@rootflow.es',
   web: 'www.rootflow.es',
-  cif: 'B27535137'
+  cif: 'B12345678'
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
@@ -216,6 +216,13 @@ const exportToExcel = (data, filename, columns) => {
   ws['!cols'] = columns.map(col => ({ wch: Math.max(col.header.length, 15) }));
   XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
 };
+
+// ==================== SOCIOS/EMPLEADOS ====================
+const SOCIOS = [
+  { id: 'nico', nombre: 'Nico', color: 'bg-blue-100 text-blue-700' },
+  { id: 'peri', nombre: 'Peri', color: 'bg-green-100 text-green-700' },
+  { id: 'guzman', nombre: 'Guzmán', color: 'bg-purple-100 text-purple-700' },
+];
 
 // ==================== CONFIGS ====================
 const estadoConfig = {
@@ -671,6 +678,64 @@ const MainApp = () => {
   const [viewFacturas, setViewFacturas] = useState('table');
   const [viewGastos, setViewGastos] = useState('table');
   const [viewLotes, setViewLotes] = useState('table');
+
+  // Estados de ordenación para tablas
+  const [sortGastos, setSortGastos] = useState({ field: 'fecha', direction: 'desc' });
+  const [sortFacturas, setSortFacturas] = useState({ field: 'fecha', direction: 'desc' });
+  const [sortLeads, setSortLeads] = useState({ field: 'created_at', direction: 'desc' });
+
+  // Función genérica de ordenación
+  const sortData = (data, sortConfig) => {
+    if (!sortConfig.field) return data;
+    return [...data].sort((a, b) => {
+      let aVal = a[sortConfig.field];
+      let bVal = b[sortConfig.field];
+      
+      // Manejar valores nulos
+      if (aVal === null || aVal === undefined) aVal = '';
+      if (bVal === null || bVal === undefined) bVal = '';
+      
+      // Detectar tipo y comparar
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+      
+      // Fechas (string ISO)
+      if (sortConfig.field.includes('fecha') || sortConfig.field.includes('created') || sortConfig.field.includes('vencimiento')) {
+        const dateA = new Date(aVal);
+        const dateB = new Date(bVal);
+        return sortConfig.direction === 'asc' ? dateA - dateB : dateB - dateA;
+      }
+      
+      // Strings
+      const strA = String(aVal).toLowerCase();
+      const strB = String(bVal).toLowerCase();
+      if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
+  // Componente cabecera ordenable
+  const SortableHeader = ({ label, field, sortConfig, onSort }) => {
+    const isActive = sortConfig.field === field;
+    return (
+      <th 
+        className="text-left px-5 py-4 text-sm font-bold cursor-pointer hover:bg-neutral-800 select-none"
+        onClick={() => onSort({ 
+          field, 
+          direction: isActive && sortConfig.direction === 'asc' ? 'desc' : 'asc' 
+        })}
+      >
+        <div className="flex items-center gap-1">
+          {label}
+          <span className="text-neutral-400">
+            {isActive ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+          </span>
+        </div>
+      </th>
+    );
+  };
 
   const { data: clientesData, loading: l1, refetch: refetchClientes } = useRealtime('clientes');
   const { data: leadsData, setData: setLeadsData, refetch: refetchLeads } = useRealtime('leads');
@@ -1348,7 +1413,7 @@ const MainApp = () => {
               return (
                 <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
                   <select value={item.producto_id} onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} className="flex-1 px-3 py-2 rounded-lg border text-sm">
-                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} - {formatCurrency(p.precio)}</option>)}
+                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'}) - {formatCurrency(p.precio)}</option>)}
                   </select>
                   <input type="number" value={item.cantidad} onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} className="w-20 px-3 py-2 rounded-lg border text-sm text-center" min="1" />
                   <span className="text-sm font-semibold w-24 text-right">{formatCurrency((prod?.precio || 0) * item.cantidad)}</span>
@@ -1547,6 +1612,7 @@ const MainApp = () => {
       prioridad: 'media', 
       fecha_limite: '', 
       cliente_id: null,
+      asignado_a: null,
       completada: false 
     });
     return (
@@ -1556,7 +1622,8 @@ const MainApp = () => {
           <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriaTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Select label="Prioridad" value={form.prioridad} onChange={e => setForm({...form, prioridad: e.target.value})} options={Object.entries(prioridadTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Fecha límite" type="date" value={form.fecha_limite} onChange={e => setForm({...form, fecha_limite: e.target.value})} />
-          <Select label="Cliente (opcional)" value={form.cliente_id || ''} onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})} options={[{ value: '', label: 'Sin cliente' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]} />
+          <Select label="Asignar a" value={form.asignado_a || ''} onChange={e => setForm({...form, asignado_a: e.target.value || null})} options={[{ value: '', label: 'Sin asignar' }, ...SOCIOS.map(s => ({ value: s.id, label: s.nombre }))]} />
+          <Select label="Cliente (opcional)" className="col-span-2" value={form.cliente_id || ''} onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})} options={[{ value: '', label: 'Sin cliente' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]} />
           <div className="col-span-2">
             <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Descripción</label>
             <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} />
@@ -2047,9 +2114,20 @@ const MainApp = () => {
 
         <Card className="overflow-hidden">
           <table className="w-full">
-            <thead className="bg-neutral-900 text-white"><tr><th className="text-left px-5 py-4 text-sm font-bold">Lead</th><th className="text-left px-5 py-4 text-sm font-bold">Tipo</th><th className="text-left px-5 py-4 text-sm font-bold">Contacto</th><th className="text-left px-5 py-4 text-sm font-bold">CP</th><th className="text-left px-5 py-4 text-sm font-bold">Estado</th><th className="text-left px-5 py-4 text-sm font-bold">Origen</th><th className="text-left px-5 py-4 text-sm font-bold">Valor</th><th className="text-right px-5 py-4 text-sm font-bold">Acciones</th></tr></thead>
+            <thead className="bg-neutral-900 text-white">
+              <tr>
+                <SortableHeader label="Lead" field="nombre" sortConfig={sortLeads} onSort={setSortLeads} />
+                <th className="text-left px-5 py-4 text-sm font-bold">Tipo</th>
+                <SortableHeader label="Contacto" field="email" sortConfig={sortLeads} onSort={setSortLeads} />
+                <SortableHeader label="CP" field="codigo_postal" sortConfig={sortLeads} onSort={setSortLeads} />
+                <SortableHeader label="Estado" field="estado" sortConfig={sortLeads} onSort={setSortLeads} />
+                <th className="text-left px-5 py-4 text-sm font-bold">Origen</th>
+                <SortableHeader label="Valor" field="valor_estimado" sortConfig={sortLeads} onSort={setSortLeads} />
+                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
-              {filtered.map(lead => {
+              {sortData(filtered, sortLeads).map(lead => {
                 const tipoConfig = tipoClienteConfig[lead.tipo] || tipoClienteConfig.otro;
                 const estadoConf = estadoLeadConfig[lead.estado];
                 const origenConf = origenLeadConfig[lead.origen] || origenLeadConfig.otro;
@@ -2711,16 +2789,16 @@ const MainApp = () => {
                     className="w-4 h-4 rounded"
                   />
                 </th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Cliente</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Fecha</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Total</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Estado</th>
+                <SortableHeader label="Factura" field="id" sortConfig={sortFacturas} onSort={setSortFacturas} />
+                <SortableHeader label="Cliente" field="cliente_id" sortConfig={sortFacturas} onSort={setSortFacturas} />
+                <SortableHeader label="Fecha" field="fecha" sortConfig={sortFacturas} onSort={setSortFacturas} />
+                <SortableHeader label="Total" field="total" sortConfig={sortFacturas} onSort={setSortFacturas} />
+                <SortableHeader label="Estado" field="estado" sortConfig={sortFacturas} onSort={setSortFacturas} />
                 <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {facturasFiltradas.map(factura => {
+              {sortData(facturasFiltradas, sortFacturas).map(factura => {
                 const cliente = clientes.find(c => c.id === factura.cliente_id);
                 const config = estadoFacturaConfig[factura.estado];
                 const isSelected = selectedFacturas.includes(factura.id);
@@ -2862,18 +2940,18 @@ const MainApp = () => {
                     className="w-4 h-4 rounded"
                   />
                 </th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Fecha</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Concepto</th>
+                <SortableHeader label="Fecha" field="fecha" sortConfig={sortGastos} onSort={setSortGastos} />
+                <SortableHeader label="Concepto" field="concepto" sortConfig={sortGastos} onSort={setSortGastos} />
                 <th className="text-left px-5 py-4 text-sm font-bold">Categoría</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Proveedor</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Importe</th>
+                <SortableHeader label="Proveedor" field="proveedor_id" sortConfig={sortGastos} onSort={setSortGastos} />
+                <SortableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} />
                 <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
-                <th className="text-left px-5 py-4 text-sm font-bold">Estado</th>
+                <SortableHeader label="Estado" field="pagado" sortConfig={sortGastos} onSort={setSortGastos} />
                 <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {gastosFiltradosPorMes.map(gasto => {
+              {sortData(gastosFiltradosPorMes, sortGastos).map(gasto => {
                 const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
                 const Icon = catConfig.icon;
                 const isSelected = selectedGastos.includes(gasto.id);
@@ -2890,7 +2968,7 @@ const MainApp = () => {
                     <td className="px-5 py-4 text-sm">{formatDate(gasto.fecha)}</td>
                     <td className="px-5 py-4 font-semibold">{gasto.concepto}</td>
                     <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
-                    <td className="px-5 py-4 text-sm">{gasto.proveedor || '-'}</td>
+                    <td className="px-5 py-4 text-sm font-medium">{gasto.proveedor_id ? proveedores.find(p => p.id === gasto.proveedor_id)?.nombre || '-' : '-'}</td>
                     <td className="px-5 py-4 font-bold">{formatCurrency(gasto.importe)}</td>
                     <td className="px-5 py-4">
                       {gasto.factura_url ? (
@@ -2979,7 +3057,7 @@ const MainApp = () => {
               <div class="productor">
                 <strong>Productor:</strong> ROOTFLOW HYDROPONICS SL<br>
                 C. Nueva, 16 • 28231 Las Rozas de Madrid<br>
-                CIF: B27535137
+                CIF: B12345678
               </div>
             </div>
           </div>
@@ -3894,6 +3972,10 @@ Firma repartidor: _________________
                         <div className="flex items-center gap-4 text-xs text-neutral-400">
                           {tarea.fecha_limite && <span className={vencida ? 'text-red-600 font-bold' : ''}>{vencida ? '⚠️ Vencida: ' : '📅 '}{formatDate(tarea.fecha_limite)}</span>}
                           {cliente && <span>👤 {cliente.nombre}</span>}
+                          {tarea.asignado_a && (() => {
+                            const socio = SOCIOS.find(s => s.id === tarea.asignado_a);
+                            return socio ? <Badge className={socio.color}>{socio.nombre}</Badge> : null;
+                          })()}
                         </div>
                       </div>
                       <div className="flex gap-1">
@@ -4625,11 +4707,99 @@ Firma repartidor: _________________
       };
     });
 
+    // Exportar para asesoría contable
+    const exportarParaAsesoria = (tipo) => {
+      const facturasYear = facturas.filter(f => new Date(f.fecha).getFullYear() === year);
+      const gastosYear = gastos.filter(g => new Date(g.fecha).getFullYear() === year);
+      
+      if (tipo === 'facturas_emitidas') {
+        const columns = [
+          { header: 'Nº Factura', accessor: f => f.id },
+          { header: 'Fecha', accessor: f => formatDate(f.fecha) },
+          { header: 'Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.nombre || '' },
+          { header: 'CIF Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.cif || '' },
+          { header: 'Base Imponible', accessor: f => f.subtotal?.toFixed(2) || '0.00' },
+          { header: 'IVA (21%)', accessor: f => f.iva?.toFixed(2) || '0.00' },
+          { header: 'Total', accessor: f => f.total?.toFixed(2) || '0.00' },
+          { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label || f.estado },
+          { header: 'Fecha Cobro', accessor: f => f.estado === 'pagada' ? formatDate(f.updated_at) : '' },
+        ];
+        exportToExcel(facturasYear, `facturas_emitidas_${year}`, columns);
+      } else if (tipo === 'facturas_recibidas') {
+        const columns = [
+          { header: 'Fecha', accessor: g => formatDate(g.fecha) },
+          { header: 'Proveedor', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.nombre || '' },
+          { header: 'CIF Proveedor', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.cif || '' },
+          { header: 'Concepto', accessor: g => g.concepto },
+          { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
+          { header: 'Base Imponible', accessor: g => (g.importe / 1.21).toFixed(2) },
+          { header: 'IVA (21%)', accessor: g => (g.importe - (g.importe / 1.21)).toFixed(2) },
+          { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
+          { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
+          { header: 'Tiene Factura', accessor: g => g.factura_url ? 'Sí' : 'No' },
+        ];
+        exportToExcel(gastosYear, `facturas_recibidas_${year}`, columns);
+      } else if (tipo === 'registro_contable') {
+        // Combinar facturas y gastos en un solo registro
+        const registros = [
+          ...facturasYear.map(f => ({
+            fecha: f.fecha,
+            tipo: 'INGRESO',
+            documento: f.id,
+            tercero: clientes.find(c => c.id === f.cliente_id)?.nombre || '',
+            cif: clientes.find(c => c.id === f.cliente_id)?.cif || '',
+            concepto: `Factura ${f.id}`,
+            base: f.subtotal || 0,
+            iva: f.iva || 0,
+            total: f.total || 0,
+          })),
+          ...gastosYear.map(g => ({
+            fecha: g.fecha,
+            tipo: 'GASTO',
+            documento: g.id,
+            tercero: proveedores.find(p => p.id === g.proveedor_id)?.nombre || '',
+            cif: proveedores.find(p => p.id === g.proveedor_id)?.cif || '',
+            concepto: g.concepto,
+            base: g.importe / 1.21,
+            iva: g.importe - (g.importe / 1.21),
+            total: g.importe || 0,
+          })),
+        ].sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+        
+        const columns = [
+          { header: 'Fecha', accessor: r => formatDate(r.fecha) },
+          { header: 'Tipo', accessor: r => r.tipo },
+          { header: 'Nº Doc', accessor: r => r.documento },
+          { header: 'Tercero', accessor: r => r.tercero },
+          { header: 'CIF/NIF', accessor: r => r.cif },
+          { header: 'Concepto', accessor: r => r.concepto },
+          { header: 'Base Imponible', accessor: r => r.base?.toFixed(2) },
+          { header: 'IVA', accessor: r => r.iva?.toFixed(2) },
+          { header: 'Total', accessor: r => r.total?.toFixed(2) },
+        ];
+        exportToExcel(registros, `registro_contable_${year}`, columns);
+      }
+    };
+
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-3xl font-black text-neutral-900">Contabilidad</h1>
-          <p className="text-neutral-500 font-medium">Resumen fiscal y flujo de caja - Año {year}</p>
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">Contabilidad</h1>
+            <p className="text-neutral-500 font-medium">Resumen fiscal y flujo de caja - Año {year}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-neutral-500 font-medium">Exportar para asesoría:</span>
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_emitidas')}>
+              <Download size={14} /> Facturas Emitidas
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('facturas_recibidas')}>
+              <Download size={14} /> Facturas Recibidas
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => exportarParaAsesoria('registro_contable')}>
+              <Download size={14} /> Registro Contable
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
