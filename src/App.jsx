@@ -1343,6 +1343,8 @@ const MainApp = () => {
   const { data: condicionesData, refetch: refetchCondiciones } = useRealtime('condiciones_ambientales');
   const { data: asientosData, refetch: refetchAsientos } = useRealtime('asientos_contables');
   const { data: asientoLineasData, refetch: refetchAsientoLineas } = useRealtime('asiento_lineas');
+  const { data: auditLogData, refetch: refetchAuditLog } = useRealtime('audit_log');
+  const { data: userProfilesData, refetch: refetchUserProfiles } = useRealtime('user_profiles');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1378,6 +1380,8 @@ const MainApp = () => {
   const historicoPrecios = historicoPreciosData || [];
   const condiciones = condicionesData || [];
   const asientosDB = asientosData || [];
+  const auditLog = auditLogData || [];
+  const userProfiles = userProfilesData || [];
   const asientoLineasDB = asientoLineasData || [];
   const setLeads = setLeadsData;
 
@@ -1802,139 +1806,120 @@ const MainApp = () => {
 
   // Exportar Cuenta de Pérdidas y Ganancias (PyG)
   const exportarPyG = () => {
-    const saldos = calcularSaldosCuentas();
-    const data = [];
-    
-    data.push(['CUENTA DE PÉRDIDAS Y GANANCIAS - ' + EMPRESA.nombre]);
-    data.push(['CIF: ' + EMPRESA.cif]);
-    data.push(['Ejercicio: ' + new Date().getFullYear()]);
-    data.push([]);
-    
-    // 1. RESULTADO DE EXPLOTACIÓN
-    data.push(['A) RESULTADO DE EXPLOTACIÓN', '', '']);
-    data.push(['']);
-    
-    // Ingresos de explotación
-    data.push(['1. Importe neto de la cifra de negocios', '', '']);
-    let totalVentas = 0;
-    Object.entries(saldos).filter(([c]) => ['700', '701', '705'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
-      totalVentas += s.saldo;
-    });
-    // Devoluciones y rappels (restan)
-    Object.entries(saldos).filter(([c]) => ['708', '709'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
-      totalVentas -= s.saldo;
-    });
-    data.push(['  TOTAL VENTAS', '', totalVentas]);
-    data.push(['']);
-    
-    // Variación de existencias
-    data.push(['2. Variación de existencias de productos', '', '']);
-    let variacionExist = 0;
-    Object.entries(saldos).filter(([c]) => ['710', '711'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
-      variacionExist += s.saldo;
-    });
-    data.push(['']);
-    
-    // Aprovisionamientos
-    data.push(['3. Aprovisionamientos', '', '']);
-    let totalAprov = 0;
-    Object.entries(saldos).filter(([c]) => ['600', '601', '602', '607', '608', '610', '611'].includes(c)).forEach(([cuenta, s]) => {
-      const valor = ['608'].includes(c) ? -s.saldo : s.saldo; // Devoluciones restan
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -valor, '']);
-      totalAprov += valor;
-    });
-    data.push(['  TOTAL APROVISIONAMIENTOS', '', -totalAprov]);
-    data.push(['']);
-    
-    // Otros ingresos
-    data.push(['4. Otros ingresos de explotación', '', '']);
-    let otrosIngresos = 0;
-    Object.entries(saldos).filter(([c]) => ['759'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
-      otrosIngresos += s.saldo;
-    });
-    data.push(['']);
-    
-    // Gastos de personal
-    data.push(['5. Gastos de personal', '', '']);
-    let gastosPersonal = 0;
-    Object.entries(saldos).filter(([c]) => ['640', '641', '642', '649'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
-      gastosPersonal += s.saldo;
-    });
-    data.push(['  TOTAL GASTOS PERSONAL', '', -gastosPersonal]);
-    data.push(['']);
-    
-    // Otros gastos de explotación
-    data.push(['6. Otros gastos de explotación', '', '']);
-    let otrosGastos = 0;
-    Object.entries(saldos).filter(([c]) => ['621', '622', '623', '624', '625', '626', '627', '628', '629', '631'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
-      otrosGastos += s.saldo;
-    });
-    data.push(['  TOTAL OTROS GASTOS', '', -otrosGastos]);
-    data.push(['']);
-    
-    // Amortizaciones
-    data.push(['7. Amortización del inmovilizado', '', '']);
-    let amortizaciones = 0;
-    Object.entries(saldos).filter(([c]) => ['680', '681'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
-      amortizaciones += s.saldo;
-    });
-    data.push(['']);
-    
-    // Deterioros
-    data.push(['8. Deterioro y resultado por enajenaciones', '', '']);
-    let deterioros = 0;
-    Object.entries(saldos).filter(([c]) => ['694', '794'].includes(c)).forEach(([cuenta, s]) => {
-      const valor = c.startsWith('7') ? s.saldo : -s.saldo;
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), valor, '']);
-      deterioros += c.startsWith('7') ? s.saldo : -s.saldo;
-    });
-    data.push(['']);
-    
-    const resultadoExplotacion = totalVentas + variacionExist - totalAprov + otrosIngresos - gastosPersonal - otrosGastos - amortizaciones + deterioros;
-    data.push(['A) RESULTADO DE EXPLOTACIÓN', '', resultadoExplotacion]);
-    data.push(['']);
-    
-    // B) RESULTADO FINANCIERO
-    data.push(['B) RESULTADO FINANCIERO', '', '']);
-    let ingresosFinancieros = 0;
-    Object.entries(saldos).filter(([c]) => ['762', '769'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
-      ingresosFinancieros += s.saldo;
-    });
-    let gastosFinancieros = 0;
-    Object.entries(saldos).filter(([c]) => ['662', '669'].includes(c)).forEach(([cuenta, s]) => {
-      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
-      gastosFinancieros += s.saldo;
-    });
-    const resultadoFinanciero = ingresosFinancieros - gastosFinancieros;
-    data.push(['B) RESULTADO FINANCIERO', '', resultadoFinanciero]);
-    data.push(['']);
-    
-    // C) RESULTADO ANTES DE IMPUESTOS
-    const resultadoAI = resultadoExplotacion + resultadoFinanciero;
-    data.push(['C) RESULTADO ANTES DE IMPUESTOS', '', resultadoAI]);
-    data.push(['']);
-    
-    // Estimación IS (25% para PYMEs)
-    const impuestoEstimado = resultadoAI > 0 ? resultadoAI * 0.25 : 0;
-    data.push(['Impuesto sobre beneficios (estimado 25%)', '', -impuestoEstimado]);
-    data.push(['']);
-    
-    const resultadoEjercicio = resultadoAI - impuestoEstimado;
-    data.push(['D) RESULTADO DEL EJERCICIO', '', resultadoEjercicio]);
-    
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'PyG');
-    XLSX.writeFile(wb, `PyG_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
-    alert('✅ Cuenta de Pérdidas y Ganancias exportada');
+    try {
+      const saldos = calcularSaldosCuentas();
+      
+      if (Object.keys(saldos).length === 0) {
+        alert('⚠️ No hay asientos contables para generar el PyG.\n\nCrea algunos gastos o pedidos primero.');
+        return;
+      }
+      
+      const data = [];
+      
+      data.push(['CUENTA DE PÉRDIDAS Y GANANCIAS - ' + EMPRESA.nombre]);
+      data.push(['CIF: ' + EMPRESA.cif]);
+      data.push(['Ejercicio: ' + new Date().getFullYear()]);
+      data.push([]);
+      
+      // 1. RESULTADO DE EXPLOTACIÓN
+      data.push(['A) RESULTADO DE EXPLOTACIÓN', '', '']);
+      data.push(['']);
+      
+      // Ingresos de explotación
+      data.push(['1. Importe neto de la cifra de negocios', '', '']);
+      let totalVentas = 0;
+      Object.entries(saldos).filter(([c]) => ['700', '701', '705'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalVentas += s.saldo;
+      });
+      // Devoluciones y rappels (restan)
+      Object.entries(saldos).filter(([c]) => ['708', '709'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+        totalVentas -= s.saldo;
+      });
+      data.push(['  TOTAL VENTAS', '', totalVentas]);
+      data.push(['']);
+      
+      // Aprovisionamientos
+      data.push(['2. Aprovisionamientos', '', '']);
+      let totalAprov = 0;
+      Object.entries(saldos).filter(([c]) => ['600', '601', '602', '607'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+        totalAprov += s.saldo;
+      });
+      data.push(['  TOTAL APROVISIONAMIENTOS', '', -totalAprov]);
+      data.push(['']);
+      
+      // Gastos de personal
+      data.push(['3. Gastos de personal', '', '']);
+      let gastosPersonal = 0;
+      Object.entries(saldos).filter(([c]) => ['640', '641', '642', '649'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+        gastosPersonal += s.saldo;
+      });
+      data.push(['  TOTAL GASTOS PERSONAL', '', -gastosPersonal]);
+      data.push(['']);
+      
+      // Otros gastos de explotación
+      data.push(['4. Otros gastos de explotación', '', '']);
+      let otrosGastos = 0;
+      Object.entries(saldos).filter(([c]) => ['621', '622', '623', '624', '625', '626', '627', '628', '629', '631'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+        otrosGastos += s.saldo;
+      });
+      data.push(['  TOTAL OTROS GASTOS', '', -otrosGastos]);
+      data.push(['']);
+      
+      // Amortizaciones
+      let amortizaciones = 0;
+      Object.entries(saldos).filter(([c]) => ['680', '681'].includes(c)).forEach(([cuenta, s]) => {
+        data.push(['5. Amortizaciones ' + cuenta, -s.saldo, '']);
+        amortizaciones += s.saldo;
+      });
+      data.push(['']);
+      
+      const resultadoExplotacion = totalVentas - totalAprov - gastosPersonal - otrosGastos - amortizaciones;
+      data.push(['A) RESULTADO DE EXPLOTACIÓN', '', resultadoExplotacion]);
+      data.push(['']);
+      
+      // B) RESULTADO FINANCIERO
+      data.push(['B) RESULTADO FINANCIERO', '', '']);
+      let ingresosFinancieros = 0;
+      let gastosFinancieros = 0;
+      Object.entries(saldos).filter(([c]) => ['762', '769'].includes(c)).forEach(([cuenta, s]) => {
+        ingresosFinancieros += s.saldo;
+      });
+      Object.entries(saldos).filter(([c]) => ['662', '669'].includes(c)).forEach(([cuenta, s]) => {
+        gastosFinancieros += s.saldo;
+      });
+      const resultadoFinanciero = ingresosFinancieros - gastosFinancieros;
+      data.push(['  Ingresos financieros', ingresosFinancieros, '']);
+      data.push(['  Gastos financieros', -gastosFinancieros, '']);
+      data.push(['B) RESULTADO FINANCIERO', '', resultadoFinanciero]);
+      data.push(['']);
+      
+      // C) RESULTADO ANTES DE IMPUESTOS
+      const resultadoAI = resultadoExplotacion + resultadoFinanciero;
+      data.push(['C) RESULTADO ANTES DE IMPUESTOS', '', resultadoAI]);
+      data.push(['']);
+      
+      // Estimación IS (25% para PYMEs)
+      const impuestoEstimado = resultadoAI > 0 ? resultadoAI * 0.25 : 0;
+      data.push(['Impuesto sobre beneficios (estimado 25%)', '', -impuestoEstimado]);
+      data.push(['']);
+      
+      const resultadoEjercicio = resultadoAI - impuestoEstimado;
+      data.push(['D) RESULTADO DEL EJERCICIO', '', resultadoEjercicio]);
+      
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'PyG');
+      XLSX.writeFile(wb, `PyG_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+      alert('✅ Cuenta de Pérdidas y Ganancias exportada');
+    } catch (error) {
+      console.error('Error exportando PyG:', error);
+      alert('❌ Error exportando PyG: ' + error.message);
+    }
   };
 
   // Registrar cobro de factura
@@ -1973,6 +1958,92 @@ const MainApp = () => {
       alert(`✅ Cobro registrado para factura ${factura.numero_factura}`);
     } catch (error) {
       console.error('Error registrando cobro:', error);
+      alert('❌ Error: ' + error.message);
+    }
+  };
+
+  // ==================== SISTEMA DE AUDITORÍA ====================
+  
+  // Registrar acción en el log de auditoría
+  const registrarAuditoria = async (accion, tabla, registroId, datosAnteriores = null, datosNuevos = null, descripcion = '') => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      await supabase.from('audit_log').insert({
+        user_id: user?.id || null,
+        user_email: user?.email || 'Anónimo',
+        user_nombre: user?.user_metadata?.nombre || user?.email?.split('@')[0] || 'Usuario',
+        accion,
+        tabla,
+        registro_id: registroId?.toString(),
+        datos_anteriores: datosAnteriores,
+        datos_nuevos: datosNuevos,
+        descripcion: descripcion || `${accion} en ${tabla}`,
+      });
+      
+      refetchAuditLog();
+    } catch (error) {
+      console.error('Error registrando auditoría:', error);
+    }
+  };
+
+  // Obtener usuario actual
+  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUser(user);
+      
+      if (user) {
+        const { data: profile } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single();
+        
+        if (profile) {
+          setCurrentUserProfile(profile);
+        } else {
+          // Crear perfil si no existe
+          const newProfile = {
+            id: user.id,
+            email: user.email,
+            nombre: user.user_metadata?.nombre || user.email?.split('@')[0],
+          };
+          await supabase.from('user_profiles').insert(newProfile);
+          setCurrentUserProfile(newProfile);
+        }
+        
+        // Actualizar último login
+        await supabase.from('user_profiles').update({ last_login: new Date().toISOString() }).eq('id', user.id);
+      }
+    };
+    
+    getUser();
+    
+    // Escuchar cambios de autenticación
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      setCurrentUser(session?.user || null);
+      if (session?.user) {
+        getUser();
+      }
+    });
+    
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Actualizar perfil de usuario
+  const actualizarPerfil = async (updates) => {
+    if (!currentUser) return;
+    
+    try {
+      await supabase.from('user_profiles').update(updates).eq('id', currentUser.id);
+      setCurrentUserProfile(prev => ({ ...prev, ...updates }));
+      await registrarAuditoria('ACTUALIZAR', 'user_profiles', currentUser.id, null, updates, 'Perfil actualizado');
+      alert('✅ Perfil actualizado');
+    } catch (error) {
       alert('❌ Error: ' + error.message);
     }
   };
@@ -2289,8 +2360,12 @@ const MainApp = () => {
     try {
       let result;
       let newRecordId = null;
+      let datosAnteriores = null;
       
-      if (id) { 
+      // Si es actualización, guardar datos anteriores
+      if (id) {
+        const { data: anterior } = await supabase.from(table).select('*').eq('id', id).single();
+        datosAnteriores = anterior;
         result = await supabase.from(table).update(form).eq('id', id); 
       } else {
         // Para lotes, generar código legible (no tocar el id que es auto-increment)
@@ -2310,6 +2385,14 @@ const MainApp = () => {
         alert('Error: ' + result.error.message);
         return;
       }
+      
+      // REGISTRAR AUDITORÍA
+      const accion = id ? 'ACTUALIZAR' : 'CREAR';
+      const registroId = id || newRecordId;
+      const descripcion = id 
+        ? `Actualizado ${table} #${registroId}` 
+        : `Creado nuevo ${table} #${registroId}`;
+      await registrarAuditoria(accion, table, registroId, datosAnteriores, form, descripcion);
       
       // ASIENTO CONTABLE AUTOMÁTICO para gastos nuevos
       if (table === 'gastos' && !id && newRecordId) {
@@ -2336,11 +2419,18 @@ const MainApp = () => {
 
   const handleDelete = async (table, id) => {
     if (window.confirm('¿Eliminar este elemento?')) {
+      // Guardar datos antes de eliminar para auditoría
+      const { data: datosAnteriores } = await supabase.from(table).select('*').eq('id', id).single();
+      
       const { error } = await supabase.from(table).delete().eq('id', id);
       if (error) {
         alert('Error al eliminar: ' + error.message);
         return;
       }
+      
+      // REGISTRAR AUDITORÍA
+      await registrarAuditoria('ELIMINAR', table, id, datosAnteriores, null, `Eliminado ${table} #${id}`);
+      
       // Refrescar datos inmediatamente
       if (table === 'clientes') refetchClientes();
       else if (table === 'productos') refetchProductos();
@@ -6493,6 +6583,187 @@ Firma repartidor: _________________
             </ul>
             <p className="mt-3">Contacta con tu asesor para más información sobre los requisitos.</p>
           </div>
+        </Card>
+
+        {/* PANEL DE USUARIO */}
+        <Card className="p-5 bg-blue-50 border-blue-200">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-blue-100 rounded-xl">
+              <User size={24} className="text-blue-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-blue-900">Mi Perfil</h3>
+              <p className="text-sm text-blue-700">Tu información de usuario</p>
+            </div>
+          </div>
+          
+          {currentUser ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 rounded-full bg-blue-200 flex items-center justify-center">
+                  {currentUserProfile?.avatar_url ? (
+                    <img src={currentUserProfile.avatar_url} alt="" className="w-16 h-16 rounded-full object-cover" />
+                  ) : (
+                    <User size={32} className="text-blue-600" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-xl font-bold text-blue-900">{currentUserProfile?.nombre || 'Usuario'}</p>
+                  <p className="text-sm text-blue-600">{currentUser.email}</p>
+                  <Badge className="bg-blue-100 text-blue-700 mt-1">{currentUserProfile?.rol || 'usuario'}</Badge>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <div className="p-3 bg-white rounded-lg">
+                  <p className="text-xs text-neutral-500">Último acceso</p>
+                  <p className="font-semibold">{currentUserProfile?.last_login ? formatDate(currentUserProfile.last_login) : 'Ahora'}</p>
+                </div>
+                <div className="p-3 bg-white rounded-lg">
+                  <p className="text-xs text-neutral-500">Miembro desde</p>
+                  <p className="font-semibold">{currentUserProfile?.created_at ? formatDate(currentUserProfile.created_at) : '-'}</p>
+                </div>
+              </div>
+              
+              <div className="border-t pt-4 mt-4">
+                <p className="text-sm font-semibold text-blue-800 mb-2">Editar nombre:</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    defaultValue={currentUserProfile?.nombre}
+                    className="flex-1 px-3 py-2 border rounded-lg"
+                    id="edit-nombre-input"
+                  />
+                  <Button size="sm" onClick={() => {
+                    const nuevoNombre = document.getElementById('edit-nombre-input').value;
+                    if (nuevoNombre) actualizarPerfil({ nombre: nuevoNombre });
+                  }}>
+                    Guardar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-4">
+              <p className="text-blue-700">No has iniciado sesión</p>
+              <p className="text-sm text-blue-600 mt-1">Inicia sesión para ver tu perfil</p>
+            </div>
+          )}
+        </Card>
+
+        {/* USUARIOS REGISTRADOS */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-indigo-100 rounded-xl">
+              <Users size={24} className="text-indigo-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-neutral-900">Usuarios del Sistema</h3>
+              <p className="text-sm text-neutral-500">{userProfiles.length} usuarios registrados</p>
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            {userProfiles.length > 0 ? userProfiles.map(profile => (
+              <div key={profile.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
+                    <User size={18} className="text-indigo-600" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">{profile.nombre || 'Sin nombre'}</p>
+                    <p className="text-xs text-neutral-500">{profile.email}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <Badge className={profile.rol === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-neutral-100 text-neutral-600'}>
+                    {profile.rol || 'usuario'}
+                  </Badge>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    {profile.last_login ? `Último: ${formatDate(profile.last_login)}` : 'Sin actividad'}
+                  </p>
+                </div>
+              </div>
+            )) : (
+              <p className="text-center text-neutral-500 py-4">No hay usuarios registrados</p>
+            )}
+          </div>
+        </Card>
+
+        {/* HISTORIAL DE AUDITORÍA */}
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-emerald-100 rounded-xl">
+                <Clock size={24} className="text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">Historial de Cambios</h3>
+                <p className="text-sm text-neutral-500">Trazabilidad de acciones en el sistema</p>
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" onClick={refetchAuditLog}>
+              <RefreshCw size={14} /> Actualizar
+            </Button>
+          </div>
+          
+          <div className="overflow-x-auto max-h-96">
+            {auditLog.length > 0 ? (
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-100 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold">Fecha/Hora</th>
+                    <th className="text-left px-3 py-2 font-semibold">Usuario</th>
+                    <th className="text-left px-3 py-2 font-semibold">Acción</th>
+                    <th className="text-left px-3 py-2 font-semibold">Tabla</th>
+                    <th className="text-left px-3 py-2 font-semibold">Descripción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLog.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 50).map(log => (
+                    <tr key={log.id} className="border-b hover:bg-neutral-50">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <p className="font-mono text-xs">{new Date(log.created_at).toLocaleDateString('es-ES')}</p>
+                        <p className="font-mono text-xs text-neutral-400">{new Date(log.created_at).toLocaleTimeString('es-ES')}</p>
+                      </td>
+                      <td className="px-3 py-2">
+                        <p className="font-semibold">{log.user_nombre || 'Sistema'}</p>
+                        <p className="text-xs text-neutral-400">{log.user_email}</p>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Badge className={
+                          log.accion === 'CREAR' ? 'bg-green-100 text-green-700' :
+                          log.accion === 'ACTUALIZAR' ? 'bg-blue-100 text-blue-700' :
+                          log.accion === 'ELIMINAR' ? 'bg-red-100 text-red-700' :
+                          'bg-neutral-100 text-neutral-700'
+                        }>
+                          {log.accion}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="px-2 py-1 bg-neutral-100 rounded text-xs font-mono">{log.tabla}</span>
+                      </td>
+                      <td className="px-3 py-2 text-neutral-600 max-w-xs truncate">
+                        {log.descripcion || '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="text-center py-8 text-neutral-500">
+                <Clock size={48} className="mx-auto mb-3 text-neutral-300" />
+                <p>No hay registros de auditoría</p>
+                <p className="text-xs mt-1">Las acciones se registrarán automáticamente</p>
+              </div>
+            )}
+          </div>
+          
+          {auditLog.length > 50 && (
+            <p className="text-xs text-neutral-500 mt-3 text-center">
+              Mostrando las últimas 50 acciones de {auditLog.length} totales
+            </p>
+          )}
         </Card>
       </div>
     );
