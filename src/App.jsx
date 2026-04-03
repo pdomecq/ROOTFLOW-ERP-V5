@@ -1285,20 +1285,41 @@ const MainApp = () => {
         referencia: `FAC-${factura.id}`,
       }).select().single();
       
-      if (error) throw error;
+      if (error) {
+        alert('❌ Error creando asiento: ' + error.message);
+        console.error('Error creando asiento:', error);
+        return;
+      }
+      
+      const totalFactura = parseFloat((factura.total || 0).toFixed(2));
+      const baseImponible = parseFloat((factura.base_imponible || factura.subtotal || 0).toFixed(2));
+      const ivaFactura = parseFloat((factura.iva || 0).toFixed(2));
       
       const lineas = [
-        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: factura.total || 0, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: factura.base_imponible || factura.subtotal || 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: factura.iva || 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: totalFactura, haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: baseImponible },
+        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: ivaFactura },
       ];
       
-      await supabase.from('asiento_lineas').insert(lineas);
+      console.log('Insertando líneas:', lineas);
+      
+      const { data: lineasCreadas, error: errorLineas } = await supabase.from('asiento_lineas').insert(lineas).select();
+      
+      if (errorLineas) {
+        alert('❌ Error creando líneas del asiento: ' + errorLineas.message + '\n\nPosible causa: La tabla asiento_lineas no existe o no tiene permisos RLS.');
+        console.error('Error creando líneas:', errorLineas);
+        return;
+      }
+      
+      console.log('Líneas creadas:', lineasCreadas);
+      
       refetchAsientos();
       refetchAsientoLineas();
-      console.log(`✅ Asiento ${numero} creado para factura ${factura.id}`);
+      
+      alert(`✅ Asiento ${numero} creado con ${lineasCreadas?.length || 0} líneas:\n\n430 Clientes: ${totalFactura}€ (DEBE)\n700 Ventas: ${baseImponible}€ (HABER)\n477 IVA Rep.: ${ivaFactura}€ (HABER)`);
     } catch (error) {
       console.error('Error creando asiento desde factura:', error);
+      alert('❌ Error inesperado: ' + error.message);
     }
   };
 
@@ -1308,8 +1329,9 @@ const MainApp = () => {
       const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
       const numero = `A${(count || 0) + 1}`;
       
-      const base = gasto.importe / 1.21;
-      const iva = gasto.importe - base;
+      const importeTotal = parseFloat(gasto.importe) || 0;
+      const base = parseFloat((importeTotal / 1.21).toFixed(2));
+      const iva = parseFloat((importeTotal - base).toFixed(2));
       
       // Determinar cuenta de gasto según categoría
       const cuentaGasto = gasto.categoria === 'semillas' ? '601' : 
@@ -1327,20 +1349,39 @@ const MainApp = () => {
         referencia: `GAS-${gasto.id}`,
       }).select().single();
       
-      if (error) throw error;
+      if (error) {
+        alert('❌ Error creando asiento: ' + error.message);
+        console.error('Error creando asiento:', error);
+        return;
+      }
+      
+      const nombreCuenta = PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos';
       
       const lineas = [
-        { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos', debe: parseFloat(base.toFixed(2)), haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: parseFloat(iva.toFixed(2)), haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: parseFloat(gasto.importe.toFixed(2)) },
+        { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: nombreCuenta, debe: base, haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: iva, haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: importeTotal },
       ];
       
-      await supabase.from('asiento_lineas').insert(lineas);
+      console.log('Insertando líneas de gasto:', lineas);
+      
+      const { data: lineasCreadas, error: errorLineas } = await supabase.from('asiento_lineas').insert(lineas).select();
+      
+      if (errorLineas) {
+        alert('❌ Error creando líneas del asiento: ' + errorLineas.message + '\n\nPosible causa: La tabla asiento_lineas no existe o no tiene permisos RLS.');
+        console.error('Error creando líneas:', errorLineas);
+        return;
+      }
+      
+      console.log('Líneas creadas:', lineasCreadas);
+      
       refetchAsientos();
       refetchAsientoLineas();
-      console.log(`✅ Asiento ${numero} creado para gasto ${gasto.id}`);
+      
+      alert(`✅ Asiento ${numero} creado con ${lineasCreadas?.length || 0} líneas:\n\n${cuentaGasto} ${nombreCuenta}: ${base}€ (DEBE)\n472 IVA Soportado: ${iva}€ (DEBE)\n400 Proveedores: ${importeTotal}€ (HABER)`);
     } catch (error) {
       console.error('Error creando asiento desde gasto:', error);
+      alert('❌ Error inesperado: ' + error.message);
     }
   };
 
@@ -6170,7 +6211,12 @@ Firma repartidor: _________________
                 </div>
               )}
               
-              {asientosContables.length === 0 ? (
+              {/* Debug info */}
+              <div className="p-2 bg-blue-50 rounded text-xs text-blue-700">
+                📊 Debug: {asientosDB.length} asientos, {asientoLineasDB.length} líneas cargadas
+              </div>
+              
+              {asientosDB.length === 0 ? (
                 <div className="text-center py-8 text-neutral-500">
                   <FileText size={48} className="mx-auto mb-3 text-neutral-300" />
                   <p>No hay asientos contables</p>
@@ -6182,22 +6228,24 @@ Firma repartidor: _________________
                   <div className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg">
                     <input 
                       type="checkbox" 
-                      checked={asientosContables.length > 0 && selectedAsientos.length === asientosContables.length}
-                      onChange={e => setSelectedAsientos(e.target.checked ? asientosContables.map(a => a.id) : [])}
+                      checked={asientosDB.length > 0 && selectedAsientos.length === asientosDB.length}
+                      onChange={e => setSelectedAsientos(e.target.checked ? asientosDB.map(a => a.id) : [])}
                       className="w-4 h-4 rounded"
                     />
-                    <span className="text-sm font-medium text-neutral-600">Seleccionar todos ({asientosContables.length})</span>
+                    <span className="text-sm font-medium text-neutral-600">Seleccionar todos ({asientosDB.length})</span>
                   </div>
                   
-                  {asientosContables.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(asiento => {
-                  const totalDebe = asiento.lineas?.reduce((sum, l) => sum + (l.debe || 0), 0) || 0;
-                  const totalHaber = asiento.lineas?.reduce((sum, l) => sum + (l.haber || 0), 0) || 0;
+                  {asientosDB.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(asiento => {
+                  // Filtrar líneas de este asiento
+                  const lineasAsiento = asientoLineasDB.filter(l => l.asiento_id === asiento.id);
+                  const totalDebe = lineasAsiento.reduce((sum, l) => sum + (parseFloat(l.debe) || 0), 0);
+                  const totalHaber = lineasAsiento.reduce((sum, l) => sum + (parseFloat(l.haber) || 0), 0);
                   const cuadrado = Math.abs(totalDebe - totalHaber) < 0.01;
                   const isSelected = selectedAsientos.includes(asiento.id);
                   
                   return (
                     <div key={asiento.id} className={`border rounded-xl overflow-hidden ${isSelected ? 'ring-2 ring-purple-500' : ''}`}>
-                      <div className={`p-3 flex items-center justify-between ${cuadrado ? 'bg-green-50' : 'bg-red-50'}`}>
+                      <div className={`p-3 flex items-center justify-between ${lineasAsiento.length > 0 ? (cuadrado ? 'bg-green-50' : 'bg-red-50') : 'bg-yellow-50'}`}>
                         <div className="flex items-center gap-3">
                           <input 
                             type="checkbox"
@@ -6208,35 +6256,44 @@ Firma repartidor: _________________
                           <span className="font-mono text-sm bg-white px-2 py-1 rounded">{asiento.numero}</span>
                           <span className="text-sm text-neutral-600">{formatDate(asiento.fecha)}</span>
                           <span className="font-medium">{asiento.concepto}</span>
-                          {!cuadrado && <Badge className="bg-red-500 text-white">⚠️ Descuadrado</Badge>}
+                          {lineasAsiento.length === 0 && <Badge className="bg-yellow-500 text-white">⚠️ Sin líneas</Badge>}
+                          {lineasAsiento.length > 0 && !cuadrado && <Badge className="bg-red-500 text-white">⚠️ Descuadrado</Badge>}
                         </div>
                         <div className="flex gap-1">
-                          <button onClick={() => { setEditingAsiento(asiento); setShowAsientoForm(true); }} className="p-2 hover:bg-white rounded"><Edit2 size={14} /></button>
+                          <button onClick={() => { setEditingAsiento({...asiento, lineas: lineasAsiento}); setShowAsientoForm(true); }} className="p-2 hover:bg-white rounded"><Edit2 size={14} /></button>
                           <button onClick={() => eliminarAsiento(asiento.id)} className="p-2 hover:bg-white rounded text-red-500"><Trash2 size={14} /></button>
                         </div>
                       </div>
                       <table className="w-full text-sm">
                         <thead className="bg-neutral-100">
                           <tr>
-                            <th className="text-left px-3 py-2 w-20">Cuenta</th>
+                            <th className="text-left px-3 py-2 w-24">Cuenta</th>
                             <th className="text-left px-3 py-2">Concepto</th>
                             <th className="text-right px-3 py-2 w-28">Debe</th>
                             <th className="text-right px-3 py-2 w-28">Haber</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {asiento.lineas?.map((linea, idx) => (
-                            <tr key={idx} className="border-t">
-                              <td className="px-3 py-2 font-mono text-purple-600">{linea.cuenta}</td>
-                              <td className="px-3 py-2">{linea.concepto || PLAN_CUENTAS[linea.cuenta]?.nombre}</td>
-                              <td className="px-3 py-2 text-right font-medium">{linea.debe > 0 ? formatCurrency(linea.debe) : ''}</td>
-                              <td className="px-3 py-2 text-right font-medium">{linea.haber > 0 ? formatCurrency(linea.haber) : ''}</td>
+                          {lineasAsiento.length === 0 ? (
+                            <tr>
+                              <td colSpan="4" className="px-3 py-4 text-center text-neutral-400">
+                                No hay líneas registradas para este asiento
+                              </td>
                             </tr>
-                          ))}
-                          <tr className="bg-neutral-50 font-bold">
+                          ) : (
+                            lineasAsiento.map((linea, idx) => (
+                              <tr key={linea.id || idx} className="border-t">
+                                <td className="px-3 py-2 font-mono font-bold text-purple-600">{linea.cuenta}</td>
+                                <td className="px-3 py-2">{linea.concepto || PLAN_CUENTAS[linea.cuenta]?.nombre || '-'}</td>
+                                <td className="px-3 py-2 text-right font-bold text-green-600">{parseFloat(linea.debe) > 0 ? formatCurrency(parseFloat(linea.debe)) : ''}</td>
+                                <td className="px-3 py-2 text-right font-bold text-blue-600">{parseFloat(linea.haber) > 0 ? formatCurrency(parseFloat(linea.haber)) : ''}</td>
+                              </tr>
+                            ))
+                          )}
+                          <tr className="bg-neutral-100 font-bold">
                             <td colSpan="2" className="px-3 py-2 text-right">TOTALES:</td>
-                            <td className="px-3 py-2 text-right text-green-600">{formatCurrency(totalDebe)}</td>
-                            <td className="px-3 py-2 text-right text-blue-600">{formatCurrency(totalHaber)}</td>
+                            <td className="px-3 py-2 text-right text-green-700">{formatCurrency(totalDebe)}</td>
+                            <td className="px-3 py-2 text-right text-blue-700">{formatCurrency(totalHaber)}</td>
                           </tr>
                         </tbody>
                       </table>
