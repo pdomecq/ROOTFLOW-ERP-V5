@@ -1159,78 +1159,6 @@ const MainApp = () => {
     }
   };
 
-  // Crear asiento automático desde una factura
-  const crearAsientoDesdeFactura = async (factura, cliente) => {
-    try {
-      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
-      const numero = `A${(count || 0) + 1}`;
-      
-      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
-        fecha: factura.fecha,
-        numero,
-        concepto: `Factura ${factura.id} - ${cliente?.nombre || 'Cliente'}`,
-        referencia: `FAC-${factura.id}`,
-      }).select().single();
-      
-      if (error) throw error;
-      
-      const lineas = [
-        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: factura.total || 0, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: factura.base_imponible || factura.subtotal || 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: factura.iva || 0 },
-      ];
-      
-      await supabase.from('asiento_lineas').insert(lineas);
-      refetchAsientos();
-      refetchAsientoLineas();
-      console.log(`✅ Asiento ${numero} creado para factura ${factura.id}`);
-    } catch (error) {
-      console.error('Error creando asiento desde factura:', error);
-    }
-  };
-
-  // Crear asiento automático desde un gasto
-  const crearAsientoDesdeGasto = async (gasto, proveedor) => {
-    try {
-      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
-      const numero = `A${(count || 0) + 1}`;
-      
-      const base = gasto.importe / 1.21;
-      const iva = gasto.importe - base;
-      
-      // Determinar cuenta de gasto según categoría
-      const cuentaGasto = gasto.categoria === 'semillas' ? '601' : 
-                         gasto.categoria === 'suministros' ? '628' :
-                         gasto.categoria === 'transporte' ? '624' :
-                         gasto.categoria === 'servicios' ? '629' :
-                         gasto.categoria === 'nominas' ? '640' :
-                         gasto.categoria === 'alquiler' ? '621' :
-                         gasto.categoria === 'energia' ? '628' : '602';
-      
-      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
-        fecha: gasto.fecha,
-        numero,
-        concepto: `${gasto.concepto} - ${proveedor?.nombre || 'Proveedor'}`,
-        referencia: `GAS-${gasto.id}`,
-      }).select().single();
-      
-      if (error) throw error;
-      
-      const lineas = [
-        { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos', debe: parseFloat(base.toFixed(2)), haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: parseFloat(iva.toFixed(2)), haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: parseFloat(gasto.importe.toFixed(2)) },
-      ];
-      
-      await supabase.from('asiento_lineas').insert(lineas);
-      refetchAsientos();
-      refetchAsientoLineas();
-      console.log(`✅ Asiento ${numero} creado para gasto ${gasto.id}`);
-    } catch (error) {
-      console.error('Error creando asiento desde gasto:', error);
-    }
-  };
-
   // Eliminar múltiples registros
   const handleDeleteMultiple = async (table, ids, refetchFn, setSelectedFn) => {
     if (ids.length === 0) return;
@@ -1343,6 +1271,78 @@ const MainApp = () => {
       lineas: asientoLineasDB.filter(l => l.asiento_id === a.id)
     }));
   }, [asientosDB, asientoLineasDB]);
+
+  // Crear asiento automático desde una factura
+  const crearAsientoDesdeFactura = async (factura, cliente) => {
+    try {
+      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
+      const numero = `A${(count || 0) + 1}`;
+      
+      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+        fecha: factura.fecha,
+        numero,
+        concepto: `Factura ${factura.id} - ${cliente?.nombre || 'Cliente'}`,
+        referencia: `FAC-${factura.id}`,
+      }).select().single();
+      
+      if (error) throw error;
+      
+      const lineas = [
+        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: factura.total || 0, haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: factura.base_imponible || factura.subtotal || 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: factura.iva || 0 },
+      ];
+      
+      await supabase.from('asiento_lineas').insert(lineas);
+      refetchAsientos();
+      refetchAsientoLineas();
+      console.log(`✅ Asiento ${numero} creado para factura ${factura.id}`);
+    } catch (error) {
+      console.error('Error creando asiento desde factura:', error);
+    }
+  };
+
+  // Crear asiento automático desde un gasto
+  const crearAsientoDesdeGasto = async (gasto, proveedor) => {
+    try {
+      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
+      const numero = `A${(count || 0) + 1}`;
+      
+      const base = gasto.importe / 1.21;
+      const iva = gasto.importe - base;
+      
+      // Determinar cuenta de gasto según categoría
+      const cuentaGasto = gasto.categoria === 'semillas' ? '601' : 
+                         gasto.categoria === 'suministros' ? '628' :
+                         gasto.categoria === 'transporte' ? '624' :
+                         gasto.categoria === 'servicios' ? '629' :
+                         gasto.categoria === 'nominas' ? '640' :
+                         gasto.categoria === 'alquiler' ? '621' :
+                         gasto.categoria === 'energia' ? '628' : '602';
+      
+      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+        fecha: gasto.fecha,
+        numero,
+        concepto: `${gasto.concepto} - ${proveedor?.nombre || 'Proveedor'}`,
+        referencia: `GAS-${gasto.id}`,
+      }).select().single();
+      
+      if (error) throw error;
+      
+      const lineas = [
+        { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos', debe: parseFloat(base.toFixed(2)), haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: parseFloat(iva.toFixed(2)), haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: parseFloat(gasto.importe.toFixed(2)) },
+      ];
+      
+      await supabase.from('asiento_lineas').insert(lineas);
+      refetchAsientos();
+      refetchAsientoLineas();
+      console.log(`✅ Asiento ${numero} creado para gasto ${gasto.id}`);
+    } catch (error) {
+      console.error('Error creando asiento desde gasto:', error);
+    }
+  };
 
   const loading = l1 || l2 || l3;
 
