@@ -285,24 +285,26 @@ const origenLeadConfig = {
   otro: { label: "Otro", color: "bg-neutral-100 text-neutral-700" },
 };
 
+// Categorías de gasto alineadas con PGC español
 const categoriasGasto = {
-  semillas: { label: "Semillas", icon: Sprout, color: "bg-green-100 text-green-700" },
-  sustratos: { label: "Sustratos", icon: Layers, color: "bg-amber-100 text-amber-700" },
-  envases: { label: "Envases", icon: Package, color: "bg-blue-100 text-blue-700" },
-  transporte: { label: "Transporte", icon: Truck, color: "bg-purple-100 text-purple-700" },
-  luz: { label: "Electricidad", icon: Zap, color: "bg-yellow-100 text-yellow-700" },
-  agua: { label: "Agua", icon: Layers, color: "bg-cyan-100 text-cyan-700" },
-  alquiler: { label: "Alquiler", icon: Building2, color: "bg-neutral-100 text-neutral-700" },
-  personal: { label: "Personal", icon: Users, color: "bg-pink-100 text-pink-700" },
-  marketing: { label: "Marketing", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700" },
-  equipamiento: { label: "Equipamiento", icon: Package, color: "bg-slate-100 text-slate-700" },
-  mantenimiento: { label: "Mantenimiento", icon: AlertTriangle, color: "bg-orange-100 text-orange-700" },
-  seguros: { label: "Seguros", icon: FileText, color: "bg-teal-100 text-teal-700" },
-  impuestos: { label: "Impuestos", icon: Receipt, color: "bg-red-100 text-red-700" },
-  software: { label: "Software/IT", icon: BarChart3, color: "bg-violet-100 text-violet-700" },
-  formacion: { label: "Formación", icon: Star, color: "bg-emerald-100 text-emerald-700" },
-  viajes: { label: "Viajes", icon: MapPin, color: "bg-rose-100 text-rose-700" },
-  otros: { label: "Otros", icon: MoreVertical, color: "bg-gray-100 text-gray-700" },
+  semillas: { label: "🌱 Semillas/Materias primas (601)", icon: Sprout, color: "bg-green-100 text-green-700", cuenta: "601" },
+  sustratos: { label: "🪴 Sustratos/Aprovisionamientos (602)", icon: Layers, color: "bg-amber-100 text-amber-700", cuenta: "602" },
+  embalajes: { label: "📦 Embalajes y envases (602)", icon: Package, color: "bg-blue-100 text-blue-700", cuenta: "602" },
+  alquiler: { label: "🏠 Alquiler local (621)", icon: Building2, color: "bg-neutral-100 text-neutral-700", cuenta: "621" },
+  reparaciones: { label: "🔧 Reparaciones/Mantenimiento (622)", icon: AlertTriangle, color: "bg-orange-100 text-orange-700", cuenta: "622" },
+  asesoria: { label: "👔 Asesoría/Gestoría (623)", icon: FileText, color: "bg-slate-100 text-slate-700", cuenta: "623" },
+  transporte: { label: "🚚 Transporte/Logística (624)", icon: Truck, color: "bg-purple-100 text-purple-700", cuenta: "624" },
+  seguros: { label: "🛡️ Seguros (625)", icon: FileText, color: "bg-teal-100 text-teal-700", cuenta: "625" },
+  banco: { label: "🏦 Comisiones bancarias (626)", icon: Receipt, color: "bg-gray-100 text-gray-700", cuenta: "626" },
+  publicidad: { label: "📣 Publicidad/Marketing (627)", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700", cuenta: "627" },
+  energia: { label: "💡 Suministros: Luz/Agua/Gas (628)", icon: Zap, color: "bg-yellow-100 text-yellow-700", cuenta: "628" },
+  servicios: { label: "⚙️ Otros servicios (629)", icon: MoreVertical, color: "bg-cyan-100 text-cyan-700", cuenta: "629" },
+  tributos: { label: "📋 Tributos e impuestos (631)", icon: Receipt, color: "bg-red-100 text-red-700", cuenta: "631" },
+  nominas: { label: "👥 Sueldos y salarios (640)", icon: Users, color: "bg-pink-100 text-pink-700", cuenta: "640" },
+  seguridad_social: { label: "🏥 Seg. Social empresa (642)", icon: Users, color: "bg-rose-100 text-rose-700", cuenta: "642" },
+  software: { label: "💻 Software/IT (629)", icon: BarChart3, color: "bg-violet-100 text-violet-700", cuenta: "629" },
+  formacion: { label: "📚 Formación (649)", icon: Star, color: "bg-emerald-100 text-emerald-700", cuenta: "649" },
+  otros: { label: "📝 Otros gastos (629)", icon: MoreVertical, color: "bg-gray-100 text-gray-700", cuenta: "629" },
 };
 
 const prioridadTareaConfig = {
@@ -943,64 +945,179 @@ const MainApp = () => {
   };
 
   // ==================== CONTABILIDAD PARTIDA DOBLE ====================
-  // Plan General Contable simplificado para PYME agrícola
+  // Plan General Contable para PYME agrícola (España)
   const PLAN_CUENTAS = {
     // Grupo 1 - Financiación básica
     '100': { nombre: 'Capital social', tipo: 'P', grupo: '1' },
+    '112': { nombre: 'Reserva legal', tipo: 'P', grupo: '1' },
+    '113': { nombre: 'Reservas voluntarias', tipo: 'P', grupo: '1' },
+    '120': { nombre: 'Remanente', tipo: 'P', grupo: '1' },
+    '121': { nombre: 'Resultados negativos ejercicios anteriores', tipo: 'P', grupo: '1' },
     '129': { nombre: 'Resultado del ejercicio', tipo: 'P', grupo: '1' },
     '170': { nombre: 'Deudas a L/P con entidades de crédito', tipo: 'P', grupo: '1' },
+    '171': { nombre: 'Deudas a L/P', tipo: 'P', grupo: '1' },
     // Grupo 2 - Activo no corriente
+    '206': { nombre: 'Aplicaciones informáticas', tipo: 'A', grupo: '2' },
     '210': { nombre: 'Terrenos y bienes naturales', tipo: 'A', grupo: '2' },
     '211': { nombre: 'Construcciones', tipo: 'A', grupo: '2' },
+    '212': { nombre: 'Instalaciones técnicas', tipo: 'A', grupo: '2' },
     '213': { nombre: 'Maquinaria', tipo: 'A', grupo: '2' },
+    '214': { nombre: 'Utillaje', tipo: 'A', grupo: '2' },
+    '215': { nombre: 'Otras instalaciones', tipo: 'A', grupo: '2' },
     '216': { nombre: 'Mobiliario', tipo: 'A', grupo: '2' },
     '217': { nombre: 'Equipos informáticos', tipo: 'A', grupo: '2' },
     '218': { nombre: 'Elementos de transporte', tipo: 'A', grupo: '2' },
-    '281': { nombre: 'Amortización acum. inmovilizado material', tipo: 'A', grupo: '2' },
+    '219': { nombre: 'Otro inmovilizado material', tipo: 'A', grupo: '2' },
+    '280': { nombre: 'Amortización acum. inmov. intangible', tipo: 'XA', grupo: '2' },
+    '281': { nombre: 'Amortización acum. inmov. material', tipo: 'XA', grupo: '2' },
     // Grupo 3 - Existencias
     '300': { nombre: 'Mercaderías', tipo: 'A', grupo: '3' },
-    '310': { nombre: 'Materias primas', tipo: 'A', grupo: '3' },
+    '310': { nombre: 'Materias primas (semillas)', tipo: 'A', grupo: '3' },
+    '320': { nombre: 'Elementos y conjuntos incorporables', tipo: 'A', grupo: '3' },
     '326': { nombre: 'Embalajes', tipo: 'A', grupo: '3' },
-    '350': { nombre: 'Productos terminados', tipo: 'A', grupo: '3' },
+    '327': { nombre: 'Envases', tipo: 'A', grupo: '3' },
+    '328': { nombre: 'Material de oficina', tipo: 'A', grupo: '3' },
+    '350': { nombre: 'Productos terminados (microbrotes)', tipo: 'A', grupo: '3' },
     // Grupo 4 - Acreedores y deudores
     '400': { nombre: 'Proveedores', tipo: 'P', grupo: '4' },
+    '401': { nombre: 'Proveedores, efectos comerciales a pagar', tipo: 'P', grupo: '4' },
     '410': { nombre: 'Acreedores por prestación de servicios', tipo: 'P', grupo: '4' },
     '430': { nombre: 'Clientes', tipo: 'A', grupo: '4' },
+    '431': { nombre: 'Clientes, efectos comerciales a cobrar', tipo: 'A', grupo: '4' },
+    '435': { nombre: 'Clientes de dudoso cobro', tipo: 'A', grupo: '4' },
     '440': { nombre: 'Deudores varios', tipo: 'A', grupo: '4' },
+    '465': { nombre: 'Remuneraciones pendientes de pago', tipo: 'P', grupo: '4' },
     '472': { nombre: 'HP IVA soportado', tipo: 'A', grupo: '4' },
     '473': { nombre: 'HP retenciones y pagos a cuenta', tipo: 'A', grupo: '4' },
-    '475': { nombre: 'HP acreedora por IVA', tipo: 'P', grupo: '4' },
+    '475': { nombre: 'HP acreedora por conceptos fiscales', tipo: 'P', grupo: '4' },
+    '4750': { nombre: 'HP acreedora por IVA', tipo: 'P', grupo: '4' },
+    '4751': { nombre: 'HP acreedora por retenciones', tipo: 'P', grupo: '4' },
     '476': { nombre: 'Organismos SS acreedores', tipo: 'P', grupo: '4' },
     '477': { nombre: 'HP IVA repercutido', tipo: 'P', grupo: '4' },
     // Grupo 5 - Cuentas financieras
     '520': { nombre: 'Deudas a C/P con entidades de crédito', tipo: 'P', grupo: '5' },
-    '570': { nombre: 'Caja', tipo: 'A', grupo: '5' },
-    '572': { nombre: 'Bancos c/c', tipo: 'A', grupo: '5' },
+    '521': { nombre: 'Deudas a C/P', tipo: 'P', grupo: '5' },
+    '551': { nombre: 'Cuenta corriente con socios y administradores', tipo: 'P', grupo: '5' }, // DEUDA A SOCIO
+    '555': { nombre: 'Partidas pendientes de aplicación', tipo: 'A', grupo: '5' },
+    '570': { nombre: 'Caja, euros', tipo: 'A', grupo: '5' },
+    '572': { nombre: 'Bancos c/c vista, euros', tipo: 'A', grupo: '5' },
+    '573': { nombre: 'Bancos c/c moneda extranjera', tipo: 'A', grupo: '5' },
     // Grupo 6 - Compras y gastos
     '600': { nombre: 'Compras de mercaderías', tipo: 'G', grupo: '6' },
-    '601': { nombre: 'Compras de materias primas', tipo: 'G', grupo: '6' },
+    '601': { nombre: 'Compras de materias primas', tipo: 'G', grupo: '6' }, // SEMILLAS
     '602': { nombre: 'Compras de otros aprovisionamientos', tipo: 'G', grupo: '6' },
+    '606': { nombre: 'Descuentos sobre compras por pronto pago', tipo: 'G', grupo: '6' },
     '607': { nombre: 'Trabajos realizados por otras empresas', tipo: 'G', grupo: '6' },
-    '621': { nombre: 'Arrendamientos y cánones', tipo: 'G', grupo: '6' },
+    '608': { nombre: 'Devoluciones de compras', tipo: 'G', grupo: '6' },
+    '610': { nombre: 'Variación de existencias de mercaderías', tipo: 'G', grupo: '6' },
+    '611': { nombre: 'Variación de existencias de materias primas', tipo: 'G', grupo: '6' },
+    '621': { nombre: 'Arrendamientos y cánones', tipo: 'G', grupo: '6' }, // ALQUILER
     '622': { nombre: 'Reparaciones y conservación', tipo: 'G', grupo: '6' },
-    '623': { nombre: 'Servicios profesionales independientes', tipo: 'G', grupo: '6' },
+    '623': { nombre: 'Servicios profesionales independientes', tipo: 'G', grupo: '6' }, // ASESORÍA
     '624': { nombre: 'Transportes', tipo: 'G', grupo: '6' },
     '625': { nombre: 'Primas de seguros', tipo: 'G', grupo: '6' },
-    '626': { nombre: 'Servicios bancarios', tipo: 'G', grupo: '6' },
-    '627': { nombre: 'Publicidad y propaganda', tipo: 'G', grupo: '6' },
-    '628': { nombre: 'Suministros (agua, luz, gas)', tipo: 'G', grupo: '6' },
+    '626': { nombre: 'Servicios bancarios y similares', tipo: 'G', grupo: '6' },
+    '627': { nombre: 'Publicidad, propaganda y RRPP', tipo: 'G', grupo: '6' },
+    '628': { nombre: 'Suministros', tipo: 'G', grupo: '6' }, // LUZ, AGUA, GAS
     '629': { nombre: 'Otros servicios', tipo: 'G', grupo: '6' },
-    '640': { nombre: 'Sueldos y salarios', tipo: 'G', grupo: '6' },
-    '642': { nombre: 'Seguridad Social a cargo empresa', tipo: 'G', grupo: '6' },
-    '681': { nombre: 'Amortización inmovilizado material', tipo: 'G', grupo: '6' },
+    '631': { nombre: 'Otros tributos', tipo: 'G', grupo: '6' },
+    '640': { nombre: 'Sueldos y salarios', tipo: 'G', grupo: '6' }, // NÓMINAS
+    '641': { nombre: 'Indemnizaciones', tipo: 'G', grupo: '6' },
+    '642': { nombre: 'Seguridad Social a cargo de la empresa', tipo: 'G', grupo: '6' },
+    '649': { nombre: 'Otros gastos sociales', tipo: 'G', grupo: '6' },
+    '662': { nombre: 'Intereses de deudas', tipo: 'G', grupo: '6' },
+    '669': { nombre: 'Otros gastos financieros', tipo: 'G', grupo: '6' },
+    '678': { nombre: 'Gastos excepcionales', tipo: 'G', grupo: '6' },
+    '680': { nombre: 'Amortización del inmovilizado intangible', tipo: 'G', grupo: '6' },
+    '681': { nombre: 'Amortización del inmovilizado material', tipo: 'G', grupo: '6' },
+    '694': { nombre: 'Pérdidas por deterioro de créditos comerciales', tipo: 'G', grupo: '6' },
     // Grupo 7 - Ventas e ingresos
     '700': { nombre: 'Ventas de mercaderías', tipo: 'I', grupo: '7' },
-    '701': { nombre: 'Ventas de productos terminados', tipo: 'I', grupo: '7' },
+    '701': { nombre: 'Ventas de productos terminados', tipo: 'I', grupo: '7' }, // MICROBROTES
     '705': { nombre: 'Prestaciones de servicios', tipo: 'I', grupo: '7' },
+    '706': { nombre: 'Descuentos sobre ventas por pronto pago', tipo: 'I', grupo: '7' },
     '708': { nombre: 'Devoluciones de ventas', tipo: 'I', grupo: '7' },
     '709': { nombre: 'Rappels sobre ventas', tipo: 'I', grupo: '7' },
+    '710': { nombre: 'Variación de existencias de productos', tipo: 'I', grupo: '7' },
     '759': { nombre: 'Ingresos por servicios diversos', tipo: 'I', grupo: '7' },
+    '762': { nombre: 'Ingresos de créditos', tipo: 'I', grupo: '7' },
     '769': { nombre: 'Otros ingresos financieros', tipo: 'I', grupo: '7' },
+    '778': { nombre: 'Ingresos excepcionales', tipo: 'I', grupo: '7' },
+    '794': { nombre: 'Reversión del deterioro de créditos comerciales', tipo: 'I', grupo: '7' },
+  };
+
+  // Mapeo de categorías de gasto a cuentas PGC
+  const CATEGORIA_A_CUENTA = {
+    'semillas': { cuenta: '601', nombre: 'Compras de materias primas' },
+    'materias_primas': { cuenta: '601', nombre: 'Compras de materias primas' },
+    'sustratos': { cuenta: '602', nombre: 'Compras de otros aprovisionamientos' },
+    'embalajes': { cuenta: '602', nombre: 'Compras de otros aprovisionamientos' },
+    'suministros': { cuenta: '628', nombre: 'Suministros' },
+    'agua': { cuenta: '628', nombre: 'Suministros' },
+    'luz': { cuenta: '628', nombre: 'Suministros' },
+    'gas': { cuenta: '628', nombre: 'Suministros' },
+    'energia': { cuenta: '628', nombre: 'Suministros' },
+    'alquiler': { cuenta: '621', nombre: 'Arrendamientos y cánones' },
+    'transporte': { cuenta: '624', nombre: 'Transportes' },
+    'logistica': { cuenta: '624', nombre: 'Transportes' },
+    'servicios': { cuenta: '629', nombre: 'Otros servicios' },
+    'asesoria': { cuenta: '623', nombre: 'Servicios profesionales independientes' },
+    'legal': { cuenta: '623', nombre: 'Servicios profesionales independientes' },
+    'gestoria': { cuenta: '623', nombre: 'Servicios profesionales independientes' },
+    'nominas': { cuenta: '640', nombre: 'Sueldos y salarios' },
+    'salarios': { cuenta: '640', nombre: 'Sueldos y salarios' },
+    'seguridad_social': { cuenta: '642', nombre: 'Seguridad Social a cargo empresa' },
+    'seguros': { cuenta: '625', nombre: 'Primas de seguros' },
+    'banco': { cuenta: '626', nombre: 'Servicios bancarios y similares' },
+    'comisiones_bancarias': { cuenta: '626', nombre: 'Servicios bancarios y similares' },
+    'publicidad': { cuenta: '627', nombre: 'Publicidad, propaganda y RRPP' },
+    'marketing': { cuenta: '627', nombre: 'Publicidad, propaganda y RRPP' },
+    'reparaciones': { cuenta: '622', nombre: 'Reparaciones y conservación' },
+    'mantenimiento': { cuenta: '622', nombre: 'Reparaciones y conservación' },
+    'tributos': { cuenta: '631', nombre: 'Otros tributos' },
+    'impuestos': { cuenta: '631', nombre: 'Otros tributos' },
+    'software': { cuenta: '629', nombre: 'Otros servicios' },
+    'formacion': { cuenta: '649', nombre: 'Otros gastos sociales' },
+    'otros': { cuenta: '629', nombre: 'Otros servicios' },
+  };
+
+  // Categorías de gasto para el formulario (ordenadas por grupo PGC)
+  const CATEGORIAS_GASTO = [
+    { value: 'semillas', label: '🌱 Semillas y materias primas (601)', cuenta: '601' },
+    { value: 'sustratos', label: '🪴 Sustratos y aprovisionamientos (602)', cuenta: '602' },
+    { value: 'embalajes', label: '📦 Embalajes y envases (602)', cuenta: '602' },
+    { value: 'alquiler', label: '🏠 Alquiler local (621)', cuenta: '621' },
+    { value: 'reparaciones', label: '🔧 Reparaciones y mantenimiento (622)', cuenta: '622' },
+    { value: 'asesoria', label: '👔 Asesoría/Gestoría (623)', cuenta: '623' },
+    { value: 'transporte', label: '🚚 Transporte y logística (624)', cuenta: '624' },
+    { value: 'seguros', label: '🛡️ Seguros (625)', cuenta: '625' },
+    { value: 'banco', label: '🏦 Comisiones bancarias (626)', cuenta: '626' },
+    { value: 'publicidad', label: '📣 Publicidad y marketing (627)', cuenta: '627' },
+    { value: 'energia', label: '💡 Suministros: luz/agua/gas (628)', cuenta: '628' },
+    { value: 'servicios', label: '⚙️ Otros servicios (629)', cuenta: '629' },
+    { value: 'tributos', label: '📋 Tributos e impuestos (631)', cuenta: '631' },
+    { value: 'nominas', label: '👥 Sueldos y salarios (640)', cuenta: '640' },
+    { value: 'seguridad_social', label: '🏥 Seguridad Social empresa (642)', cuenta: '642' },
+    { value: 'otros', label: '📝 Otros gastos (629)', cuenta: '629' },
+  ];
+
+  // Formas de pago para gastos
+  const FORMAS_PAGO = [
+    { value: 'banco', label: '🏦 Banco sociedad (572)', cuenta: '572' },
+    { value: 'caja', label: '💵 Caja (570)', cuenta: '570' },
+    { value: 'socio_nico', label: '👤 Deuda a Nico (551)', cuenta: '551' },
+    { value: 'socio_peri', label: '👤 Deuda a Peri (551)', cuenta: '551' },
+    { value: 'socio_guzman', label: '👤 Deuda a Guzmán (551)', cuenta: '551' },
+    { value: 'tarjeta_empresa', label: '💳 Tarjeta empresa (572)', cuenta: '572' },
+    { value: 'transferencia', label: '📤 Transferencia (572)', cuenta: '572' },
+  ];
+
+  // Estados de cobro
+  const ESTADOS_COBRO = {
+    'pendiente': { label: 'Pendiente', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
+    'cobrada': { label: 'Cobrada', color: 'bg-green-100 text-green-700', icon: CheckCircle },
+    'vencida': { label: 'Vencida', color: 'bg-red-100 text-red-700', icon: AlertTriangle },
+    'parcial': { label: 'Cobro parcial', color: 'bg-blue-100 text-blue-700', icon: Clock },
   };
 
   // Estado para formulario de asientos
@@ -1333,14 +1450,25 @@ const MainApp = () => {
       const base = parseFloat((importeTotal / 1.21).toFixed(2));
       const iva = parseFloat((importeTotal - base).toFixed(2));
       
-      // Determinar cuenta de gasto según categoría
-      const cuentaGasto = gasto.categoria === 'semillas' ? '601' : 
-                         gasto.categoria === 'suministros' ? '628' :
-                         gasto.categoria === 'transporte' ? '624' :
-                         gasto.categoria === 'servicios' ? '629' :
-                         gasto.categoria === 'nominas' ? '640' :
-                         gasto.categoria === 'alquiler' ? '621' :
-                         gasto.categoria === 'energia' ? '628' : '602';
+      // Determinar cuenta de gasto según categoría usando el mapeo PGC
+      const mapeo = CATEGORIA_A_CUENTA[gasto.categoria] || { cuenta: '629', nombre: 'Otros servicios' };
+      const cuentaGasto = mapeo.cuenta;
+      
+      // Determinar cuenta de pago según forma de pago
+      const formaPago = gasto.forma_pago || 'banco';
+      let cuentaPago, conceptoPago;
+      
+      if (formaPago.startsWith('socio_')) {
+        cuentaPago = '551';
+        const socio = formaPago.replace('socio_', '');
+        conceptoPago = `C/C con socios - ${socio.charAt(0).toUpperCase() + socio.slice(1)}`;
+      } else if (formaPago === 'caja') {
+        cuentaPago = '570';
+        conceptoPago = 'Caja, euros';
+      } else {
+        cuentaPago = '572';
+        conceptoPago = 'Bancos c/c vista, euros';
+      }
       
       const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
         fecha: gasto.fecha,
@@ -1355,12 +1483,13 @@ const MainApp = () => {
         return;
       }
       
-      const nombreCuenta = PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos';
+      const nombreCuenta = PLAN_CUENTAS[cuentaGasto]?.nombre || mapeo.nombre;
       
+      // Asiento con cuenta de gasto, IVA y contrapartida (pago)
       const lineas = [
         { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: nombreCuenta, debe: base, haber: 0 },
         { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: iva, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: importeTotal },
+        { asiento_id: nuevoAsiento.id, cuenta: cuentaPago, concepto: conceptoPago, debe: 0, haber: importeTotal },
       ];
       
       console.log('Insertando líneas de gasto:', lineas);
@@ -1378,10 +1507,473 @@ const MainApp = () => {
       refetchAsientos();
       refetchAsientoLineas();
       
-      alert(`✅ Asiento ${numero} creado con ${lineasCreadas?.length || 0} líneas:\n\n${cuentaGasto} ${nombreCuenta}: ${base}€ (DEBE)\n472 IVA Soportado: ${iva}€ (DEBE)\n400 Proveedores: ${importeTotal}€ (HABER)`);
+      alert(`✅ Asiento ${numero} creado:\n\n${cuentaGasto} ${nombreCuenta}: ${base.toFixed(2)}€ (DEBE)\n472 IVA Soportado: ${iva.toFixed(2)}€ (DEBE)\n${cuentaPago} ${conceptoPago}: ${importeTotal.toFixed(2)}€ (HABER)`);
     } catch (error) {
       console.error('Error creando asiento desde gasto:', error);
       alert('❌ Error inesperado: ' + error.message);
+    }
+  };
+
+  // ==================== EXPORTACIÓN DE INFORMES CONTABLES ====================
+  
+  // Calcular saldos por cuenta
+  const calcularSaldosCuentas = () => {
+    const saldos = {};
+    
+    asientoLineasDB.forEach(linea => {
+      const cuenta = linea.cuenta;
+      if (!saldos[cuenta]) {
+        saldos[cuenta] = { debe: 0, haber: 0, saldo: 0 };
+      }
+      saldos[cuenta].debe += parseFloat(linea.debe) || 0;
+      saldos[cuenta].haber += parseFloat(linea.haber) || 0;
+    });
+    
+    // Calcular saldos
+    Object.keys(saldos).forEach(cuenta => {
+      const tipo = PLAN_CUENTAS[cuenta]?.tipo || 'A';
+      if (['A', 'G'].includes(tipo)) {
+        // Activo y Gastos: saldo deudor
+        saldos[cuenta].saldo = saldos[cuenta].debe - saldos[cuenta].haber;
+      } else {
+        // Pasivo, Ingresos, Patrimonio: saldo acreedor
+        saldos[cuenta].saldo = saldos[cuenta].haber - saldos[cuenta].debe;
+      }
+    });
+    
+    return saldos;
+  };
+
+  // Exportar Libro Diario a Excel
+  const exportarLibroDiario = () => {
+    const data = [];
+    
+    // Cabecera
+    data.push(['LIBRO DIARIO - ' + EMPRESA.nombre]);
+    data.push(['CIF: ' + EMPRESA.cif]);
+    data.push(['Ejercicio: ' + new Date().getFullYear()]);
+    data.push([]);
+    data.push(['Asiento', 'Fecha', 'Cuenta', 'Concepto', 'Debe', 'Haber']);
+    
+    asientosDB.sort((a, b) => new Date(a.fecha) - new Date(b.fecha)).forEach(asiento => {
+      const lineas = asientoLineasDB.filter(l => l.asiento_id === asiento.id);
+      lineas.forEach((linea, idx) => {
+        data.push([
+          idx === 0 ? asiento.numero : '',
+          idx === 0 ? formatDate(asiento.fecha) : '',
+          linea.cuenta + ' - ' + (PLAN_CUENTAS[linea.cuenta]?.nombre || linea.concepto),
+          linea.concepto,
+          parseFloat(linea.debe) || 0,
+          parseFloat(linea.haber) || 0,
+        ]);
+      });
+      data.push([]); // Línea vacía entre asientos
+    });
+    
+    // Totales
+    const totalDebe = asientoLineasDB.reduce((sum, l) => sum + (parseFloat(l.debe) || 0), 0);
+    const totalHaber = asientoLineasDB.reduce((sum, l) => sum + (parseFloat(l.haber) || 0), 0);
+    data.push(['', '', '', 'TOTALES', totalDebe, totalHaber]);
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Libro Diario');
+    XLSX.writeFile(wb, `Libro_Diario_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+    alert('✅ Libro Diario exportado');
+  };
+
+  // Exportar Libro Mayor a Excel
+  const exportarLibroMayor = () => {
+    const wb = XLSX.utils.book_new();
+    const saldos = calcularSaldosCuentas();
+    
+    // Una hoja por cada cuenta con movimientos
+    Object.entries(PLAN_CUENTAS).forEach(([codigo, cuenta]) => {
+      const movimientos = asientosDB.flatMap(a => 
+        asientoLineasDB.filter(l => l.asiento_id === a.id && l.cuenta === codigo)
+          .map(l => ({ ...l, fecha: a.fecha, asiento: a.numero, conceptoAsiento: a.concepto }))
+      );
+      
+      if (movimientos.length === 0) return;
+      
+      const data = [];
+      data.push([`LIBRO MAYOR - Cuenta ${codigo}: ${cuenta.nombre}`]);
+      data.push(['CIF: ' + EMPRESA.cif]);
+      data.push([]);
+      data.push(['Fecha', 'Asiento', 'Concepto', 'Debe', 'Haber', 'Saldo']);
+      
+      let saldoAcum = 0;
+      movimientos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha)).forEach(m => {
+        const debe = parseFloat(m.debe) || 0;
+        const haber = parseFloat(m.haber) || 0;
+        saldoAcum += (['A', 'G'].includes(cuenta.tipo) ? debe - haber : haber - debe);
+        data.push([
+          formatDate(m.fecha),
+          m.asiento,
+          m.conceptoAsiento,
+          debe,
+          haber,
+          saldoAcum,
+        ]);
+      });
+      
+      data.push([]);
+      data.push(['', '', 'SALDO FINAL', saldos[codigo]?.debe || 0, saldos[codigo]?.haber || 0, saldos[codigo]?.saldo || 0]);
+      
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const nombreHoja = `${codigo}_${cuenta.nombre}`.substring(0, 31).replace(/[\\/*?[\]]/g, '');
+      XLSX.utils.book_append_sheet(wb, ws, nombreHoja);
+    });
+    
+    XLSX.writeFile(wb, `Libro_Mayor_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+    alert('✅ Libro Mayor exportado');
+  };
+
+  // Exportar Balance de Sumas y Saldos
+  const exportarSumasYSaldos = () => {
+    const saldos = calcularSaldosCuentas();
+    const data = [];
+    
+    data.push(['BALANCE DE SUMAS Y SALDOS - ' + EMPRESA.nombre]);
+    data.push(['CIF: ' + EMPRESA.cif]);
+    data.push(['Fecha: ' + formatDate(new Date().toISOString())]);
+    data.push([]);
+    data.push(['Cuenta', 'Nombre', 'Sumas Debe', 'Sumas Haber', 'Saldo Deudor', 'Saldo Acreedor']);
+    
+    let totalSumasDebe = 0, totalSumasHaber = 0, totalSaldoDeudor = 0, totalSaldoAcreedor = 0;
+    
+    Object.entries(saldos).sort((a, b) => a[0].localeCompare(b[0])).forEach(([cuenta, s]) => {
+      const nombre = PLAN_CUENTAS[cuenta]?.nombre || 'Cuenta no definida';
+      const saldoDeudor = s.saldo > 0 ? s.saldo : 0;
+      const saldoAcreedor = s.saldo < 0 ? Math.abs(s.saldo) : 0;
+      
+      data.push([cuenta, nombre, s.debe, s.haber, saldoDeudor, saldoAcreedor]);
+      
+      totalSumasDebe += s.debe;
+      totalSumasHaber += s.haber;
+      totalSaldoDeudor += saldoDeudor;
+      totalSaldoAcreedor += saldoAcreedor;
+    });
+    
+    data.push([]);
+    data.push(['', 'TOTALES', totalSumasDebe, totalSumasHaber, totalSaldoDeudor, totalSaldoAcreedor]);
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sumas y Saldos');
+    XLSX.writeFile(wb, `Balance_Sumas_Saldos_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+    alert('✅ Balance de Sumas y Saldos exportado');
+  };
+
+  // Exportar Balance de Situación
+  const exportarBalanceSituacion = () => {
+    const saldos = calcularSaldosCuentas();
+    const data = [];
+    
+    data.push(['BALANCE DE SITUACIÓN - ' + EMPRESA.nombre]);
+    data.push(['CIF: ' + EMPRESA.cif]);
+    data.push(['Fecha cierre: ' + formatDate(new Date().toISOString())]);
+    data.push([]);
+    
+    // ACTIVO
+    data.push(['ACTIVO', '', '']);
+    data.push(['']);
+    
+    data.push(['A) ACTIVO NO CORRIENTE', '', '']);
+    let totalActivoNoCorrente = 0;
+    Object.entries(saldos).filter(([c]) => c.startsWith('2')).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalActivoNoCorrente += s.saldo;
+      }
+    });
+    data.push(['  Total Activo No Corriente', '', totalActivoNoCorrente]);
+    data.push(['']);
+    
+    data.push(['B) ACTIVO CORRIENTE', '', '']);
+    let totalActivoCorrente = 0;
+    
+    // Existencias (grupo 3)
+    data.push(['  I. Existencias', '', '']);
+    Object.entries(saldos).filter(([c]) => c.startsWith('3')).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['    ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalActivoCorrente += s.saldo;
+      }
+    });
+    
+    // Deudores (grupo 4 activo)
+    data.push(['  II. Deudores comerciales', '', '']);
+    Object.entries(saldos).filter(([c]) => ['430', '431', '435', '440'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['    ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalActivoCorrente += s.saldo;
+      }
+    });
+    
+    // HP deudora
+    data.push(['  III. Administraciones Públicas deudoras', '', '']);
+    Object.entries(saldos).filter(([c]) => ['472', '473'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['    ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalActivoCorrente += s.saldo;
+      }
+    });
+    
+    // Tesorería (grupo 5 activo)
+    data.push(['  IV. Efectivo y equivalentes', '', '']);
+    Object.entries(saldos).filter(([c]) => ['570', '572', '573', '555'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['    ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalActivoCorrente += s.saldo;
+      }
+    });
+    
+    data.push(['  Total Activo Corriente', '', totalActivoCorrente]);
+    data.push(['']);
+    data.push(['TOTAL ACTIVO', '', totalActivoNoCorrente + totalActivoCorrente]);
+    
+    data.push(['']);
+    data.push(['']);
+    
+    // PATRIMONIO NETO Y PASIVO
+    data.push(['PATRIMONIO NETO Y PASIVO', '', '']);
+    data.push(['']);
+    
+    data.push(['A) PATRIMONIO NETO', '', '']);
+    let totalPatrimonioNeto = 0;
+    Object.entries(saldos).filter(([c]) => c.startsWith('1') && ['100', '112', '113', '120', '121', '129'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalPatrimonioNeto += s.saldo;
+      }
+    });
+    data.push(['  Total Patrimonio Neto', '', totalPatrimonioNeto]);
+    data.push(['']);
+    
+    data.push(['B) PASIVO NO CORRIENTE', '', '']);
+    let totalPasivoNoCorrente = 0;
+    Object.entries(saldos).filter(([c]) => ['170', '171'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalPasivoNoCorrente += s.saldo;
+      }
+    });
+    data.push(['  Total Pasivo No Corriente', '', totalPasivoNoCorrente]);
+    data.push(['']);
+    
+    data.push(['C) PASIVO CORRIENTE', '', '']);
+    let totalPasivoCorrente = 0;
+    
+    // Proveedores
+    Object.entries(saldos).filter(([c]) => ['400', '401', '410'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalPasivoCorrente += s.saldo;
+      }
+    });
+    
+    // HP acreedora
+    Object.entries(saldos).filter(([c]) => ['475', '4750', '4751', '476', '477'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalPasivoCorrente += s.saldo;
+      }
+    });
+    
+    // Deudas a C/P
+    Object.entries(saldos).filter(([c]) => ['520', '521', '551', '465'].includes(c)).forEach(([cuenta, s]) => {
+      if (s.saldo !== 0) {
+        data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+        totalPasivoCorrente += s.saldo;
+      }
+    });
+    
+    data.push(['  Total Pasivo Corriente', '', totalPasivoCorrente]);
+    data.push(['']);
+    data.push(['TOTAL PATRIMONIO NETO Y PASIVO', '', totalPatrimonioNeto + totalPasivoNoCorrente + totalPasivoCorrente]);
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Balance Situación');
+    XLSX.writeFile(wb, `Balance_Situacion_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+    alert('✅ Balance de Situación exportado');
+  };
+
+  // Exportar Cuenta de Pérdidas y Ganancias (PyG)
+  const exportarPyG = () => {
+    const saldos = calcularSaldosCuentas();
+    const data = [];
+    
+    data.push(['CUENTA DE PÉRDIDAS Y GANANCIAS - ' + EMPRESA.nombre]);
+    data.push(['CIF: ' + EMPRESA.cif]);
+    data.push(['Ejercicio: ' + new Date().getFullYear()]);
+    data.push([]);
+    
+    // 1. RESULTADO DE EXPLOTACIÓN
+    data.push(['A) RESULTADO DE EXPLOTACIÓN', '', '']);
+    data.push(['']);
+    
+    // Ingresos de explotación
+    data.push(['1. Importe neto de la cifra de negocios', '', '']);
+    let totalVentas = 0;
+    Object.entries(saldos).filter(([c]) => ['700', '701', '705'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+      totalVentas += s.saldo;
+    });
+    // Devoluciones y rappels (restan)
+    Object.entries(saldos).filter(([c]) => ['708', '709'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+      totalVentas -= s.saldo;
+    });
+    data.push(['  TOTAL VENTAS', '', totalVentas]);
+    data.push(['']);
+    
+    // Variación de existencias
+    data.push(['2. Variación de existencias de productos', '', '']);
+    let variacionExist = 0;
+    Object.entries(saldos).filter(([c]) => ['710', '711'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+      variacionExist += s.saldo;
+    });
+    data.push(['']);
+    
+    // Aprovisionamientos
+    data.push(['3. Aprovisionamientos', '', '']);
+    let totalAprov = 0;
+    Object.entries(saldos).filter(([c]) => ['600', '601', '602', '607', '608', '610', '611'].includes(c)).forEach(([cuenta, s]) => {
+      const valor = ['608'].includes(c) ? -s.saldo : s.saldo; // Devoluciones restan
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -valor, '']);
+      totalAprov += valor;
+    });
+    data.push(['  TOTAL APROVISIONAMIENTOS', '', -totalAprov]);
+    data.push(['']);
+    
+    // Otros ingresos
+    data.push(['4. Otros ingresos de explotación', '', '']);
+    let otrosIngresos = 0;
+    Object.entries(saldos).filter(([c]) => ['759'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+      otrosIngresos += s.saldo;
+    });
+    data.push(['']);
+    
+    // Gastos de personal
+    data.push(['5. Gastos de personal', '', '']);
+    let gastosPersonal = 0;
+    Object.entries(saldos).filter(([c]) => ['640', '641', '642', '649'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+      gastosPersonal += s.saldo;
+    });
+    data.push(['  TOTAL GASTOS PERSONAL', '', -gastosPersonal]);
+    data.push(['']);
+    
+    // Otros gastos de explotación
+    data.push(['6. Otros gastos de explotación', '', '']);
+    let otrosGastos = 0;
+    Object.entries(saldos).filter(([c]) => ['621', '622', '623', '624', '625', '626', '627', '628', '629', '631'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+      otrosGastos += s.saldo;
+    });
+    data.push(['  TOTAL OTROS GASTOS', '', -otrosGastos]);
+    data.push(['']);
+    
+    // Amortizaciones
+    data.push(['7. Amortización del inmovilizado', '', '']);
+    let amortizaciones = 0;
+    Object.entries(saldos).filter(([c]) => ['680', '681'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+      amortizaciones += s.saldo;
+    });
+    data.push(['']);
+    
+    // Deterioros
+    data.push(['8. Deterioro y resultado por enajenaciones', '', '']);
+    let deterioros = 0;
+    Object.entries(saldos).filter(([c]) => ['694', '794'].includes(c)).forEach(([cuenta, s]) => {
+      const valor = c.startsWith('7') ? s.saldo : -s.saldo;
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), valor, '']);
+      deterioros += c.startsWith('7') ? s.saldo : -s.saldo;
+    });
+    data.push(['']);
+    
+    const resultadoExplotacion = totalVentas + variacionExist - totalAprov + otrosIngresos - gastosPersonal - otrosGastos - amortizaciones + deterioros;
+    data.push(['A) RESULTADO DE EXPLOTACIÓN', '', resultadoExplotacion]);
+    data.push(['']);
+    
+    // B) RESULTADO FINANCIERO
+    data.push(['B) RESULTADO FINANCIERO', '', '']);
+    let ingresosFinancieros = 0;
+    Object.entries(saldos).filter(([c]) => ['762', '769'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
+      ingresosFinancieros += s.saldo;
+    });
+    let gastosFinancieros = 0;
+    Object.entries(saldos).filter(([c]) => ['662', '669'].includes(c)).forEach(([cuenta, s]) => {
+      data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), -s.saldo, '']);
+      gastosFinancieros += s.saldo;
+    });
+    const resultadoFinanciero = ingresosFinancieros - gastosFinancieros;
+    data.push(['B) RESULTADO FINANCIERO', '', resultadoFinanciero]);
+    data.push(['']);
+    
+    // C) RESULTADO ANTES DE IMPUESTOS
+    const resultadoAI = resultadoExplotacion + resultadoFinanciero;
+    data.push(['C) RESULTADO ANTES DE IMPUESTOS', '', resultadoAI]);
+    data.push(['']);
+    
+    // Estimación IS (25% para PYMEs)
+    const impuestoEstimado = resultadoAI > 0 ? resultadoAI * 0.25 : 0;
+    data.push(['Impuesto sobre beneficios (estimado 25%)', '', -impuestoEstimado]);
+    data.push(['']);
+    
+    const resultadoEjercicio = resultadoAI - impuestoEstimado;
+    data.push(['D) RESULTADO DEL EJERCICIO', '', resultadoEjercicio]);
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'PyG');
+    XLSX.writeFile(wb, `PyG_${EMPRESA.cif}_${new Date().getFullYear()}.xlsx`);
+    alert('✅ Cuenta de Pérdidas y Ganancias exportada');
+  };
+
+  // Registrar cobro de factura
+  const registrarCobro = async (facturaId, fechaCobro = new Date().toISOString().split('T')[0]) => {
+    try {
+      const factura = facturas.find(f => f.id === facturaId);
+      if (!factura) return;
+      
+      await supabase.from('facturas').update({
+        estado_cobro: 'cobrada',
+        fecha_cobro: fechaCobro,
+      }).eq('id', facturaId);
+      
+      // Crear asiento de cobro
+      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
+      const numero = `A${(count || 0) + 1}`;
+      
+      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+        fecha: fechaCobro,
+        numero,
+        concepto: `Cobro Factura ${factura.numero_factura}`,
+        referencia: `COB-${facturaId}`,
+      }).select().single();
+      
+      if (!error) {
+        const lineas = [
+          { asiento_id: nuevoAsiento.id, cuenta: '572', concepto: 'Bancos c/c', debe: factura.total, haber: 0 },
+          { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: 0, haber: factura.total },
+        ];
+        await supabase.from('asiento_lineas').insert(lineas);
+      }
+      
+      refetchFacturas();
+      refetchAsientos();
+      refetchAsientoLineas();
+      alert(`✅ Cobro registrado para factura ${factura.numero_factura}`);
+    } catch (error) {
+      console.error('Error registrando cobro:', error);
+      alert('❌ Error: ' + error.message);
     }
   };
 
@@ -2087,9 +2679,19 @@ const MainApp = () => {
   };
 
   const GastoForm = ({ gasto, onSave, onCancel }) => {
-    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor_id: null, importe: 0, pagado: false, factura_url: '' });
+    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor_id: null, importe: 0, pagado: false, forma_pago: 'banco', factura_url: '' });
     const [uploading, setUploading] = useState(false);
     const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
+
+    // Opciones de forma de pago
+    const formasPago = [
+      { value: 'banco', label: '🏦 Cuenta bancaria empresa (572)' },
+      { value: 'caja', label: '💵 Caja efectivo (570)' },
+      { value: 'tarjeta_empresa', label: '💳 Tarjeta empresa (572)' },
+      { value: 'socio_nico', label: '👤 Pagado por Nico - Deuda a socio (551)' },
+      { value: 'socio_peri', label: '👤 Pagado por Peri - Deuda a socio (551)' },
+      { value: 'socio_guzman', label: '👤 Pagado por Guzmán - Deuda a socio (551)' },
+    ];
 
     const handleFileUpload = async (e) => {
       const file = e.target.files?.[0];
@@ -2127,11 +2729,16 @@ const MainApp = () => {
       setFileName('');
     };
 
+    // Calcular base e IVA para mostrar
+    const base = form.importe ? (parseFloat(form.importe) / 1.21).toFixed(2) : '0.00';
+    const iva = form.importe ? (parseFloat(form.importe) - parseFloat(base)).toFixed(2) : '0.00';
+    const cuentaGasto = categoriasGasto[form.categoria]?.cuenta || '629';
+
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
-          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Select label="Categoría (cuenta PGC)" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
           <Select 
             label="Proveedor" 
@@ -2139,7 +2746,29 @@ const MainApp = () => {
             onChange={e => setForm({...form, proveedor_id: e.target.value ? parseInt(e.target.value) : null})} 
             options={[{ value: '', label: 'Sin proveedor' }, ...proveedores.map(p => ({ value: p.id, label: p.nombre }))]} 
           />
-          <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+          <Input label="Importe TOTAL con IVA (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+        </div>
+
+        {/* Desglose contable */}
+        {form.importe > 0 && (
+          <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-sm">
+            <p className="font-semibold text-purple-800 mb-2">📊 Desglose contable (asiento automático):</p>
+            <div className="grid grid-cols-3 gap-2 text-purple-700">
+              <div><span className="font-mono">{cuentaGasto}</span> Gasto: <strong>{base}€</strong> (D)</div>
+              <div><span className="font-mono">472</span> IVA Sop.: <strong>{iva}€</strong> (D)</div>
+              <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
+            </div>
+          </div>
+        )}
+
+        {/* Forma de pago */}
+        <div className="grid grid-cols-2 gap-4">
+          <Select 
+            label="Forma de pago" 
+            value={form.forma_pago || 'banco'} 
+            onChange={e => setForm({...form, forma_pago: e.target.value})} 
+            options={formasPago} 
+          />
         </div>
         
         {/* Adjuntar factura */}
@@ -3585,10 +4214,104 @@ const MainApp = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturasFiltradas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
-          <StatCard icon={Clock} label="Pendiente" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={Clock} label="Pendiente Cobro" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
-          <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida').length} color="bg-red-100 text-red-600" />
+          <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
         </div>
+
+        {/* Alertas de cobros pendientes/vencidos */}
+        {(() => {
+          const pendientes = facturasFiltradas.filter(f => f.estado === 'pendiente');
+          const vencidas = pendientes.filter(f => f.fecha_vencimiento && new Date(f.fecha_vencimiento) < new Date());
+          const porVencer = pendientes.filter(f => {
+            if (!f.fecha_vencimiento) return false;
+            const venc = new Date(f.fecha_vencimiento);
+            const hoy = new Date();
+            const diff = (venc - hoy) / (1000 * 60 * 60 * 24);
+            return diff >= 0 && diff <= 7;
+          });
+          
+          return (vencidas.length > 0 || porVencer.length > 0) && (
+            <Card className="p-4 bg-red-50 border-red-200">
+              <h3 className="font-bold text-red-800 mb-3 flex items-center gap-2"><AlertTriangle size={20} /> Seguimiento de Cobros</h3>
+              {vencidas.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-sm font-semibold text-red-700 mb-2">🚨 Facturas VENCIDAS ({vencidas.length}):</p>
+                  <div className="space-y-2">
+                    {vencidas.slice(0, 5).map(f => {
+                      const cliente = clientes.find(c => c.id === f.cliente_id);
+                      const diasVencida = Math.floor((new Date() - new Date(f.fecha_vencimiento)) / (1000 * 60 * 60 * 24));
+                      return (
+                        <div key={f.id} className="flex items-center justify-between bg-white p-2 rounded-lg">
+                          <div>
+                            <span className="font-bold">{f.numero_factura || f.id}</span>
+                            <span className="mx-2">-</span>
+                            <span>{cliente?.nombre}</span>
+                            <span className="ml-2 text-red-600 text-sm">({diasVencida} días vencida)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-red-700">{formatCurrency(f.total)}</span>
+                            <Button size="sm" onClick={() => registrarCobro(f.id)}>
+                              <Check size={14} /> Cobrar
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {porVencer.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold text-amber-700 mb-2">⚠️ Por vencer en 7 días ({porVencer.length}):</p>
+                  <div className="space-y-2">
+                    {porVencer.slice(0, 3).map(f => {
+                      const cliente = clientes.find(c => c.id === f.cliente_id);
+                      const diasRestantes = Math.ceil((new Date(f.fecha_vencimiento) - new Date()) / (1000 * 60 * 60 * 24));
+                      return (
+                        <div key={f.id} className="flex items-center justify-between bg-white p-2 rounded-lg">
+                          <div>
+                            <span className="font-bold">{f.numero_factura || f.id}</span>
+                            <span className="mx-2">-</span>
+                            <span>{cliente?.nombre}</span>
+                            <span className="ml-2 text-amber-600 text-sm">(vence en {diasRestantes} días)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold">{formatCurrency(f.total)}</span>
+                            <Button size="sm" variant="secondary" onClick={() => registrarCobro(f.id)}>
+                              <Check size={14} /> Cobrar
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })()}
+
+        {/* Política de cobros */}
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Euro size={20} className="text-blue-600" />
+              </div>
+              <div>
+                <p className="font-bold text-blue-800">Política de Cobros: AL CONTADO</p>
+                <p className="text-sm text-blue-600">Vencimiento: mismo día de entrega del pedido</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-blue-700">Pendiente total:</p>
+              <p className="text-xl font-black text-blue-800">
+                {formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))}
+              </p>
+            </div>
+          </div>
+        </Card>
 
         {selectedFacturas.length > 0 && (
           <Card className="p-3 bg-orange-50 border-orange-200 flex items-center justify-between">
@@ -3646,7 +4369,15 @@ const MainApp = () => {
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
-                        {factura.estado === 'pendiente' && <button onClick={async () => { await supabase.from('facturas').update({ estado: 'pagada' }).eq('id', factura.id); refetchFacturas(); }} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagada"><Check size={16} /></button>}
+                        {factura.estado === 'pendiente' && (
+                          <button 
+                            onClick={() => registrarCobro(factura.id)} 
+                            className="p-2 text-green-600 hover:bg-green-50 rounded-lg" 
+                            title="Registrar cobro (genera asiento 572/430)"
+                          >
+                            <Check size={16} />
+                          </button>
+                        )}
                         <button onClick={() => handleDeleteFactura(factura.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
                       </div>
                     </td>
@@ -6079,6 +6810,41 @@ Firma repartidor: _________________
           </p>
         </Card>
 
+        {/* INFORMES CONTABLES OFICIALES */}
+        <Card className="p-5 bg-purple-50 border-purple-200">
+          <h3 className="text-lg font-bold text-purple-900 mb-4">📚 Informes Contables Oficiales (PGC España)</h3>
+          <p className="text-sm text-purple-700 mb-4">Documentación para Registro Mercantil y gestiones fiscales</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <Button variant="secondary" className="flex-col h-auto py-3" onClick={exportarLibroDiario}>
+              <FileText size={20} className="mb-1 text-purple-600" />
+              <span className="text-xs font-bold">Libro Diario</span>
+            </Button>
+            <Button variant="secondary" className="flex-col h-auto py-3" onClick={exportarLibroMayor}>
+              <FileText size={20} className="mb-1 text-purple-600" />
+              <span className="text-xs font-bold">Libro Mayor</span>
+            </Button>
+            <Button variant="secondary" className="flex-col h-auto py-3" onClick={exportarSumasYSaldos}>
+              <FileText size={20} className="mb-1 text-purple-600" />
+              <span className="text-xs font-bold">Sumas y Saldos</span>
+            </Button>
+            <Button variant="secondary" className="flex-col h-auto py-3" onClick={exportarBalanceSituacion}>
+              <FileText size={20} className="mb-1 text-purple-600" />
+              <span className="text-xs font-bold">Balance Situación</span>
+            </Button>
+            <Button variant="secondary" className="flex-col h-auto py-3" onClick={exportarPyG}>
+              <FileText size={20} className="mb-1 text-purple-600" />
+              <span className="text-xs font-bold">PyG</span>
+            </Button>
+          </div>
+          <div className="mt-4 p-3 bg-white rounded-lg text-xs text-neutral-600">
+            <p><strong>📖 Libro Diario:</strong> Registro cronológico de todos los asientos</p>
+            <p><strong>📚 Libro Mayor:</strong> Movimientos por cuenta contable</p>
+            <p><strong>⚖️ Sumas y Saldos:</strong> Balance de comprobación</p>
+            <p><strong>📊 Balance:</strong> Activo, Pasivo y Patrimonio Neto</p>
+            <p><strong>💰 PyG:</strong> Cuenta de Pérdidas y Ganancias</p>
+          </div>
+        </Card>
+
         <Card className="p-5">
           <h3 className="text-lg font-bold text-neutral-900 mb-4">📊 Resumen IVA Trimestral</h3>
           <div className="overflow-x-auto">
@@ -6210,11 +6976,6 @@ Firma repartidor: _________________
                   </div>
                 </div>
               )}
-              
-              {/* Debug info */}
-              <div className="p-2 bg-blue-50 rounded text-xs text-blue-700">
-                📊 Debug: {asientosDB.length} asientos, {asientoLineasDB.length} líneas cargadas
-              </div>
               
               {asientosDB.length === 0 ? (
                 <div className="text-center py-8 text-neutral-500">
