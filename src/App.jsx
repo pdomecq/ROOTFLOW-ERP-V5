@@ -257,13 +257,25 @@ const estadoLeadConfig = {
 };
 
 const tipoClienteConfig = {
-  mercamadrid: { label: "Mercamadrid", icon: Building2, color: "text-orange-600 bg-orange-50 border-orange-200" },
-  hotel: { label: "Hotel", icon: Building2, color: "text-blue-600 bg-blue-50 border-blue-200" },
-  restaurante: { label: "Restaurante", icon: UtensilsCrossed, color: "text-green-600 bg-green-50 border-green-200" },
-  catering: { label: "Catering", icon: Truck, color: "text-purple-600 bg-purple-50 border-purple-200" },
-  tienda: { label: "Tienda", icon: Package, color: "text-pink-600 bg-pink-50 border-pink-200" },
+  mercamadrid: { label: "Mercamadrid (Mayorista)", icon: Building2, color: "text-orange-600 bg-orange-50 border-orange-200" },
+  hotel: { label: "Hotel (HORECA)", icon: Building2, color: "text-blue-600 bg-blue-50 border-blue-200" },
+  restaurante: { label: "Restaurante (HORECA)", icon: UtensilsCrossed, color: "text-green-600 bg-green-50 border-green-200" },
+  catering: { label: "Catering (HORECA)", icon: Truck, color: "text-purple-600 bg-purple-50 border-purple-200" },
+  tienda: { label: "Tienda/Frutería (Minorista)", icon: Package, color: "text-pink-600 bg-pink-50 border-pink-200" },
   otro: { label: "Otro", icon: MoreVertical, color: "text-neutral-600 bg-neutral-50 border-neutral-200" },
 };
+
+// Tipos de IVA en España
+const TIPOS_IVA = {
+  general: { valor: 21, label: '21% General', re: 5.2 },
+  reducido: { valor: 10, label: '10% Reducido', re: 1.4 },
+  superreducido: { valor: 4, label: '4% Superreducido (Alimentos)', re: 0.5 },
+  exento: { valor: 0, label: '0% Exento', re: 0 },
+};
+
+// IVA para productos alimenticios (microbrotes) = 4%
+const IVA_VENTAS = 4; // Superreducido para alimentos
+const RE_VENTAS = 0.5; // Recargo de equivalencia para alimentos
 
 const zonaConfig = {
   norte: { label: "Norte", color: "bg-sky-100 text-sky-700" },
@@ -1416,12 +1428,19 @@ const MainApp = () => {
       const totalFactura = parseFloat((factura.total || 0).toFixed(2));
       const baseImponible = parseFloat((factura.base_imponible || factura.subtotal || 0).toFixed(2));
       const ivaFactura = parseFloat((factura.iva || 0).toFixed(2));
+      const reImporte = parseFloat((factura.re_importe || 0).toFixed(2));
+      const ivaPorcentaje = factura.iva_porcentaje || IVA_VENTAS;
       
       const lineas = [
         { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: totalFactura, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: baseImponible },
-        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: ivaFactura },
+        { asiento_id: nuevoAsiento.id, cuenta: '701', concepto: 'Ventas de productos terminados (microbrotes)', debe: 0, haber: baseImponible },
+        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: `H.P. IVA Repercutido (${ivaPorcentaje}%)`, debe: 0, haber: ivaFactura },
       ];
+      
+      // Si hay recargo de equivalencia, añadir línea
+      if (reImporte > 0) {
+        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. Recargo Equivalencia (0,5%)', debe: 0, haber: reImporte });
+      }
       
       console.log('Insertando líneas:', lineas);
       
@@ -1438,7 +1457,8 @@ const MainApp = () => {
       refetchAsientos();
       refetchAsientoLineas();
       
-      alert(`✅ Asiento ${numero} creado con ${lineasCreadas?.length || 0} líneas:\n\n430 Clientes: ${totalFactura}€ (DEBE)\n700 Ventas: ${baseImponible}€ (HABER)\n477 IVA Rep.: ${ivaFactura}€ (HABER)`);
+      let mensajeRE = reImporte > 0 ? `\n477 RE: ${reImporte}€ (HABER)` : '';
+      alert(`✅ Asiento ${numero} creado:\n\n430 Clientes: ${totalFactura}€ (DEBE)\n701 Ventas: ${baseImponible}€ (HABER)\n477 IVA ${ivaPorcentaje}%: ${ivaFactura}€ (HABER)${mensajeRE}`);
     } catch (error) {
       console.error('Error creando asiento desde factura:', error);
       alert('❌ Error inesperado: ' + error.message);
@@ -1452,7 +1472,12 @@ const MainApp = () => {
       const numero = `A${(count || 0) + 1}`;
       
       const importeTotal = parseFloat(gasto.importe) || 0;
-      const base = parseFloat((importeTotal / 1.21).toFixed(2));
+      
+      // Usar el tipo de IVA seleccionado o por defecto 21%
+      const ivaTipo = gasto.iva_tipo || 'general';
+      const ivaPorcentaje = TIPOS_IVA[ivaTipo]?.valor || 21;
+      const divisor = 1 + (ivaPorcentaje / 100);
+      const base = parseFloat((importeTotal / divisor).toFixed(2));
       const iva = parseFloat((importeTotal - base).toFixed(2));
       
       // Determinar cuenta de gasto según categoría usando el mapeo PGC
@@ -1493,9 +1518,14 @@ const MainApp = () => {
       // Asiento con cuenta de gasto, IVA y contrapartida (pago)
       const lineas = [
         { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: nombreCuenta, debe: base, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: iva, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: cuentaPago, concepto: conceptoPago, debe: 0, haber: importeTotal },
       ];
+      
+      // Solo añadir línea de IVA si hay IVA
+      if (iva > 0) {
+        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '472', concepto: `H.P. IVA Soportado (${ivaPorcentaje}%)`, debe: iva, haber: 0 });
+      }
+      
+      lineas.push({ asiento_id: nuevoAsiento.id, cuenta: cuentaPago, concepto: conceptoPago, debe: 0, haber: importeTotal });
       
       console.log('Insertando líneas de gasto:', lineas);
       
@@ -2582,7 +2612,17 @@ const MainApp = () => {
         const fechaVencimiento = new Date(); 
         fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
         const baseImponible = total;
-        const iva = baseImponible * 0.21;
+        
+        // IVA 4% para alimentos (microbrotes)
+        const ivaPorcentaje = IVA_VENTAS; // 4%
+        const iva = baseImponible * (ivaPorcentaje / 100);
+        
+        // Recargo de Equivalencia (0.5%) para autónomos minoristas
+        const clienteFactura = clientes.find(c => c.id === form.cliente_id);
+        const aplicaRE = clienteFactura?.recargo_equivalencia || false;
+        const rePorcentaje = aplicaRE ? RE_VENTAS : 0; // 0.5%
+        const reImporte = baseImponible * (rePorcentaje / 100);
+        
         const fechaHoy = new Date().toISOString().split('T')[0];
         
         const facturaData = { 
@@ -2595,9 +2635,12 @@ const MainApp = () => {
           subtotal, 
           descuento_aplicado: descuentoAplicado, 
           base_imponible: baseImponible, 
-          iva_porcentaje: 21, 
-          iva, 
-          total: baseImponible + iva 
+          iva_porcentaje: ivaPorcentaje, 
+          iva,
+          recargo_equivalencia: aplicaRE,
+          re_porcentaje: rePorcentaje,
+          re_importe: reImporte,
+          total: baseImponible + iva + reImporte
         };
         
         await supabase.from('facturas').insert(facturaData);
@@ -2622,13 +2665,32 @@ const MainApp = () => {
 
   // ==================== FORMS ====================
   const ClienteForm = ({ cliente, onSave, onCancel }) => {
-    const [form, setForm] = useState(cliente || { nombre: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', descuento: 0, cif: '' });
+    const [form, setForm] = useState(cliente || { 
+      nombre: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', 
+      direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', 
+      descuento: 0, cif: '', recargo_equivalencia: false, tipo_fiscal: 'empresa' 
+    });
+    
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
-          <Input label="CIF/NIF" value={form.cif} onChange={e => setForm({...form, cif: e.target.value})} />
-          <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[{ value: 'mercamadrid', label: 'Mercamadrid' }, { value: 'hotel', label: 'Hotel' }, { value: 'restaurante', label: 'Restaurante' }, { value: 'catering', label: 'Catering' }, { value: 'tienda', label: 'Tienda' }]} />
+          <Input label="CIF/NIF" value={form.cif} onChange={e => setForm({...form, cif: e.target.value})} placeholder="B12345678 / 12345678A" />
+          <Select label="Tipo Cliente" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[
+            { value: 'mercamadrid', label: '🏪 Mercamadrid (Mayorista)' }, 
+            { value: 'hotel', label: '🏨 Hotel (HORECA)' }, 
+            { value: 'restaurante', label: '🍽️ Restaurante (HORECA)' }, 
+            { value: 'catering', label: '🚚 Catering (HORECA)' }, 
+            { value: 'tienda', label: '🍎 Tienda/Frutería (Minorista)' },
+            { value: 'otro', label: '📦 Otro' }
+          ]} />
+          <Select label="Tipo Fiscal" value={form.tipo_fiscal || 'empresa'} onChange={e => {
+            const esAutonomo = e.target.value === 'autonomo';
+            setForm({...form, tipo_fiscal: e.target.value, recargo_equivalencia: esAutonomo && form.tipo === 'tienda'});
+          }} options={[
+            { value: 'empresa', label: '🏢 Empresa (S.L., S.A.)' },
+            { value: 'autonomo', label: '👤 Autónomo (persona física)' },
+          ]} />
           <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Descuento (%)" type="number" value={form.descuento} onChange={e => setForm({...form, descuento: parseInt(e.target.value) || 0})} />
           <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
@@ -2638,7 +2700,34 @@ const MainApp = () => {
           <Input label="Código Postal" value={form.codigo_postal} onChange={e => setForm({...form, codigo_postal: e.target.value})} placeholder="28001" />
           <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{cliente ? 'Guardar' : 'Crear'}</Button></div>
+        
+        {/* Recargo de Equivalencia */}
+        {form.tipo_fiscal === 'autonomo' && (
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={form.recargo_equivalencia || false} 
+                onChange={e => setForm({...form, recargo_equivalencia: e.target.checked})} 
+                className="w-5 h-5 rounded border-neutral-300 text-amber-500" 
+              />
+              <div>
+                <span className="font-semibold text-amber-800">Aplicar Recargo de Equivalencia (0,5%)</span>
+                <p className="text-xs text-amber-600">Obligatorio para autónomos minoristas sujetos a este régimen fiscal</p>
+              </div>
+            </label>
+          </div>
+        )}
+        
+        <p className="text-xs text-neutral-500 p-3 bg-blue-50 rounded-lg">
+          <strong>💡 IVA Alimentos:</strong> Los microbrotes tributan al <strong>4% IVA superreducido</strong>. 
+          Si el cliente es autónomo minorista, añade el <strong>0,5% de Recargo de Equivalencia</strong>.
+        </p>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onSave(form)}>{cliente ? 'Guardar' : 'Crear'}</Button>
+        </div>
       </div>
     );
   };
@@ -2770,7 +2859,17 @@ const MainApp = () => {
   };
 
   const GastoForm = ({ gasto, onSave, onCancel }) => {
-    const [form, setForm] = useState(gasto || { fecha: new Date().toISOString().split('T')[0], categoria: 'otros', concepto: '', proveedor_id: null, importe: 0, pagado: false, forma_pago: 'banco', factura_url: '' });
+    const [form, setForm] = useState(gasto || { 
+      fecha: new Date().toISOString().split('T')[0], 
+      categoria: 'otros', 
+      concepto: '', 
+      proveedor_id: null, 
+      importe: 0, 
+      iva_tipo: 'general', // general, reducido, superreducido, exento
+      pagado: false, 
+      forma_pago: 'banco', 
+      factura_url: '' 
+    });
     const [uploading, setUploading] = useState(false);
     const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
 
@@ -2782,6 +2881,14 @@ const MainApp = () => {
       { value: 'socio_nico', label: '👤 Pagado por Nico - Deuda a socio (551)' },
       { value: 'socio_peri', label: '👤 Pagado por Peri - Deuda a socio (551)' },
       { value: 'socio_guzman', label: '👤 Pagado por Guzmán - Deuda a socio (551)' },
+    ];
+
+    // Tipos de IVA
+    const tiposIVA = [
+      { value: 'general', label: '21% General (servicios, suministros)' },
+      { value: 'reducido', label: '10% Reducido (transporte, hostelería)' },
+      { value: 'superreducido', label: '4% Superreducido (alimentos básicos)' },
+      { value: 'exento', label: '0% Exento (seguros, formación)' },
     ];
 
     const handleFileUpload = async (e) => {
@@ -2820,8 +2927,10 @@ const MainApp = () => {
       setFileName('');
     };
 
-    // Calcular base e IVA para mostrar
-    const base = form.importe ? (parseFloat(form.importe) / 1.21).toFixed(2) : '0.00';
+    // Calcular base e IVA según el tipo seleccionado
+    const ivaPorcentaje = TIPOS_IVA[form.iva_tipo || 'general']?.valor || 21;
+    const divisor = 1 + (ivaPorcentaje / 100);
+    const base = form.importe ? (parseFloat(form.importe) / divisor).toFixed(2) : '0.00';
     const iva = form.importe ? (parseFloat(form.importe) - parseFloat(base)).toFixed(2) : '0.00';
     const cuentaGasto = categoriasGasto[form.categoria]?.cuenta || '629';
 
@@ -2837,7 +2946,19 @@ const MainApp = () => {
             onChange={e => setForm({...form, proveedor_id: e.target.value ? parseInt(e.target.value) : null})} 
             options={[{ value: '', label: 'Sin proveedor' }, ...proveedores.map(p => ({ value: p.id, label: p.nombre }))]} 
           />
+          <Select 
+            label="Tipo de IVA" 
+            value={form.iva_tipo || 'general'} 
+            onChange={e => setForm({...form, iva_tipo: e.target.value})} 
+            options={tiposIVA} 
+          />
           <Input label="Importe TOTAL con IVA (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+          <Select 
+            label="Forma de pago" 
+            value={form.forma_pago || 'banco'} 
+            onChange={e => setForm({...form, forma_pago: e.target.value})} 
+            options={formasPago} 
+          />
         </div>
 
         {/* Desglose contable */}
@@ -2846,21 +2967,11 @@ const MainApp = () => {
             <p className="font-semibold text-purple-800 mb-2">📊 Desglose contable (asiento automático):</p>
             <div className="grid grid-cols-3 gap-2 text-purple-700">
               <div><span className="font-mono">{cuentaGasto}</span> Gasto: <strong>{base}€</strong> (D)</div>
-              <div><span className="font-mono">472</span> IVA Sop.: <strong>{iva}€</strong> (D)</div>
+              <div><span className="font-mono">472</span> IVA {ivaPorcentaje}%: <strong>{iva}€</strong> (D)</div>
               <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
             </div>
           </div>
         )}
-
-        {/* Forma de pago */}
-        <div className="grid grid-cols-2 gap-4">
-          <Select 
-            label="Forma de pago" 
-            value={form.forma_pago || 'banco'} 
-            onChange={e => setForm({...form, forma_pago: e.target.value})} 
-            options={formasPago} 
-          />
-        </div>
         
         {/* Adjuntar factura */}
         <div className="border-t pt-4">
@@ -4105,7 +4216,8 @@ const MainApp = () => {
             <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(factura.subtotal)}</span></div>
             ${factura.descuento_aplicado > 0 ? `<div class="totals-row"><span>Descuento</span><span>-${formatCurrency(factura.descuento_aplicado)}</span></div>` : ''}
             <div class="totals-row"><span>Base Imponible</span><span>${formatCurrency(factura.base_imponible)}</span></div>
-            <div class="totals-row"><span>IVA (21%)</span><span>${formatCurrency(factura.iva)}</span></div>
+            <div class="totals-row"><span>IVA (${factura.iva_porcentaje || 4}%)</span><span>${formatCurrency(factura.iva)}</span></div>
+            ${factura.recargo_equivalencia ? `<div class="totals-row"><span>Recargo Equiv. (${factura.re_porcentaje || 0.5}%)</span><span>${formatCurrency(factura.re_importe || 0)}</span></div>` : ''}
             <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(factura.total)}</span></div>
           </div>
           
@@ -4192,7 +4304,8 @@ const MainApp = () => {
               <div className="flex justify-between py-2 border-b"><span>Subtotal</span><span>{formatCurrency(factura.subtotal)}</span></div>
               {factura.descuento_aplicado > 0 && <div className="flex justify-between py-2 border-b text-green-600"><span>Descuento</span><span>-{formatCurrency(factura.descuento_aplicado)}</span></div>}
               <div className="flex justify-between py-2 border-b"><span>Base Imponible</span><span>{formatCurrency(factura.base_imponible)}</span></div>
-              <div className="flex justify-between py-2 border-b"><span>IVA (21%)</span><span>{formatCurrency(factura.iva)}</span></div>
+              <div className="flex justify-between py-2 border-b"><span>IVA ({factura.iva_porcentaje || 4}%)</span><span>{formatCurrency(factura.iva)}</span></div>
+              {factura.recargo_equivalencia && <div className="flex justify-between py-2 border-b text-amber-600"><span>R.E. ({factura.re_porcentaje || 0.5}%)</span><span>{formatCurrency(factura.re_importe || 0)}</span></div>}
               <div className="flex justify-between py-3 text-xl font-black text-emerald-700 border-t-2 border-emerald-700"><span>TOTAL</span><span>{formatCurrency(factura.total)}</span></div>
             </div>
           </div>
@@ -4206,8 +4319,9 @@ const MainApp = () => {
                 return `- ${prod?.nombre || 'Producto'} x${item.cantidad}: ${formatCurrency(item.subtotal)}`;
               }).join('%0A');
               
+              const reTexto = factura.recargo_equivalencia ? `%0ARecargo Equiv. (${factura.re_porcentaje || 0.5}%): ${formatCurrency(factura.re_importe || 0)}` : '';
               const asunto = `Factura ${factura.id} - RootFlow Hydroponics`;
-              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (21%): ${formatCurrency(factura.iva)}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0AIBAN: ES00 0000 0000 0000 0000 0000%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
+              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (${factura.iva_porcentaje || 4}%): ${formatCurrency(factura.iva)}${reTexto}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0AIBAN: ES00 0000 0000 0000 0000 0000%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
               
               window.open(`mailto:${cliente?.email || ''}?subject=${asunto}&body=${cuerpo}`, '_blank');
             }}>
@@ -6790,8 +6904,13 @@ Firma repartidor: _________________
         return fecha.getFullYear() === year && t.meses.includes(fecha.getMonth());
       });
 
-      const ivaRepercutido = facturasT.reduce((sum, f) => sum + (f.iva || 0), 0);
-      const ivaSoportado = gastosT.reduce((sum, g) => sum + ((g.importe || 0) * 0.21), 0); // Estimación 21%
+      const ivaRepercutido = facturasT.reduce((sum, f) => sum + (f.iva || 0) + (f.re_importe || 0), 0);
+      // Calcular IVA soportado usando el tipo real de cada gasto
+      const ivaSoportado = gastosT.reduce((sum, g) => {
+        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+        const base = (g.importe || 0) / (1 + ivaPct/100);
+        return sum + ((g.importe || 0) - base);
+      }, 0);
       const resultado = ivaRepercutido - ivaSoportado;
 
       return {
@@ -6868,8 +6987,10 @@ Firma repartidor: _________________
           { header: 'Fecha', accessor: f => formatDate(f.fecha) },
           { header: 'Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.nombre || '' },
           { header: 'CIF Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.cif || '' },
-          { header: 'Base Imponible', accessor: f => f.subtotal?.toFixed(2) || '0.00' },
-          { header: 'IVA (21%)', accessor: f => f.iva?.toFixed(2) || '0.00' },
+          { header: 'Base Imponible', accessor: f => f.base_imponible?.toFixed(2) || f.subtotal?.toFixed(2) || '0.00' },
+          { header: 'Tipo IVA', accessor: f => `${f.iva_porcentaje || 4}%` },
+          { header: 'IVA', accessor: f => f.iva?.toFixed(2) || '0.00' },
+          { header: 'R.E.', accessor: f => f.recargo_equivalencia ? (f.re_importe?.toFixed(2) || '0.00') : '0.00' },
           { header: 'Total', accessor: f => f.total?.toFixed(2) || '0.00' },
           { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label || f.estado },
           { header: 'Fecha Cobro', accessor: f => f.estado === 'pagada' ? formatDate(f.updated_at) : '' },
@@ -6882,8 +7003,16 @@ Firma repartidor: _________________
           { header: 'CIF Proveedor', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.cif || '' },
           { header: 'Concepto', accessor: g => g.concepto },
           { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
-          { header: 'Base Imponible', accessor: g => (g.importe / 1.21).toFixed(2) },
-          { header: 'IVA (21%)', accessor: g => (g.importe - (g.importe / 1.21)).toFixed(2) },
+          { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21}%` },
+          { header: 'Base Imponible', accessor: g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            return (g.importe / (1 + ivaPct/100)).toFixed(2);
+          }},
+          { header: 'IVA', accessor: g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const base = g.importe / (1 + ivaPct/100);
+            return (g.importe - base).toFixed(2);
+          }},
           { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
           { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
           { header: 'URL Factura', accessor: g => g.factura_url || '' },
@@ -6898,21 +7027,29 @@ Firma repartidor: _________________
             tercero: clientes.find(c => c.id === f.cliente_id)?.nombre || '',
             cif: clientes.find(c => c.id === f.cliente_id)?.cif || '',
             concepto: `Factura ${f.id}`,
-            base: f.subtotal || 0,
+            base: f.base_imponible || f.subtotal || 0,
+            iva_pct: f.iva_porcentaje || 4,
             iva: f.iva || 0,
+            re: f.re_importe || 0,
             total: f.total || 0,
           })),
-          ...gastosFiltrados.map(g => ({
-            fecha: g.fecha,
-            tipo: 'GASTO',
-            documento: g.id,
-            tercero: proveedores.find(p => p.id === g.proveedor_id)?.nombre || '',
-            cif: proveedores.find(p => p.id === g.proveedor_id)?.cif || '',
-            concepto: g.concepto,
-            base: g.importe / 1.21,
-            iva: g.importe - (g.importe / 1.21),
-            total: g.importe || 0,
-          })),
+          ...gastosFiltrados.map(g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const base = g.importe / (1 + ivaPct/100);
+            return {
+              fecha: g.fecha,
+              tipo: 'GASTO',
+              documento: g.id,
+              tercero: proveedores.find(p => p.id === g.proveedor_id)?.nombre || '',
+              cif: proveedores.find(p => p.id === g.proveedor_id)?.cif || '',
+              concepto: g.concepto,
+              base: base,
+              iva_pct: ivaPct,
+              iva: g.importe - base,
+              re: 0,
+              total: g.importe || 0,
+            };
+          }),
         ].sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
         
         const columns = [
@@ -6923,7 +7060,9 @@ Firma repartidor: _________________
           { header: 'CIF/NIF', accessor: r => r.cif },
           { header: 'Concepto', accessor: r => r.concepto },
           { header: 'Base Imponible', accessor: r => r.base?.toFixed(2) },
+          { header: 'Tipo IVA', accessor: r => `${r.iva_pct}%` },
           { header: 'IVA', accessor: r => r.iva?.toFixed(2) },
+          { header: 'R.E.', accessor: r => r.re?.toFixed(2) },
           { header: 'Total', accessor: r => r.total?.toFixed(2) },
         ];
         exportToExcel(registros, `registro_contable_${periodoLabel}`, columns);
@@ -7176,7 +7315,7 @@ Firma repartidor: _________________
 
         <Card className="p-4 bg-amber-50 border-amber-200">
           <p className="text-sm text-amber-800">
-            <strong>⚠️ Nota:</strong> El IVA soportado es una estimación al 21%. Para datos exactos, asegúrate de registrar el IVA real en cada gasto.
+            <strong>💡 Nota:</strong> El IVA soportado se calcula usando el tipo de IVA registrado en cada gasto. Si no se especifica, se asume 21% general.
           </p>
         </Card>
 
