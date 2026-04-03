@@ -9,7 +9,7 @@ import {
   Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
-  Moon, Repeat, History, BellRing, XCircle, Settings, Navigation
+  Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -649,6 +649,7 @@ const MainApp = () => {
   
   // Panel de alertas
   const [showAlertasPanel, setShowAlertasPanel] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   
   // Dashboard - selector de periodo
   const [dashboardPeriodo, setDashboardPeriodo] = useState('mes_actual');
@@ -7721,9 +7722,106 @@ Firma repartidor: _________________
                 )}
               </div>
               
-              <div className={`flex items-center gap-2 px-2 md:px-3 py-2 ${darkMode ? 'bg-neutral-700' : 'bg-neutral-100'} rounded-xl`}>
-                <div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">{userProfile?.nombre?.charAt(0) || 'U'}</div>
-                <span className={`hidden md:inline text-sm font-semibold ${darkMode ? 'text-neutral-200' : 'text-neutral-700'}`}>{userProfile?.nombre?.split(' ')[0]}</span>
+              {/* Menú de usuario */}
+              <div className="relative">
+                <button 
+                  onClick={() => setShowUserMenu(!showUserMenu)}
+                  className={`flex items-center gap-2 px-2 md:px-3 py-2 ${darkMode ? 'bg-neutral-700 hover:bg-neutral-600' : 'bg-neutral-100 hover:bg-neutral-200'} rounded-xl transition-colors`}
+                >
+                  <div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center text-white text-sm font-bold">
+                    {currentUserProfile?.nombre?.charAt(0) || userProfile?.nombre?.charAt(0) || 'U'}
+                  </div>
+                  <span className={`hidden md:inline text-sm font-semibold ${darkMode ? 'text-neutral-200' : 'text-neutral-700'}`}>
+                    {currentUserProfile?.nombre?.split(' ')[0] || userProfile?.nombre?.split(' ')[0] || 'Usuario'}
+                  </span>
+                  <ChevronDown size={16} className={`hidden md:block ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`} />
+                </button>
+                
+                {/* Panel menú usuario desplegable */}
+                {showUserMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+                    <div className={`absolute right-0 top-12 w-64 ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border rounded-xl shadow-2xl z-50 overflow-hidden`}>
+                      {/* Info usuario */}
+                      <div className={`p-4 border-b ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-100 bg-neutral-50'}`}>
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-orange-500 flex items-center justify-center text-white text-lg font-bold">
+                            {currentUserProfile?.nombre?.charAt(0) || 'U'}
+                          </div>
+                          <div>
+                            <p className={`font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>
+                              {currentUserProfile?.nombre || 'Usuario'}
+                            </p>
+                            <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                              {currentUser?.email || 'Sin email'}
+                            </p>
+                            <Badge className="mt-1 text-xs bg-orange-100 text-orange-700">
+                              {currentUserProfile?.rol || 'usuario'}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Opciones del menú */}
+                      <div className="py-2">
+                        <button
+                          onClick={() => { setActiveSection('ajustes'); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 ${darkMode ? 'hover:bg-neutral-700 text-neutral-200' : 'hover:bg-neutral-50 text-neutral-700'} transition-colors`}
+                        >
+                          <User size={18} className="text-blue-500" />
+                          <div className="text-left">
+                            <p className="font-semibold text-sm">Mi Perfil</p>
+                            <p className={`text-xs ${darkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>Ver y editar tu información</p>
+                          </div>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveSection('ajustes'); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 ${darkMode ? 'hover:bg-neutral-700 text-neutral-200' : 'hover:bg-neutral-50 text-neutral-700'} transition-colors`}
+                        >
+                          <Settings size={18} className="text-purple-500" />
+                          <div className="text-left">
+                            <p className="font-semibold text-sm">Ajustes</p>
+                            <p className={`text-xs ${darkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>Configuración del sistema</p>
+                          </div>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveSection('ajustes'); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 ${darkMode ? 'hover:bg-neutral-700 text-neutral-200' : 'hover:bg-neutral-50 text-neutral-700'} transition-colors`}
+                        >
+                          <Clock size={18} className="text-emerald-500" />
+                          <div className="text-left">
+                            <p className="font-semibold text-sm">Historial de Cambios</p>
+                            <p className={`text-xs ${darkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>Auditoría y trazabilidad</p>
+                          </div>
+                        </button>
+                        
+                        <button
+                          onClick={() => { setActiveSection('ajustes'); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 ${darkMode ? 'hover:bg-neutral-700 text-neutral-200' : 'hover:bg-neutral-50 text-neutral-700'} transition-colors`}
+                        >
+                          <Users size={18} className="text-indigo-500" />
+                          <div className="text-left">
+                            <p className="font-semibold text-sm">Usuarios</p>
+                            <p className={`text-xs ${darkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>Ver equipo registrado</p>
+                          </div>
+                        </button>
+                      </div>
+                      
+                      {/* Cerrar sesión */}
+                      <div className={`border-t ${darkMode ? 'border-neutral-700' : 'border-neutral-200'} py-2`}>
+                        <button
+                          onClick={() => { signOut(); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-4 py-3 text-red-500 ${darkMode ? 'hover:bg-red-900/30' : 'hover:bg-red-50'} transition-colors`}
+                        >
+                          <LogOut size={18} />
+                          <p className="font-semibold text-sm">Cerrar Sesión</p>
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
