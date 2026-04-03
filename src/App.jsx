@@ -28,7 +28,7 @@ const EMPRESA = {
   telefono: '+34 638 161 990',
   email: 'info@rootflow.es',
   web: 'www.rootflow.es',
-  cif: 'B12345678'
+  cif: 'B27535137'
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
@@ -659,6 +659,16 @@ const MainApp = () => {
   const [filtroGastosMes, setFiltroGastosMes] = useState('todos');
   const [selectedGastos, setSelectedGastos] = useState([]);
   
+  // Selección múltiple para todas las secciones
+  const [selectedClientes, setSelectedClientes] = useState([]);
+  const [selectedProductos, setSelectedProductos] = useState([]);
+  const [selectedPedidos, setSelectedPedidos] = useState([]);
+  const [selectedLeads, setSelectedLeads] = useState([]);
+  const [selectedProveedores, setSelectedProveedores] = useState([]);
+  const [selectedTareas, setSelectedTareas] = useState([]);
+  const [selectedLotes, setSelectedLotes] = useState([]);
+  const [selectedAsientos, setSelectedAsientos] = useState([]);
+  
   // Informes - periodo
   const [informesPeriodo, setInformesPeriodo] = useState('mes_actual');
   
@@ -1149,6 +1159,95 @@ const MainApp = () => {
     }
   };
 
+  // Crear asiento automático desde una factura
+  const crearAsientoDesdeFactura = async (factura, cliente) => {
+    try {
+      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
+      const numero = `A${(count || 0) + 1}`;
+      
+      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+        fecha: factura.fecha,
+        numero,
+        concepto: `Factura ${factura.id} - ${cliente?.nombre || 'Cliente'}`,
+        referencia: `FAC-${factura.id}`,
+      }).select().single();
+      
+      if (error) throw error;
+      
+      const lineas = [
+        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: factura.total || 0, haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '700', concepto: 'Ventas de mercaderías', debe: 0, haber: factura.base_imponible || factura.subtotal || 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. IVA Repercutido (21%)', debe: 0, haber: factura.iva || 0 },
+      ];
+      
+      await supabase.from('asiento_lineas').insert(lineas);
+      refetchAsientos();
+      refetchAsientoLineas();
+      console.log(`✅ Asiento ${numero} creado para factura ${factura.id}`);
+    } catch (error) {
+      console.error('Error creando asiento desde factura:', error);
+    }
+  };
+
+  // Crear asiento automático desde un gasto
+  const crearAsientoDesdeGasto = async (gasto, proveedor) => {
+    try {
+      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
+      const numero = `A${(count || 0) + 1}`;
+      
+      const base = gasto.importe / 1.21;
+      const iva = gasto.importe - base;
+      
+      // Determinar cuenta de gasto según categoría
+      const cuentaGasto = gasto.categoria === 'semillas' ? '601' : 
+                         gasto.categoria === 'suministros' ? '628' :
+                         gasto.categoria === 'transporte' ? '624' :
+                         gasto.categoria === 'servicios' ? '629' :
+                         gasto.categoria === 'nominas' ? '640' :
+                         gasto.categoria === 'alquiler' ? '621' :
+                         gasto.categoria === 'energia' ? '628' : '602';
+      
+      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+        fecha: gasto.fecha,
+        numero,
+        concepto: `${gasto.concepto} - ${proveedor?.nombre || 'Proveedor'}`,
+        referencia: `GAS-${gasto.id}`,
+      }).select().single();
+      
+      if (error) throw error;
+      
+      const lineas = [
+        { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: PLAN_CUENTAS[cuentaGasto]?.nombre || 'Compras/Gastos', debe: parseFloat(base.toFixed(2)), haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '472', concepto: 'H.P. IVA Soportado (21%)', debe: parseFloat(iva.toFixed(2)), haber: 0 },
+        { asiento_id: nuevoAsiento.id, cuenta: '400', concepto: 'Proveedores', debe: 0, haber: parseFloat(gasto.importe.toFixed(2)) },
+      ];
+      
+      await supabase.from('asiento_lineas').insert(lineas);
+      refetchAsientos();
+      refetchAsientoLineas();
+      console.log(`✅ Asiento ${numero} creado para gasto ${gasto.id}`);
+    } catch (error) {
+      console.error('Error creando asiento desde gasto:', error);
+    }
+  };
+
+  // Eliminar múltiples registros
+  const handleDeleteMultiple = async (table, ids, refetchFn, setSelectedFn) => {
+    if (ids.length === 0) return;
+    if (!window.confirm(`¿Eliminar ${ids.length} elemento(s)?`)) return;
+    
+    try {
+      for (const id of ids) {
+        await supabase.from(table).delete().eq('id', id);
+      }
+      refetchFn();
+      setSelectedFn([]);
+    } catch (error) {
+      console.error('Error eliminando:', error);
+      alert('Error al eliminar');
+    }
+  };
+
   // Estado para exportación contable con selector de fechas
   const [exportPeriodo, setExportPeriodo] = useState('mes_actual');
   const [exportFechaInicio, setExportFechaInicio] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]);
@@ -1556,6 +1655,8 @@ const MainApp = () => {
   const handleSave = async (table, form, id = null) => {
     try {
       let result;
+      let newRecordId = null;
+      
       if (id) { 
         result = await supabase.from(table).update(form).eq('id', id); 
       } else {
@@ -1565,13 +1666,22 @@ const MainApp = () => {
           const { count } = await supabase.from('lotes').select('*', { count: 'exact', head: true });
           form.codigo = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
         }
-        result = await supabase.from(table).insert(form);
+        result = await supabase.from(table).insert(form).select();
+        if (result.data && result.data[0]) {
+          newRecordId = result.data[0].id;
+        }
       }
       
       if (result.error) {
         console.error('Error guardando:', result.error);
         alert('Error: ' + result.error.message);
         return;
+      }
+      
+      // ASIENTO CONTABLE AUTOMÁTICO para gastos nuevos
+      if (table === 'gastos' && !id && newRecordId) {
+        const proveedor = proveedores.find(p => p.id === form.proveedor_id);
+        await crearAsientoDesdeGasto({ ...form, id: newRecordId }, proveedor);
       }
       
       setShowModal(null);
@@ -1749,12 +1859,13 @@ const MainApp = () => {
         fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
         const baseImponible = total;
         const iva = baseImponible * 0.21;
+        const fechaHoy = new Date().toISOString().split('T')[0];
         
-        await supabase.from('facturas').insert({ 
+        const facturaData = { 
           id: facturaId, 
           pedido_id: pedidoId, 
           cliente_id: form.cliente_id, 
-          fecha: new Date().toISOString().split('T')[0], 
+          fecha: fechaHoy, 
           fecha_vencimiento: fechaVencimiento.toISOString().split('T')[0], 
           estado: 'pendiente', 
           subtotal, 
@@ -1763,7 +1874,13 @@ const MainApp = () => {
           iva_porcentaje: 21, 
           iva, 
           total: baseImponible + iva 
-        });
+        };
+        
+        await supabase.from('facturas').insert(facturaData);
+        
+        // ASIENTO CONTABLE AUTOMÁTICO para la factura
+        const cliente = clientes.find(c => c.id === form.cliente_id);
+        await crearAsientoDesdeFactura({ ...facturaData, id: facturaId }, cliente);
       }
       
       // Refrescar datos inmediatamente
@@ -2495,10 +2612,24 @@ const MainApp = () => {
             <button onClick={limpiarFiltrosClientes} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
           </div>
         )}
+        {selectedClientes.length > 0 && (
+          <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+            <span className="font-semibold text-blue-700">{selectedClientes.length} cliente(s) seleccionado(s)</span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setSelectedClientes([])}>Deseleccionar</Button>
+              <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('clientes', selectedClientes, refetchClientes, setSelectedClientes)}>
+                <Trash2 size={14} /> Eliminar
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
         <table className="w-full min-w-[600px]">
           <thead className="bg-neutral-900 text-white">
             <tr>
+              <th className="px-3 py-3 text-left w-10">
+                <input type="checkbox" checked={filtered.length > 0 && selectedClientes.length === filtered.length} onChange={e => setSelectedClientes(e.target.checked ? filtered.map(c => c.id) : [])} className="w-4 h-4 rounded" />
+              </th>
               <FilterableHeader label="Cliente" field="nombre" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
               <FilterableHeader label="Tipo" field="tipo" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={tipoOptions} />
               <FilterableHeader label="Zona" field="zona" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={zonaOptions} />
@@ -2510,8 +2641,12 @@ const MainApp = () => {
           <tbody>
             {filtered.map(cliente => {
               const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+              const isSelected = selectedClientes.includes(cliente.id);
               return (
-                <tr key={cliente.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                <tr key={cliente.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-blue-50' : ''}`}>
+                  <td className="px-3 py-3">
+                    <input type="checkbox" checked={isSelected} onChange={e => setSelectedClientes(e.target.checked ? [...selectedClientes, cliente.id] : selectedClientes.filter(id => id !== cliente.id))} className="w-4 h-4 rounded" />
+                  </td>
                   <td className="px-3 md:px-5 py-3 md:py-4">
                     <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
                     <p className="text-xs text-neutral-400">{cliente.cif || cliente.email}</p>
@@ -2880,8 +3015,22 @@ const MainApp = () => {
                   <button onClick={() => setFiltrosPedidos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
                 </div>
               )}
+              {selectedPedidos.length > 0 && (
+                <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+                  <span className="font-semibold text-blue-700">{selectedPedidos.length} pedido(s) seleccionado(s)</span>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setSelectedPedidos([])}>Deseleccionar</Button>
+                    <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('pedidos', selectedPedidos, refetchPedidos, setSelectedPedidos)}>
+                      <Trash2 size={14} /> Eliminar
+                    </Button>
+                  </div>
+                </div>
+              )}
               <table className="w-full min-w-[600px]">
                 <thead className="bg-neutral-900 text-white"><tr>
+                  <th className="px-3 py-3 text-left w-10">
+                    <input type="checkbox" checked={filtered.length > 0 && selectedPedidos.length === filtered.length} onChange={e => setSelectedPedidos(e.target.checked ? filtered.map(p => p.id) : [])} className="w-4 h-4 rounded" />
+                  </th>
                   <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th>
                   <FilterableHeader label="Cliente" field="cliente_id" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="text" />
                   <FilterableHeader label="Entrega" field="fecha_entrega" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="date" />
@@ -2894,8 +3043,12 @@ const MainApp = () => {
                     const cliente = clientes.find(c => c.id === pedido.cliente_id);
                     const config = estadoConfig[pedido.estado];
                     const Icon = config?.icon || Clock;
+                    const isSelected = selectedPedidos.includes(pedido.id);
                     return (
-                      <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'}`}>
+                      <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} ${isSelected ? 'bg-blue-50' : ''}`}>
+                        <td className="px-3 py-3">
+                          <input type="checkbox" checked={isSelected} onChange={e => setSelectedPedidos(e.target.checked ? [...selectedPedidos, pedido.id] : selectedPedidos.filter(id => id !== pedido.id))} className="w-4 h-4 rounded" />
+                        </td>
                         <td className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
                         <td className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>
                         <td className="px-3 md:px-5 py-3 md:py-4 text-sm hidden sm:table-cell">{formatDate(pedido.fecha_entrega)}</td>
@@ -3034,9 +3187,23 @@ const MainApp = () => {
               <button onClick={limpiarFiltros} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
             </div>
           )}
+          {selectedProductos.length > 0 && (
+            <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+              <span className="font-semibold text-blue-700">{selectedProductos.length} producto(s) seleccionado(s)</span>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setSelectedProductos([])}>Deseleccionar</Button>
+                <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('productos', selectedProductos, refetchProductos, setSelectedProductos)}>
+                  <Trash2 size={14} /> Eliminar
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
           <table className="w-full min-w-[500px]">
             <thead className="bg-neutral-900 text-white"><tr>
+              <th className="px-3 py-3 text-left w-10">
+                <input type="checkbox" checked={productosFiltrados.length > 0 && selectedProductos.length === productosFiltrados.length} onChange={e => setSelectedProductos(e.target.checked ? productosFiltrados.map(p => p.id) : [])} className="w-4 h-4 rounded" />
+              </th>
               <FilterableHeader label="Producto" field="nombre" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="text" />
               <FilterableHeader label="Categoría" field="categoria" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="select" options={categoriaOptions} />
               <FilterableHeader label="Precio" field="precio" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="number" />
@@ -3048,8 +3215,12 @@ const MainApp = () => {
               {productosFiltrados.map(producto => {
                 const margen = producto.precio > 0 && producto.coste > 0 ? ((producto.precio - producto.coste) / producto.precio * 100).toFixed(0) : '-';
                 const stockBajoFlag = producto.stock < (producto.stock_minimo || 20);
+                const isSelected = selectedProductos.includes(producto.id);
                 return (
-                  <tr key={producto.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                  <tr key={producto.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-blue-50' : ''}`}>
+                    <td className="px-3 py-3">
+                      <input type="checkbox" checked={isSelected} onChange={e => setSelectedProductos(e.target.checked ? [...selectedProductos, producto.id] : selectedProductos.filter(id => id !== producto.id))} className="w-4 h-4 rounded" />
+                    </td>
                     <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2 md:gap-3"><div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={16} /></div><div><p className="font-semibold text-sm">{producto.nombre}</p><p className="text-xs text-neutral-400 hidden sm:block">{producto.unidad}</p></div></div></td>
                     <td className="px-3 md:px-5 py-3 md:py-4"><Badge>{producto.categoria}</Badge></td>
                     <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-bold text-sm">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400 hidden md:block">Coste: {formatCurrency(producto.coste)}</p></td>
@@ -3698,7 +3869,7 @@ const MainApp = () => {
               <div class="productor">
                 <strong>Productor:</strong> ROOTFLOW HYDROPONICS SL<br>
                 C. Nueva, 16 • 28231 Las Rozas de Madrid<br>
-                CIF: B12345678
+                CIF: B27535137
               </div>
             </div>
           </div>
@@ -5977,22 +6148,63 @@ Firma repartidor: _________________
           {/* Libro Diario */}
           {vistaContable === 'diario' && (
             <div className="space-y-4">
+              {/* Barra de selección */}
+              {selectedAsientos.length > 0 && (
+                <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-center justify-between">
+                  <span className="font-semibold text-purple-700">{selectedAsientos.length} asiento(s) seleccionado(s)</span>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setSelectedAsientos([])}>Deseleccionar</Button>
+                    <Button variant="secondary" size="sm" className="text-red-600 hover:bg-red-50" onClick={async () => {
+                      if (window.confirm(`¿Eliminar ${selectedAsientos.length} asiento(s)?`)) {
+                        for (const id of selectedAsientos) {
+                          await supabase.from('asientos_contables').delete().eq('id', id);
+                        }
+                        refetchAsientos();
+                        refetchAsientoLineas();
+                        setSelectedAsientos([]);
+                      }
+                    }}>
+                      <Trash2 size={14} /> Eliminar seleccionados
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
               {asientosContables.length === 0 ? (
                 <div className="text-center py-8 text-neutral-500">
                   <FileText size={48} className="mx-auto mb-3 text-neutral-300" />
                   <p>No hay asientos contables</p>
-                  <p className="text-sm">Pulsa "Generar desde Facturas/Gastos" o "Nuevo Asiento"</p>
+                  <p className="text-sm">Los asientos se generan automáticamente al crear pedidos y gastos</p>
                 </div>
               ) : (
-                asientosContables.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(asiento => {
+                <>
+                  {/* Checkbox seleccionar todos */}
+                  <div className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg">
+                    <input 
+                      type="checkbox" 
+                      checked={asientosContables.length > 0 && selectedAsientos.length === asientosContables.length}
+                      onChange={e => setSelectedAsientos(e.target.checked ? asientosContables.map(a => a.id) : [])}
+                      className="w-4 h-4 rounded"
+                    />
+                    <span className="text-sm font-medium text-neutral-600">Seleccionar todos ({asientosContables.length})</span>
+                  </div>
+                  
+                  {asientosContables.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(asiento => {
                   const totalDebe = asiento.lineas?.reduce((sum, l) => sum + (l.debe || 0), 0) || 0;
                   const totalHaber = asiento.lineas?.reduce((sum, l) => sum + (l.haber || 0), 0) || 0;
                   const cuadrado = Math.abs(totalDebe - totalHaber) < 0.01;
+                  const isSelected = selectedAsientos.includes(asiento.id);
                   
                   return (
-                    <div key={asiento.id} className="border rounded-xl overflow-hidden">
+                    <div key={asiento.id} className={`border rounded-xl overflow-hidden ${isSelected ? 'ring-2 ring-purple-500' : ''}`}>
                       <div className={`p-3 flex items-center justify-between ${cuadrado ? 'bg-green-50' : 'bg-red-50'}`}>
                         <div className="flex items-center gap-3">
+                          <input 
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={e => setSelectedAsientos(e.target.checked ? [...selectedAsientos, asiento.id] : selectedAsientos.filter(id => id !== asiento.id))}
+                            className="w-4 h-4 rounded"
+                          />
                           <span className="font-mono text-sm bg-white px-2 py-1 rounded">{asiento.numero}</span>
                           <span className="text-sm text-neutral-600">{formatDate(asiento.fecha)}</span>
                           <span className="font-medium">{asiento.concepto}</span>
@@ -6030,7 +6242,8 @@ Firma repartidor: _________________
                       </table>
                     </div>
                   );
-                })
+                })}
+                </>
               )}
             </div>
           )}
