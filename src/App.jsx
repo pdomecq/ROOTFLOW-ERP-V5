@@ -720,6 +720,12 @@ const MainApp = () => {
   const [clienteSeleccionadoTarifa, setClienteSeleccionadoTarifa] = useState(null);
   const [editandoTarifa, setEditandoTarifa] = useState(null);
 
+  // Estados para Presupuestos
+  const [filtroEstadoPresupuesto, setFiltroEstadoPresupuesto] = useState('todos');
+  const [filtroClientePresupuesto, setFiltroClientePresupuesto] = useState('todos');
+  const [presupuestoDetalle, setPresupuestoDetalle] = useState(null);
+  const [presupuestoEditar, setPresupuestoEditar] = useState(null);
+
   // Estados de ordenación para tablas
   const [sortGastos, setSortGastos] = useState({ field: 'fecha', direction: 'desc' });
   const [sortFacturas, setSortFacturas] = useState({ field: 'fecha', direction: 'desc' });
@@ -8353,11 +8359,22 @@ Firma repartidor: _________________
       convertido: { label: 'Convertido a Pedido', color: 'bg-purple-100 text-purple-700', icon: ShoppingCart },
     };
 
-    const crearPresupuesto = async (form) => {
+    // Filtrar presupuestos
+    const presupuestosFiltrados = presupuestos.filter(p => {
+      if (filtroEstadoPresupuesto !== 'todos' && p.estado !== filtroEstadoPresupuesto) return false;
+      if (filtroClientePresupuesto !== 'todos' && p.cliente_id !== parseInt(filtroClientePresupuesto)) return false;
+      return true;
+    });
+
+    const crearPresupuesto = async (form, esEdicion = false) => {
       try {
-        const year = new Date().getFullYear();
-        const { count } = await supabase.from('presupuestos').select('*', { count: 'exact', head: true });
-        const presupuestoId = `P-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        let presupuestoId = form.id;
+        
+        if (!esEdicion) {
+          const year = new Date().getFullYear();
+          const { count } = await supabase.from('presupuestos').select('*', { count: 'exact', head: true });
+          presupuestoId = `P-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        }
         
         // Calcular totales
         let subtotal = 0;
@@ -8378,12 +8395,12 @@ Firma repartidor: _________________
         const reImporte = aplicaRE ? baseImponible * (RE_VENTAS / 100) : 0;
         const total = baseImponible + iva + reImporte;
         
-        const { data: nuevoPresupuesto, error } = await supabase.from('presupuestos').insert({
+        const presupuestoData = {
           id: presupuestoId,
           cliente_id: form.cliente_id,
-          fecha: new Date().toISOString().split('T')[0],
+          fecha: form.fecha || new Date().toISOString().split('T')[0],
           validez: form.validez || 15,
-          estado: 'pendiente',
+          estado: form.estado || 'pendiente',
           subtotal,
           descuento_aplicado: descuentoAplicado,
           base_imponible: baseImponible,
@@ -8393,9 +8410,18 @@ Firma repartidor: _________________
           re_importe: reImporte,
           total,
           notas: form.notas || '',
-        }).select().single();
-        
-        if (error) throw error;
+        };
+
+        if (esEdicion) {
+          // Actualizar presupuesto existente
+          await supabase.from('presupuestos').update(presupuestoData).eq('id', presupuestoId);
+          // Eliminar items anteriores
+          await supabase.from('presupuesto_items').delete().eq('presupuesto_id', presupuestoId);
+        } else {
+          // Insertar nuevo presupuesto
+          const { error } = await supabase.from('presupuestos').insert(presupuestoData);
+          if (error) throw error;
+        }
         
         // Insertar items
         for (const item of itemsConPrecio) {
@@ -8411,11 +8437,30 @@ Firma repartidor: _________________
         refetchPresupuestos();
         refetchPresupuestoItems();
         setShowModal(null);
-        alert(`✅ Presupuesto ${presupuestoId} creado correctamente`);
+        setPresupuestoEditar(null);
+        alert(`✅ Presupuesto ${presupuestoId} ${esEdicion ? 'actualizado' : 'creado'} correctamente`);
       } catch (error) {
         console.error('Error:', error);
-        alert('❌ Error al crear presupuesto: ' + error.message);
+        alert('❌ Error: ' + error.message);
       }
+    };
+
+    const duplicarPresupuesto = async (presupuesto) => {
+      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const form = {
+        cliente_id: presupuesto.cliente_id,
+        validez: presupuesto.validez,
+        items: items.map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })),
+        notas: `Copia de ${presupuesto.id}`,
+      };
+      await crearPresupuesto(form, false);
+    };
+
+    const extenderValidez = async (presupuesto, dias) => {
+      const nuevaValidez = (presupuesto.validez || 15) + dias;
+      await supabase.from('presupuestos').update({ validez: nuevaValidez }).eq('id', presupuesto.id);
+      refetchPresupuestos();
+      alert(`✅ Validez extendida a ${nuevaValidez} días`);
     };
 
     const convertirAPedido = async (presupuesto) => {
@@ -8424,7 +8469,6 @@ Firma repartidor: _________________
       try {
         const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
         
-        // Crear pedido usando la misma lógica
         const form = {
           cliente_id: presupuesto.cliente_id,
           fecha: new Date().toISOString().split('T')[0],
@@ -8435,8 +8479,6 @@ Firma repartidor: _________________
         };
         
         await handleCreatePedido(form);
-        
-        // Marcar presupuesto como convertido
         await supabase.from('presupuestos').update({ estado: 'convertido' }).eq('id', presupuesto.id);
         refetchPresupuestos();
         
@@ -8447,13 +8489,146 @@ Firma repartidor: _________________
       }
     };
 
-    // Formulario de presupuesto
-    const PresupuestoForm = ({ onSave, onCancel }) => {
+    // Imprimir presupuesto
+    const imprimirPresupuesto = (presupuesto) => {
+      const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
+      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const fechaValidez = new Date(presupuesto.fecha);
+      fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
+
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Presupuesto ${presupuesto.id}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
+            .header { display: flex; justify-content: space-between; margin-bottom: 30px; border-bottom: 2px solid #f97316; padding-bottom: 20px; }
+            .logo { font-size: 24px; font-weight: bold; color: #f97316; }
+            .empresa-info { text-align: right; font-size: 12px; color: #666; }
+            .titulo { font-size: 28px; font-weight: bold; color: #333; margin-bottom: 20px; }
+            .cliente-box { background: #f8f8f8; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+            .cliente-box h3 { margin: 0 0 10px 0; color: #333; }
+            .datos-presupuesto { display: flex; justify-content: space-between; margin-bottom: 20px; }
+            .dato { text-align: center; }
+            .dato .label { font-size: 12px; color: #666; }
+            .dato .value { font-size: 18px; font-weight: bold; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            th { background: #f97316; color: white; padding: 12px; text-align: left; }
+            td { padding: 12px; border-bottom: 1px solid #eee; }
+            .totales { text-align: right; margin-top: 20px; }
+            .totales .linea { display: flex; justify-content: flex-end; gap: 50px; padding: 5px 0; }
+            .totales .total { font-size: 24px; font-weight: bold; color: #f97316; border-top: 2px solid #333; padding-top: 10px; }
+            .notas { margin-top: 30px; padding: 15px; background: #fffbeb; border-radius: 8px; font-size: 12px; }
+            .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #999; }
+            .validez { background: #fef3c7; padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+            @media print { body { padding: 20px; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">🌱 ROOTFLOW</div>
+            <div class="empresa-info">
+              <strong>${EMPRESA.nombre}</strong><br>
+              ${EMPRESA.direccion}, ${EMPRESA.cp}<br>
+              ${EMPRESA.ciudad}<br>
+              Tel: ${EMPRESA.telefono}<br>
+              ${EMPRESA.email}<br>
+              CIF: ${EMPRESA.cif}
+            </div>
+          </div>
+          
+          <div class="titulo">PRESUPUESTO ${presupuesto.id}</div>
+          
+          <div class="validez">
+            ⏰ Válido hasta: <strong>${fechaValidez.toLocaleDateString('es-ES')}</strong>
+          </div>
+          
+          <div class="cliente-box">
+            <h3>Cliente</h3>
+            <strong>${cliente?.nombre || 'Sin cliente'}</strong><br>
+            ${cliente?.direccion || ''}<br>
+            ${cliente?.telefono ? 'Tel: ' + cliente.telefono : ''} ${cliente?.email ? '· ' + cliente.email : ''}<br>
+            ${cliente?.cif ? 'CIF/NIF: ' + cliente.cif : ''}
+          </div>
+          
+          <div class="datos-presupuesto">
+            <div class="dato">
+              <div class="label">Fecha</div>
+              <div class="value">${new Date(presupuesto.fecha).toLocaleDateString('es-ES')}</div>
+            </div>
+            <div class="dato">
+              <div class="label">Validez</div>
+              <div class="value">${presupuesto.validez} días</div>
+            </div>
+            <div class="dato">
+              <div class="label">Descuento Cliente</div>
+              <div class="value">${cliente?.descuento || 0}%</div>
+            </div>
+          </div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th style="text-align:center">Cantidad</th>
+                <th style="text-align:right">Precio Unit.</th>
+                <th style="text-align:right">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map(item => {
+                const prod = productos.find(p => p.id === item.producto_id);
+                return `
+                  <tr>
+                    <td>${prod?.nombre || 'Producto'}</td>
+                    <td style="text-align:center">${item.cantidad} ${prod?.unidad || 'ud'}</td>
+                    <td style="text-align:right">${Number(item.precio_unitario).toFixed(2)} €</td>
+                    <td style="text-align:right">${Number(item.subtotal).toFixed(2)} €</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+          
+          <div class="totales">
+            <div class="linea"><span>Subtotal:</span><span>${Number(presupuesto.subtotal).toFixed(2)} €</span></div>
+            ${presupuesto.descuento_aplicado > 0 ? `<div class="linea" style="color:green"><span>Descuento (${cliente?.descuento}%):</span><span>-${Number(presupuesto.descuento_aplicado).toFixed(2)} €</span></div>` : ''}
+            <div class="linea"><span>Base Imponible:</span><span>${Number(presupuesto.base_imponible).toFixed(2)} €</span></div>
+            <div class="linea"><span>IVA (${presupuesto.iva_porcentaje}%):</span><span>${Number(presupuesto.iva).toFixed(2)} €</span></div>
+            ${presupuesto.re_importe > 0 ? `<div class="linea"><span>R.E. (0,5%):</span><span>${Number(presupuesto.re_importe).toFixed(2)} €</span></div>` : ''}
+            <div class="linea total"><span>TOTAL:</span><span>${Number(presupuesto.total).toFixed(2)} €</span></div>
+          </div>
+          
+          ${presupuesto.notas ? `<div class="notas"><strong>Observaciones:</strong><br>${presupuesto.notas}</div>` : ''}
+          
+          <div class="footer">
+            Este presupuesto tiene una validez de ${presupuesto.validez} días desde la fecha de emisión.<br>
+            Los precios incluyen IVA. Forma de pago a convenir.<br><br>
+            ${EMPRESA.nombre} · CIF: ${EMPRESA.cif} · ${EMPRESA.web}
+          </div>
+        </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.print();
+    };
+
+    // Formulario de presupuesto mejorado
+    const PresupuestoForm = ({ onSave, onCancel, presupuestoExistente }) => {
+      const itemsIniciales = presupuestoExistente 
+        ? presupuestoItems.filter(i => i.presupuesto_id === presupuestoExistente.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }))
+        : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []);
+
       const [form, setForm] = useState({
-        cliente_id: clientes.length > 0 ? clientes[0].id : null,
-        validez: 15,
-        items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : [],
-        notas: '',
+        id: presupuestoExistente?.id || null,
+        cliente_id: presupuestoExistente?.cliente_id || (clientes.length > 0 ? clientes[0].id : null),
+        fecha: presupuestoExistente?.fecha || new Date().toISOString().split('T')[0],
+        validez: presupuestoExistente?.validez || 15,
+        estado: presupuestoExistente?.estado || 'pendiente',
+        items: itemsIniciales,
+        notas: presupuestoExistente?.notas || '',
       });
 
       if (clientes.length === 0 || productos.length === 0) {
@@ -8489,13 +8664,14 @@ Firma repartidor: _________________
 
       return (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <Select 
               label="Cliente" 
               value={form.cliente_id} 
               onChange={e => setForm({...form, cliente_id: parseInt(e.target.value)})} 
               options={clientes.map(c => ({ value: c.id, label: `${c.nombre} (${c.descuento}% dto)` }))} 
             />
+            <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
             <Input 
               label="Validez (días)" 
               type="number" 
@@ -8509,7 +8685,7 @@ Firma repartidor: _________________
             <div className="flex justify-between mb-2">
               <label className="text-sm font-semibold text-neutral-700">Productos</label>
               <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1">
-                <Plus size={16} />Añadir
+                <Plus size={16} />Añadir línea
               </button>
             </div>
             <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
@@ -8533,6 +8709,7 @@ Firma repartidor: _________________
                       className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
                       min="1" 
                     />
+                    <span className="text-sm text-neutral-500 w-20 text-right">{formatCurrency(precio)}/ud</span>
                     <span className={`text-sm font-semibold w-24 text-right ${tieneTarifa ? 'text-green-600' : ''}`}>
                       {tieneTarifa && '★'} {formatCurrency(precio * item.cantidad)}
                     </span>
@@ -8550,7 +8727,7 @@ Firma repartidor: _________________
 
           {/* Notas */}
           <div>
-            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas / Condiciones</label>
             <textarea 
               value={form.notas} 
               onChange={e => setForm({...form, notas: e.target.value})} 
@@ -8561,14 +8738,14 @@ Firma repartidor: _________________
           </div>
 
           {/* Totales */}
-          <Card className="p-4 bg-blue-50 border-blue-200">
+          <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
             <div className="space-y-1 text-sm">
               <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(subtotal)}</span></div>
               {descuento > 0 && <div className="flex justify-between text-green-600"><span>Descuento ({descuento}%):</span><span>-{formatCurrency(subtotal * descuento / 100)}</span></div>}
               <div className="flex justify-between"><span>Base Imponible:</span><span>{formatCurrency(baseImponible)}</span></div>
               <div className="flex justify-between"><span>IVA ({IVA_VENTAS}%):</span><span>{formatCurrency(iva)}</span></div>
               {re > 0 && <div className="flex justify-between text-amber-600"><span>R.E. ({RE_VENTAS}%):</span><span>{formatCurrency(re)}</span></div>}
-              <div className="flex justify-between text-lg font-black pt-2 border-t border-blue-200">
+              <div className="flex justify-between text-xl font-black pt-2 border-t border-blue-200">
                 <span>TOTAL:</span>
                 <span className="text-blue-600">{formatCurrency(total)}</span>
               </div>
@@ -8577,7 +8754,132 @@ Firma repartidor: _________________
 
           <div className="flex justify-end gap-3 pt-4 border-t">
             <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-            <Button onClick={() => onSave(form)}>Crear Presupuesto</Button>
+            <Button onClick={() => onSave(form, !!presupuestoExistente)}>
+              {presupuestoExistente ? 'Actualizar' : 'Crear'} Presupuesto
+            </Button>
+          </div>
+        </div>
+      );
+    };
+
+    // Modal detalle presupuesto
+    const DetallePresupuesto = ({ presupuesto, onClose }) => {
+      const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
+      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const config = estadoPresupuestoConfig[presupuesto.estado];
+      const fechaValidez = new Date(presupuesto.fecha);
+      fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
+      const expirado = fechaValidez < new Date() && (presupuesto.estado === 'pendiente' || presupuesto.estado === 'enviado');
+
+      return (
+        <div className="space-y-4">
+          {/* Cabecera */}
+          <div className="flex justify-between items-start">
+            <div>
+              <h2 className="text-2xl font-black text-neutral-900">{presupuesto.id}</h2>
+              <p className="text-neutral-500">{formatDate(presupuesto.fecha)}</p>
+            </div>
+            <Badge className={`${config.color} text-lg px-4 py-2`}>{config.label}</Badge>
+          </div>
+
+          {/* Cliente */}
+          <Card className="p-4 bg-neutral-50">
+            <h3 className="font-bold text-neutral-700 mb-2">Cliente</h3>
+            <p className="text-lg font-semibold">{cliente?.nombre}</p>
+            <p className="text-sm text-neutral-500">{cliente?.direccion}</p>
+            <p className="text-sm text-neutral-500">{cliente?.telefono} · {cliente?.email}</p>
+          </Card>
+
+          {/* Validez */}
+          <Card className={`p-4 ${expirado ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock size={20} className={expirado ? 'text-red-600' : 'text-amber-600'} />
+                <span className={`font-medium ${expirado ? 'text-red-700' : 'text-amber-700'}`}>
+                  {expirado ? '⚠️ Expirado' : `Válido hasta ${formatDate(fechaValidez)}`}
+                </span>
+              </div>
+              {!expirado && presupuesto.estado !== 'convertido' && (
+                <Button size="sm" variant="secondary" onClick={() => { extenderValidez(presupuesto, 15); onClose(); }}>
+                  +15 días
+                </Button>
+              )}
+            </div>
+          </Card>
+
+          {/* Productos */}
+          <div>
+            <h3 className="font-bold text-neutral-700 mb-2">Productos</h3>
+            <table className="w-full">
+              <thead className="bg-neutral-100">
+                <tr>
+                  <th className="text-left p-3 text-xs font-semibold">Producto</th>
+                  <th className="text-center p-3 text-xs font-semibold">Cantidad</th>
+                  <th className="text-right p-3 text-xs font-semibold">Precio</th>
+                  <th className="text-right p-3 text-xs font-semibold">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(item => {
+                  const prod = productos.find(p => p.id === item.producto_id);
+                  return (
+                    <tr key={item.id} className="border-b">
+                      <td className="p-3 font-medium">{prod?.nombre}</td>
+                      <td className="p-3 text-center">{item.cantidad} {prod?.unidad}</td>
+                      <td className="p-3 text-right">{formatCurrency(item.precio_unitario)}</td>
+                      <td className="p-3 text-right font-semibold">{formatCurrency(item.subtotal)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Totales */}
+          <Card className="p-4 bg-blue-50 border-blue-200">
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(presupuesto.subtotal)}</span></div>
+              {presupuesto.descuento_aplicado > 0 && <div className="flex justify-between text-green-600"><span>Descuento:</span><span>-{formatCurrency(presupuesto.descuento_aplicado)}</span></div>}
+              <div className="flex justify-between"><span>Base Imponible:</span><span>{formatCurrency(presupuesto.base_imponible)}</span></div>
+              <div className="flex justify-between"><span>IVA ({presupuesto.iva_porcentaje}%):</span><span>{formatCurrency(presupuesto.iva)}</span></div>
+              {presupuesto.re_importe > 0 && <div className="flex justify-between"><span>R.E.:</span><span>{formatCurrency(presupuesto.re_importe)}</span></div>}
+              <div className="flex justify-between text-xl font-black pt-2 border-t border-blue-200">
+                <span>TOTAL:</span><span className="text-blue-600">{formatCurrency(presupuesto.total)}</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Notas */}
+          {presupuesto.notas && (
+            <Card className="p-4 bg-amber-50">
+              <h3 className="font-bold text-neutral-700 mb-1">Notas</h3>
+              <p className="text-sm">{presupuesto.notas}</p>
+            </Card>
+          )}
+
+          {/* Acciones */}
+          <div className="flex justify-between pt-4 border-t">
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => imprimirPresupuesto(presupuesto)}>
+                <Printer size={16} /> Imprimir
+              </Button>
+              <Button variant="secondary" onClick={() => { duplicarPresupuesto(presupuesto); onClose(); }}>
+                <FileText size={16} /> Duplicar
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              {presupuesto.estado === 'pendiente' && (
+                <Button variant="secondary" onClick={() => { setPresupuestoEditar(presupuesto); onClose(); setShowModal('presupuesto'); }}>
+                  <Edit2 size={16} /> Editar
+                </Button>
+              )}
+              {(presupuesto.estado === 'aceptado' || presupuesto.estado === 'enviado') && (
+                <Button onClick={() => { convertirAPedido(presupuesto); onClose(); }}>
+                  <ShoppingCart size={16} /> Convertir a Pedido
+                </Button>
+              )}
+              <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+            </div>
           </div>
         </div>
       );
@@ -8630,11 +8932,40 @@ Firma repartidor: _________________
           </Card>
         </div>
 
+        {/* Filtros y acciones */}
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Filter size={20} className="text-neutral-400" />
+              <select 
+                value={filtroEstadoPresupuesto} 
+                onChange={e => setFiltroEstadoPresupuesto(e.target.value)}
+                className="px-3 py-2 rounded-lg border text-sm"
+              >
+                <option value="todos">Todos los estados</option>
+                {Object.entries(estadoPresupuestoConfig).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+              <select 
+                value={filtroClientePresupuesto} 
+                onChange={e => setFiltroClientePresupuesto(e.target.value)}
+                className="px-3 py-2 rounded-lg border text-sm"
+              >
+                <option value="todos">Todos los clientes</option>
+                {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+              </select>
+            </div>
+            <Button onClick={() => { setPresupuestoEditar(null); setShowModal('presupuesto'); }}>
+              <Plus size={16} /> Nuevo Presupuesto
+            </Button>
+          </div>
+        </Card>
+
         {/* Lista */}
         <Card>
-          <div className="p-4 border-b flex justify-between items-center">
-            <h3 className="font-bold">Presupuestos</h3>
-            <Button onClick={() => setShowModal('presupuesto')}><Plus size={16} /> Nuevo Presupuesto</Button>
+          <div className="p-4 border-b">
+            <h3 className="font-bold">Presupuestos ({presupuestosFiltrados.length})</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -8643,6 +8974,7 @@ Firma repartidor: _________________
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Nº</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Fecha</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Cliente</th>
+                  <th className="text-center p-4 text-xs font-semibold text-neutral-500">Productos</th>
                   <th className="text-right p-4 text-xs font-semibold text-neutral-500">Total</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Validez</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Estado</th>
@@ -8650,21 +8982,23 @@ Firma repartidor: _________________
                 </tr>
               </thead>
               <tbody>
-                {presupuestos.length === 0 ? (
-                  <tr><td colSpan={7} className="p-8 text-center text-neutral-500">No hay presupuestos</td></tr>
+                {presupuestosFiltrados.length === 0 ? (
+                  <tr><td colSpan={8} className="p-8 text-center text-neutral-500">No hay presupuestos</td></tr>
                 ) : (
-                  presupuestos.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(presupuesto => {
+                  presupuestosFiltrados.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(presupuesto => {
                     const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
                     const config = estadoPresupuestoConfig[presupuesto.estado] || estadoPresupuestoConfig.pendiente;
                     const fechaValidez = new Date(presupuesto.fecha);
                     fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
-                    const expirado = fechaValidez < new Date() && presupuesto.estado === 'pendiente';
+                    const expirado = fechaValidez < new Date() && (presupuesto.estado === 'pendiente' || presupuesto.estado === 'enviado');
+                    const numItems = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id).length;
                     
                     return (
-                      <tr key={presupuesto.id} className="border-t hover:bg-neutral-50">
+                      <tr key={presupuesto.id} className={`border-t hover:bg-neutral-50 cursor-pointer ${expirado ? 'bg-red-50' : ''}`} onClick={() => setPresupuestoDetalle(presupuesto)}>
                         <td className="p-4 font-mono font-bold text-blue-600">{presupuesto.id}</td>
                         <td className="p-4 text-sm">{formatDate(presupuesto.fecha)}</td>
                         <td className="p-4 font-medium">{cliente?.nombre || 'Sin cliente'}</td>
+                        <td className="p-4 text-center"><Badge className="bg-neutral-100">{numItems}</Badge></td>
                         <td className="p-4 text-right font-bold">{formatCurrency(presupuesto.total)}</td>
                         <td className="p-4 text-sm">
                           <span className={expirado ? 'text-red-500 font-semibold' : ''}>
@@ -8674,42 +9008,26 @@ Firma repartidor: _________________
                         <td className="p-4">
                           <Badge className={config.color}>{config.label}</Badge>
                         </td>
-                        <td className="p-4">
+                        <td className="p-4" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
+                            <button onClick={() => setPresupuestoDetalle(presupuesto)} className="p-2 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Ver detalle"><Eye size={16} /></button>
                             {presupuesto.estado === 'pendiente' && (
                               <>
-                                <button 
-                                  onClick={() => supabase.from('presupuestos').update({ estado: 'enviado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())}
-                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" 
-                                  title="Marcar como enviado"
-                                >
-                                  <Send size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => supabase.from('presupuestos').update({ estado: 'aceptado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())}
-                                  className="p-2 text-green-600 hover:bg-green-50 rounded-lg" 
-                                  title="Aceptar"
-                                >
-                                  <CheckCircle size={16} />
-                                </button>
+                                <button onClick={() => { setPresupuestoEditar(presupuesto); setShowModal('presupuesto'); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Editar"><Edit2 size={16} /></button>
+                                <button onClick={() => supabase.from('presupuestos').update({ estado: 'enviado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Marcar como enviado"><Send size={16} /></button>
                               </>
                             )}
-                            {(presupuesto.estado === 'aceptado' || presupuesto.estado === 'enviado') && (
-                              <button 
-                                onClick={() => convertirAPedido(presupuesto)}
-                                className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" 
-                                title="Convertir a pedido"
-                              >
-                                <ShoppingCart size={16} />
-                              </button>
+                            {presupuesto.estado === 'enviado' && (
+                              <>
+                                <button onClick={() => supabase.from('presupuestos').update({ estado: 'aceptado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Aceptar"><CheckCircle size={16} /></button>
+                                <button onClick={() => supabase.from('presupuestos').update({ estado: 'rechazado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Rechazar"><XCircle size={16} /></button>
+                              </>
                             )}
-                            <button 
-                              onClick={() => handleDelete('presupuestos', presupuesto.id)}
-                              className="p-2 text-red-500 hover:bg-red-50 rounded-lg" 
-                              title="Eliminar"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {(presupuesto.estado === 'aceptado') && (
+                              <button onClick={() => convertirAPedido(presupuesto)} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" title="Convertir a pedido"><ShoppingCart size={16} /></button>
+                            )}
+                            <button onClick={() => imprimirPresupuesto(presupuesto)} className="p-2 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Imprimir"><Printer size={16} /></button>
+                            <button onClick={() => handleDelete('presupuestos', presupuesto.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
                           </div>
                         </td>
                       </tr>
@@ -8721,10 +9039,17 @@ Firma repartidor: _________________
           </div>
         </Card>
 
-        {/* Modal */}
+        {/* Modal crear/editar */}
         {showModal === 'presupuesto' && (
-          <Modal title="Nuevo Presupuesto" onClose={() => setShowModal(null)} size="max-w-3xl">
-            <PresupuestoForm onSave={crearPresupuesto} onCancel={() => setShowModal(null)} />
+          <Modal title={presupuestoEditar ? `Editar ${presupuestoEditar.id}` : 'Nuevo Presupuesto'} onClose={() => { setShowModal(null); setPresupuestoEditar(null); }} size="max-w-3xl">
+            <PresupuestoForm onSave={crearPresupuesto} onCancel={() => { setShowModal(null); setPresupuestoEditar(null); }} presupuestoExistente={presupuestoEditar} />
+          </Modal>
+        )}
+
+        {/* Modal detalle */}
+        {presupuestoDetalle && (
+          <Modal title="Detalle del Presupuesto" onClose={() => setPresupuestoDetalle(null)} size="max-w-3xl">
+            <DetallePresupuesto presupuesto={presupuestoDetalle} onClose={() => setPresupuestoDetalle(null)} />
           </Modal>
         )}
       </div>
