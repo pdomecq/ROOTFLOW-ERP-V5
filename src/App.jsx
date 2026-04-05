@@ -11,7 +11,7 @@ import {
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
   Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
-  Banknote, CalendarClock, PackageCheck
+  Banknote, CalendarClock, PackageCheck, RotateCcw
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -2508,6 +2508,9 @@ const MainApp = () => {
       else if (table === 'proveedores') refetchProveedores();
       else if (table === 'tareas') refetchTareas();
       else if (table === 'mermas') refetchMermas();
+      else if (table === 'presupuestos') { refetchPresupuestos(); refetchPresupuestoItems(); }
+      else if (table === 'muestras') { refetchMuestras(); refetchMuestraItems(); }
+      else if (table === 'pagos_proveedor') refetchPagosProveedor();
     }
   };
 
@@ -2825,6 +2828,36 @@ const MainApp = () => {
       notas: pedido?.notas || '' 
     });
 
+    // Cargar último pedido del cliente
+    const cargarUltimoPedido = () => {
+      const pedidosCliente = pedidos.filter(p => p.cliente_id === form.cliente_id).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+      if (pedidosCliente.length === 0) {
+        alert('Este cliente no tiene pedidos anteriores');
+        return;
+      }
+      const ultimoPedido = pedidosCliente[0];
+      const itemsUltimo = pedidoItems.filter(i => i.pedido_id === ultimoPedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }));
+      if (itemsUltimo.length === 0) {
+        alert('El último pedido no tiene productos');
+        return;
+      }
+      setForm({...form, items: itemsUltimo});
+      alert(`✅ Cargados ${itemsUltimo.length} productos del pedido ${ultimoPedido.id}`);
+    };
+
+    // Cargar desde pedido recurrente (plantilla)
+    const cargarDesdePlantilla = (prId) => {
+      const pr = pedidosRecurrentes.find(p => p.id === parseInt(prId));
+      if (!pr) return;
+      const itemsPR = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }));
+      if (itemsPR.length > 0) {
+        setForm({...form, items: itemsPR, notas: `Desde plantilla: ${pr.nombre}`});
+      }
+    };
+
+    // Obtener plantillas (pedidos recurrentes) del cliente seleccionado
+    const plantillasCliente = pedidosRecurrentes.filter(pr => pr.cliente_id === form.cliente_id && pr.activo);
+
     // Verificar que hay clientes y productos DESPUÉS de los hooks
     if (clientes.length === 0) {
       return (
@@ -2852,14 +2885,41 @@ const MainApp = () => {
     const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
     const updateItem = (idx, field, value) => { const newItems = [...form.items]; newItems[idx] = {...newItems[idx], [field]: value}; setForm({...form, items: newItems}); };
     const cliente = clientes.find(c => c.id === form.cliente_id);
-    const subtotal = form.items.reduce((sum, item) => { const prod = productos.find(p => p.id === item.producto_id); return sum + (prod?.precio || 0) * item.cantidad; }, 0);
+    const subtotal = form.items.reduce((sum, item) => { 
+      const precio = getPrecioCliente(item.producto_id, form.cliente_id);
+      return sum + precio * item.cantidad; 
+    }, 0);
     const descuento = cliente?.descuento || 0;
     const total = subtotal * (1 - descuento / 100);
     
     return (
       <div className="space-y-4">
+        {/* Acciones rápidas */}
+        {!pedido && (
+          <Card className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-semibold text-blue-700">⚡ Carga rápida:</span>
+              <Button size="sm" variant="secondary" onClick={cargarUltimoPedido} className="text-xs">
+                <RotateCcw size={14} /> Último pedido
+              </Button>
+              {plantillasCliente.length > 0 && (
+                <select 
+                  onChange={e => e.target.value && cargarDesdePlantilla(e.target.value)} 
+                  className="px-3 py-1.5 rounded-lg border text-xs bg-white"
+                  defaultValue=""
+                >
+                  <option value="">📋 Usar plantilla...</option>
+                  {plantillasCliente.map(pr => (
+                    <option key={pr.id} value={pr.id}>{pr.nombre}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </Card>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
-          <Select label="Cliente" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: parseInt(e.target.value)})} options={clientes.map(c => ({ value: c.id, label: `${c.nombre} (${c.descuento}% dto)` }))} />
+          <Select label="Cliente" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: parseInt(e.target.value), items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []})} options={clientes.map(c => ({ value: c.id, label: `${c.nombre} (${c.descuento}% dto)` }))} />
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
           <Input label="Entrega" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
@@ -2868,19 +2928,24 @@ const MainApp = () => {
           <div className="flex justify-between mb-2"><label className="text-sm font-semibold text-neutral-700">Productos</label><button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button></div>
           <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
             {form.items.map((item, idx) => {
+              const precio = getPrecioCliente(item.producto_id, form.cliente_id);
               const prod = productos.find(p => p.id === item.producto_id);
+              const tieneTarifa = tarifasCliente.some(t => t.cliente_id === form.cliente_id && t.producto_id === item.producto_id);
               return (
                 <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
                   <select value={item.producto_id} onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} className="flex-1 px-3 py-2 rounded-lg border text-sm">
-                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'}) - {formatCurrency(p.precio)}</option>)}
+                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'}) - {formatCurrency(getPrecioCliente(p.id, form.cliente_id))}</option>)}
                   </select>
                   <input type="number" value={item.cantidad} onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} className="w-20 px-3 py-2 rounded-lg border text-sm text-center" min="1" />
-                  <span className="text-sm font-semibold w-24 text-right">{formatCurrency((prod?.precio || 0) * item.cantidad)}</span>
+                  <span className={`text-sm font-semibold w-24 text-right ${tieneTarifa ? 'text-green-600' : ''}`}>
+                    {tieneTarifa && '★'} {formatCurrency(precio * item.cantidad)}
+                  </span>
                   {form.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>}
                 </div>
               );
             })}
           </div>
+          <p className="text-xs text-neutral-500 mt-1">★ = Precio especial para este cliente</p>
         </div>
         <Card className="p-4 bg-orange-50 border-orange-200">
           <div className="space-y-1 text-sm">
@@ -8495,6 +8560,7 @@ Firma repartidor: _________________
       const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
       const fechaValidez = new Date(presupuesto.fecha);
       fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
+      const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
 
       const printWindow = window.open('', '_blank');
       printWindow.document.write(`
@@ -8503,116 +8569,143 @@ Firma repartidor: _________________
         <head>
           <title>Presupuesto ${presupuesto.id}</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }
-            .header { display: flex; justify-content: space-between; margin-bottom: 30px; border-bottom: 2px solid #f97316; padding-bottom: 20px; }
-            .logo { font-size: 24px; font-weight: bold; color: #f97316; }
-            .empresa-info { text-align: right; font-size: 12px; color: #666; }
-            .titulo { font-size: 28px; font-weight: bold; color: #333; margin-bottom: 20px; }
-            .cliente-box { background: #f8f8f8; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-            .cliente-box h3 { margin: 0 0 10px 0; color: #333; }
-            .datos-presupuesto { display: flex; justify-content: space-between; margin-bottom: 20px; }
-            .dato { text-align: center; }
-            .dato .label { font-size: 12px; color: #666; }
-            .dato .value { font-size: 18px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-            th { background: #f97316; color: white; padding: 12px; text-align: left; }
-            td { padding: 12px; border-bottom: 1px solid #eee; }
-            .totales { text-align: right; margin-top: 20px; }
-            .totales .linea { display: flex; justify-content: flex-end; gap: 50px; padding: 5px 0; }
-            .totales .total { font-size: 24px; font-weight: bold; color: #f97316; border-top: 2px solid #333; padding-top: 10px; }
-            .notas { margin-top: 30px; padding: 15px; background: #fffbeb; border-radius: 8px; font-size: 12px; }
-            .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #999; }
-            .validez { background: #fef3c7; padding: 10px; border-radius: 8px; text-align: center; margin-bottom: 20px; }
+            * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
+            body { padding: 40px; background: white; color: #333; }
+            .header { display: flex; justify-content: space-between; margin-bottom: 40px; }
+            .logo-section { display: flex; align-items: center; gap: 15px; }
+            .logo img { width: 50px; height: auto; }
+            .company-name { font-size: 24px; font-weight: 800; }
+            .company-name .root { color: #1a1a1a; }
+            .company-name .flow { color: #f97316; }
+            .company-sub { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+            .presupuesto-num { text-align: right; }
+            .presupuesto-num h1 { font-size: 28px; color: #f97316; margin-bottom: 5px; }
+            .presupuesto-num p { color: #666; font-size: 13px; }
+            .validez-banner { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 15px 20px; border-radius: 8px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; }
+            .validez-banner .texto { font-size: 14px; color: #92400e; }
+            .validez-banner .fecha { font-size: 18px; font-weight: 700; color: #92400e; }
+            .addresses { display: flex; justify-content: space-between; margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; }
+            .address { flex: 1; }
+            .address h3 { font-size: 11px; color: #999; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 1px; }
+            .address p { font-size: 13px; line-height: 1.6; }
+            .address strong { font-weight: 600; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th { background: #f97316; color: white; padding: 12px 15px; text-align: left; font-size: 12px; text-transform: uppercase; }
+            th:last-child { text-align: right; }
+            td { padding: 12px 15px; border-bottom: 1px solid #eee; font-size: 13px; }
+            .text-center { text-align: center; }
+            .text-right { text-align: right; }
+            .totals { margin-left: auto; width: 320px; }
+            .totals-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+            .totals-row.descuento { color: #059669; }
+            .totals-row.total { border-top: 2px solid #f97316; border-bottom: none; padding-top: 15px; margin-top: 10px; font-size: 20px; font-weight: 800; color: #f97316; }
+            .notas { margin-top: 30px; padding: 15px 20px; background: #fffbeb; border-left: 4px solid #f97316; border-radius: 0 8px 8px 0; }
+            .notas h4 { font-size: 12px; color: #92400e; text-transform: uppercase; margin-bottom: 8px; }
+            .notas p { font-size: 13px; color: #78350f; line-height: 1.5; }
+            .footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee; text-align: center; }
+            .footer p { color: #999; font-size: 11px; margin: 4px 0; }
+            .footer .empresa { font-weight: 600; color: #666; }
+            .conditions { margin-top: 30px; padding: 15px; background: #f0f9ff; border-radius: 8px; font-size: 11px; color: #0369a1; }
             @media print { body { padding: 20px; } }
           </style>
         </head>
         <body>
           <div class="header">
-            <div class="logo">🌱 ROOTFLOW</div>
-            <div class="empresa-info">
-              <strong>${EMPRESA.nombre}</strong><br>
-              ${EMPRESA.direccion}, ${EMPRESA.cp}<br>
-              ${EMPRESA.ciudad}<br>
-              Tel: ${EMPRESA.telefono}<br>
-              ${EMPRESA.email}<br>
-              CIF: ${EMPRESA.cif}
+            <div class="logo-section">
+              <div class="logo">
+                <img src="${logoUrl}" alt="RootFlow">
+              </div>
+              <div>
+                <div class="company-name"><span class="root">Root</span><span class="flow">Flow</span></div>
+                <div class="company-sub">Hydroponics</div>
+              </div>
+            </div>
+            <div class="presupuesto-num">
+              <h1>PRESUPUESTO</h1>
+              <p><strong>${presupuesto.id}</strong></p>
+              <p>Fecha: ${formatDate(presupuesto.fecha)}</p>
             </div>
           </div>
           
-          <div class="titulo">PRESUPUESTO ${presupuesto.id}</div>
-          
-          <div class="validez">
-            ⏰ Válido hasta: <strong>${fechaValidez.toLocaleDateString('es-ES')}</strong>
+          <div class="validez-banner">
+            <span class="texto">⏰ Este presupuesto es válido hasta:</span>
+            <span class="fecha">${fechaValidez.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
           </div>
           
-          <div class="cliente-box">
-            <h3>Cliente</h3>
-            <strong>${cliente?.nombre || 'Sin cliente'}</strong><br>
-            ${cliente?.direccion || ''}<br>
-            ${cliente?.telefono ? 'Tel: ' + cliente.telefono : ''} ${cliente?.email ? '· ' + cliente.email : ''}<br>
-            ${cliente?.cif ? 'CIF/NIF: ' + cliente.cif : ''}
-          </div>
-          
-          <div class="datos-presupuesto">
-            <div class="dato">
-              <div class="label">Fecha</div>
-              <div class="value">${new Date(presupuesto.fecha).toLocaleDateString('es-ES')}</div>
+          <div class="addresses">
+            <div class="address">
+              <h3>Datos del emisor</h3>
+              <p><strong>${EMPRESA.nombre}</strong></p>
+              <p>${EMPRESA.direccion}</p>
+              <p>${EMPRESA.cp} ${EMPRESA.ciudad}</p>
+              <p>CIF: ${EMPRESA.cif}</p>
+              <p>Tel: ${EMPRESA.telefono}</p>
+              <p>${EMPRESA.email}</p>
             </div>
-            <div class="dato">
-              <div class="label">Validez</div>
-              <div class="value">${presupuesto.validez} días</div>
-            </div>
-            <div class="dato">
-              <div class="label">Descuento Cliente</div>
-              <div class="value">${cliente?.descuento || 0}%</div>
+            <div class="address">
+              <h3>Datos del cliente</h3>
+              <p><strong>${cliente?.nombre || 'Cliente'}</strong></p>
+              <p>${cliente?.direccion || ''}</p>
+              <p>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}</p>
+              <p>CIF/NIF: ${cliente?.cif || '-'}</p>
+              <p>${cliente?.telefono || ''}</p>
+              <p>${cliente?.email || ''}</p>
             </div>
           </div>
           
           <table>
             <thead>
               <tr>
-                <th>Producto</th>
-                <th style="text-align:center">Cantidad</th>
-                <th style="text-align:right">Precio Unit.</th>
-                <th style="text-align:right">Subtotal</th>
+                <th>Descripción</th>
+                <th class="text-center">Cantidad</th>
+                <th class="text-right">Precio Unit.</th>
+                <th class="text-right">Importe</th>
               </tr>
             </thead>
             <tbody>
               ${items.map(item => {
                 const prod = productos.find(p => p.id === item.producto_id);
-                return `
-                  <tr>
-                    <td>${prod?.nombre || 'Producto'}</td>
-                    <td style="text-align:center">${item.cantidad} ${prod?.unidad || 'ud'}</td>
-                    <td style="text-align:right">${Number(item.precio_unitario).toFixed(2)} €</td>
-                    <td style="text-align:right">${Number(item.subtotal).toFixed(2)} €</td>
-                  </tr>
-                `;
+                return `<tr>
+                  <td>${prod?.nombre || 'Producto'}</td>
+                  <td class="text-center">${item.cantidad} ${prod?.unidad || 'ud'}</td>
+                  <td class="text-right">${formatCurrency(item.precio_unitario)}</td>
+                  <td class="text-right">${formatCurrency(item.subtotal)}</td>
+                </tr>`;
               }).join('')}
             </tbody>
           </table>
           
-          <div class="totales">
-            <div class="linea"><span>Subtotal:</span><span>${Number(presupuesto.subtotal).toFixed(2)} €</span></div>
-            ${presupuesto.descuento_aplicado > 0 ? `<div class="linea" style="color:green"><span>Descuento (${cliente?.descuento}%):</span><span>-${Number(presupuesto.descuento_aplicado).toFixed(2)} €</span></div>` : ''}
-            <div class="linea"><span>Base Imponible:</span><span>${Number(presupuesto.base_imponible).toFixed(2)} €</span></div>
-            <div class="linea"><span>IVA (${presupuesto.iva_porcentaje}%):</span><span>${Number(presupuesto.iva).toFixed(2)} €</span></div>
-            ${presupuesto.re_importe > 0 ? `<div class="linea"><span>R.E. (0,5%):</span><span>${Number(presupuesto.re_importe).toFixed(2)} €</span></div>` : ''}
-            <div class="linea total"><span>TOTAL:</span><span>${Number(presupuesto.total).toFixed(2)} €</span></div>
+          <div class="totals">
+            <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(presupuesto.subtotal)}</span></div>
+            ${presupuesto.descuento_aplicado > 0 ? `<div class="totals-row descuento"><span>Descuento (${cliente?.descuento || 0}%)</span><span>-${formatCurrency(presupuesto.descuento_aplicado)}</span></div>` : ''}
+            <div class="totals-row"><span>Base Imponible</span><span>${formatCurrency(presupuesto.base_imponible)}</span></div>
+            <div class="totals-row"><span>IVA (${presupuesto.iva_porcentaje || 4}%)</span><span>${formatCurrency(presupuesto.iva)}</span></div>
+            ${presupuesto.re_importe > 0 ? `<div class="totals-row"><span>Recargo Equiv. (0,5%)</span><span>${formatCurrency(presupuesto.re_importe)}</span></div>` : ''}
+            <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(presupuesto.total)}</span></div>
           </div>
           
-          ${presupuesto.notas ? `<div class="notas"><strong>Observaciones:</strong><br>${presupuesto.notas}</div>` : ''}
+          ${presupuesto.notas ? `
+          <div class="notas">
+            <h4>Observaciones</h4>
+            <p>${presupuesto.notas}</p>
+          </div>
+          ` : ''}
+          
+          <div class="conditions">
+            <strong>Condiciones:</strong> Este presupuesto tiene una validez de ${presupuesto.validez} días desde la fecha de emisión. 
+            Los precios incluyen IVA. Forma de pago a convenir. Los precios pueden variar sin previo aviso una vez expirada la validez.
+          </div>
           
           <div class="footer">
-            Este presupuesto tiene una validez de ${presupuesto.validez} días desde la fecha de emisión.<br>
-            Los precios incluyen IVA. Forma de pago a convenir.<br><br>
-            ${EMPRESA.nombre} · CIF: ${EMPRESA.cif} · ${EMPRESA.web}
+            <p class="empresa">${EMPRESA.nombre} · CIF: ${EMPRESA.cif}</p>
+            <p>${EMPRESA.direccion}, ${EMPRESA.cp} ${EMPRESA.ciudad}</p>
+            <p>${EMPRESA.telefono} · ${EMPRESA.email} · ${EMPRESA.web}</p>
           </div>
         </body>
         </html>
       `);
       printWindow.document.close();
-      printWindow.print();
+      setTimeout(() => { printWindow.print(); }, 500);
     };
 
     // Formulario de presupuesto mejorado
