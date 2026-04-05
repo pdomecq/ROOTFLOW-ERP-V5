@@ -9,10 +9,12 @@ import {
   Wallet, TrendingUp, Send, FileDown, AlertCircle, Printer,
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
-  Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown
+  Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
+  Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -1358,6 +1360,11 @@ const MainApp = () => {
   const { data: asientoLineasData, refetch: refetchAsientoLineas } = useRealtime('asiento_lineas');
   const { data: auditLogData, refetch: refetchAuditLog } = useRealtime('audit_log');
   const { data: userProfilesData, refetch: refetchUserProfiles } = useRealtime('user_profiles');
+  // Nuevas tablas V15
+  const { data: tarifasClienteData, refetch: refetchTarifasCliente } = useRealtime('tarifas_cliente');
+  const { data: presupuestosData, refetch: refetchPresupuestos } = useRealtime('presupuestos');
+  const { data: presupuestoItemsData, refetch: refetchPresupuestoItems } = useRealtime('presupuesto_items');
+  const { data: pagosProveedorData, refetch: refetchPagosProveedor } = useRealtime('pagos_proveedor');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1397,6 +1404,11 @@ const MainApp = () => {
   const userProfiles = userProfilesData || [];
   const asientoLineasDB = asientoLineasData || [];
   const setLeads = setLeadsData;
+  // Nuevos V15
+  const tarifasCliente = tarifasClienteData || [];
+  const presupuestos = presupuestosData || [];
+  const presupuestoItems = presupuestoItemsData || [];
+  const pagosProveedor = pagosProveedorData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -7078,16 +7090,199 @@ Firma repartidor: _________________
           const listaUrls = facturasConArchivo.map(g => ({
             fecha: formatDate(g.fecha),
             concepto: g.concepto,
+            proveedor: proveedores.find(p => p.id === g.proveedor_id)?.nombre || 'Sin proveedor',
             url: g.factura_url,
           }));
           const columns = [
             { header: 'Fecha', accessor: r => r.fecha },
+            { header: 'Proveedor', accessor: r => r.proveedor },
             { header: 'Concepto', accessor: r => r.concepto },
             { header: 'URL Archivo', accessor: r => r.url },
           ];
           setTimeout(() => exportToExcel(listaUrls, `archivos_facturas_${periodoLabel}`, columns), 1500);
         }
+      } else if (tipo === 'zip_completo') {
+        // NUEVO: Exportar ZIP con todos los archivos organizados
+        exportarZipCompleto(facturasFiltradas, gastosFiltrados, periodoLabel);
       }
+    };
+
+    // Función para exportar ZIP completo con archivos de facturas
+    const exportarZipCompleto = async (facturasFiltradas, gastosFiltrados, periodoLabel) => {
+      try {
+        const zip = new JSZip();
+        
+        // Crear carpetas
+        const carpetaEmitidas = zip.folder('01_Facturas_Emitidas');
+        const carpetaRecibidas = zip.folder('02_Facturas_Recibidas');
+        const carpetaExcels = zip.folder('03_Registros_Excel');
+        
+        // 1. Generar Excel de facturas emitidas
+        const columnsEmitidas = [
+          { header: 'Nº Factura', accessor: f => f.id },
+          { header: 'Fecha', accessor: f => formatDate(f.fecha) },
+          { header: 'Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.nombre || '' },
+          { header: 'CIF', accessor: f => clientes.find(c => c.id === f.cliente_id)?.cif || '' },
+          { header: 'Base', accessor: f => f.base_imponible?.toFixed(2) || '0.00' },
+          { header: 'IVA %', accessor: f => f.iva_porcentaje || 4 },
+          { header: 'IVA €', accessor: f => f.iva?.toFixed(2) || '0.00' },
+          { header: 'RE €', accessor: f => f.re_importe?.toFixed(2) || '0.00' },
+          { header: 'Total', accessor: f => f.total?.toFixed(2) || '0.00' },
+          { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label || f.estado },
+        ];
+        const wbEmitidas = generarExcelBuffer(facturasFiltradas, columnsEmitidas, 'Facturas Emitidas');
+        carpetaExcels.file(`facturas_emitidas_${periodoLabel}.xlsx`, wbEmitidas);
+        
+        // 2. Generar Excel de facturas recibidas (gastos)
+        const columnsRecibidas = [
+          { header: 'Fecha', accessor: g => formatDate(g.fecha) },
+          { header: 'Proveedor', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.nombre || 'Sin proveedor' },
+          { header: 'CIF', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.cif || '' },
+          { header: 'Concepto', accessor: g => g.concepto },
+          { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
+          { header: 'IVA %', accessor: g => TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21 },
+          { header: 'Base', accessor: g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            return (g.importe / (1 + ivaPct/100)).toFixed(2);
+          }},
+          { header: 'IVA €', accessor: g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const base = g.importe / (1 + ivaPct/100);
+            return (g.importe - base).toFixed(2);
+          }},
+          { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
+          { header: 'Pagado', accessor: g => g.pagado ? 'Sí' : 'No' },
+          { header: 'Archivo', accessor: g => g.factura_url ? 'Sí' : 'No' },
+        ];
+        const wbRecibidas = generarExcelBuffer(gastosFiltrados, columnsRecibidas, 'Facturas Recibidas');
+        carpetaExcels.file(`facturas_recibidas_${periodoLabel}.xlsx`, wbRecibidas);
+        
+        // 3. Generar Excel de registro contable
+        const registros = [
+          ...facturasFiltradas.map(f => ({
+            fecha: f.fecha,
+            tipo: 'INGRESO',
+            documento: f.id,
+            tercero: clientes.find(c => c.id === f.cliente_id)?.nombre || '',
+            cif: clientes.find(c => c.id === f.cliente_id)?.cif || '',
+            concepto: `Factura ${f.id}`,
+            base: f.base_imponible || f.subtotal || 0,
+            iva_pct: f.iva_porcentaje || 4,
+            iva: f.iva || 0,
+            total: f.total || 0,
+          })),
+          ...gastosFiltrados.map(g => {
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const base = g.importe / (1 + ivaPct/100);
+            return {
+              fecha: g.fecha,
+              tipo: 'GASTO',
+              documento: g.id,
+              tercero: proveedores.find(p => p.id === g.proveedor_id)?.nombre || '',
+              cif: proveedores.find(p => p.id === g.proveedor_id)?.cif || '',
+              concepto: g.concepto,
+              base: base,
+              iva_pct: ivaPct,
+              iva: g.importe - base,
+              total: g.importe || 0,
+            };
+          }),
+        ].sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+        
+        const columnsRegistro = [
+          { header: 'Fecha', accessor: r => formatDate(r.fecha) },
+          { header: 'Tipo', accessor: r => r.tipo },
+          { header: 'Nº Doc', accessor: r => r.documento },
+          { header: 'Tercero', accessor: r => r.tercero },
+          { header: 'CIF', accessor: r => r.cif },
+          { header: 'Concepto', accessor: r => r.concepto },
+          { header: 'Base', accessor: r => r.base?.toFixed(2) },
+          { header: 'IVA %', accessor: r => r.iva_pct },
+          { header: 'IVA €', accessor: r => r.iva?.toFixed(2) },
+          { header: 'Total', accessor: r => r.total?.toFixed(2) },
+        ];
+        const wbRegistro = generarExcelBuffer(registros, columnsRegistro, 'Registro Contable');
+        carpetaExcels.file(`registro_contable_${periodoLabel}.xlsx`, wbRegistro);
+        
+        // 4. Descargar archivos de facturas recibidas (gastos con factura_url)
+        let contadorRecibidas = 0;
+        for (const gasto of gastosFiltrados.filter(g => g.factura_url)) {
+          try {
+            const response = await fetch(gasto.factura_url);
+            if (response.ok) {
+              const blob = await response.blob();
+              const extension = gasto.factura_url.split('.').pop()?.split('?')[0] || 'pdf';
+              const nombreArchivo = `${formatDate(gasto.fecha).replace(/\//g, '-')}_${(proveedores.find(p => p.id === gasto.proveedor_id)?.nombre || 'SinProveedor').replace(/[^a-zA-Z0-9]/g, '_')}_${gasto.concepto.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_')}.${extension}`;
+              carpetaRecibidas.file(nombreArchivo, blob);
+              contadorRecibidas++;
+            }
+          } catch (e) {
+            console.warn('No se pudo descargar:', gasto.factura_url, e);
+          }
+        }
+        
+        // 5. Crear índice de archivos
+        const indice = [
+          '===========================================',
+          `DOCUMENTACIÓN CONTABLE - ${periodoLabel}`,
+          `${EMPRESA.nombre} - CIF: ${EMPRESA.cif}`,
+          `Generado: ${new Date().toLocaleString('es-ES')}`,
+          '===========================================',
+          '',
+          'CONTENIDO DEL ARCHIVO:',
+          '',
+          '📁 01_Facturas_Emitidas/',
+          '   (Las facturas emitidas se generan desde el sistema)',
+          '',
+          `📁 02_Facturas_Recibidas/ (${contadorRecibidas} archivos)`,
+          '   Facturas y justificantes de gastos',
+          '',
+          '📁 03_Registros_Excel/',
+          `   - facturas_emitidas_${periodoLabel}.xlsx`,
+          `   - facturas_recibidas_${periodoLabel}.xlsx`,
+          `   - registro_contable_${periodoLabel}.xlsx`,
+          '',
+          '===========================================',
+          'RESUMEN DEL PERIODO:',
+          `Total Facturas Emitidas: ${facturasFiltradas.length}`,
+          `Total Ingresos: ${formatCurrency(facturasFiltradas.reduce((s, f) => s + (f.total || 0), 0))}`,
+          `Total Gastos: ${gastosFiltrados.length}`,
+          `Total Gastos: ${formatCurrency(gastosFiltrados.reduce((s, g) => s + (g.importe || 0), 0))}`,
+          '===========================================',
+        ].join('\n');
+        zip.file('_LEEME.txt', indice);
+        
+        // 6. Generar y descargar ZIP
+        const content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `contabilidad_${EMPRESA.cif}_${periodoLabel}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        alert(`✅ ZIP generado correctamente!\n\n📄 ${facturasFiltradas.length} facturas emitidas\n📥 ${contadorRecibidas} archivos de gastos descargados\n📊 3 registros Excel incluidos`);
+        
+      } catch (error) {
+        console.error('Error generando ZIP:', error);
+        alert('❌ Error al generar el ZIP: ' + error.message);
+      }
+    };
+
+    // Función auxiliar para generar Excel como buffer
+    const generarExcelBuffer = (data, columns, sheetName) => {
+      const rows = data.map(item => {
+        const row = {};
+        columns.forEach(col => { row[col.header] = col.accessor(item); });
+        return row;
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = columns.map(col => ({ wch: Math.max(col.header.length, 15) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      return XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
     };
 
     // Alertas de asesoría contable
@@ -7213,11 +7408,15 @@ Firma repartidor: _________________
               <Download size={14} /> Registro Contable
             </Button>
             <Button onClick={() => exportarParaAsesoria('paquete_completo')}>
-              <Download size={16} /> 📦 Paquete Completo
+              <Download size={16} /> 📦 Excels Separados
+            </Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700" onClick={() => exportarParaAsesoria('zip_completo')}>
+              <Archive size={16} /> 📁 ZIP con Archivos
             </Button>
           </div>
           <p className="text-xs text-neutral-500 mt-3">
-            El paquete completo incluye: Facturas emitidas, Facturas recibidas, Registro contable y Lista de archivos adjuntos
+            <strong>📦 Excels Separados:</strong> Descarga 3 archivos Excel individuales. <br/>
+            <strong>📁 ZIP con Archivos:</strong> Un único ZIP organizado con Excels + todos los PDFs/imágenes de facturas recibidas.
           </p>
         </Card>
 
@@ -7713,6 +7912,609 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== FUNCIÓN PRECIO POR CLIENTE ====================
+  // Obtiene el precio de un producto considerando tarifa especial del cliente
+  const getPrecioCliente = (productoId, clienteId) => {
+    const producto = productos.find(p => p.id === productoId);
+    if (!producto) return 0;
+    
+    // Buscar tarifa especial para este cliente y producto
+    const tarifa = tarifasCliente.find(t => 
+      t.cliente_id === clienteId && t.producto_id === productoId
+    );
+    
+    if (tarifa) {
+      return tarifa.precio_especial;
+    }
+    
+    // Si no hay tarifa especial, devolver precio base
+    return producto.precio;
+  };
+
+  // ==================== RENDER PRESUPUESTOS ====================
+  const renderPresupuestos = () => {
+    const estadoPresupuestoConfig = {
+      pendiente: { label: 'Pendiente', color: 'bg-amber-100 text-amber-700', icon: Clock },
+      enviado: { label: 'Enviado', color: 'bg-blue-100 text-blue-700', icon: Send },
+      aceptado: { label: 'Aceptado', color: 'bg-green-100 text-green-700', icon: CheckCircle },
+      rechazado: { label: 'Rechazado', color: 'bg-red-100 text-red-700', icon: XCircle },
+      convertido: { label: 'Convertido a Pedido', color: 'bg-purple-100 text-purple-700', icon: ShoppingCart },
+    };
+
+    const crearPresupuesto = async (form) => {
+      try {
+        const year = new Date().getFullYear();
+        const { count } = await supabase.from('presupuestos').select('*', { count: 'exact', head: true });
+        const presupuestoId = `P-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        
+        // Calcular totales
+        let subtotal = 0;
+        const itemsConPrecio = form.items.map(item => {
+          const precio = getPrecioCliente(item.producto_id, form.cliente_id);
+          const itemSubtotal = precio * item.cantidad;
+          subtotal += itemSubtotal;
+          return { ...item, precio_unitario: precio, subtotal: itemSubtotal };
+        });
+        
+        const cliente = clientes.find(c => c.id === form.cliente_id);
+        const descuento = cliente?.descuento || 0;
+        const descuentoAplicado = subtotal * (descuento / 100);
+        const baseImponible = subtotal - descuentoAplicado;
+        const ivaPorcentaje = IVA_VENTAS;
+        const iva = baseImponible * (ivaPorcentaje / 100);
+        const aplicaRE = cliente?.recargo_equivalencia || false;
+        const reImporte = aplicaRE ? baseImponible * (RE_VENTAS / 100) : 0;
+        const total = baseImponible + iva + reImporte;
+        
+        const { data: nuevoPresupuesto, error } = await supabase.from('presupuestos').insert({
+          id: presupuestoId,
+          cliente_id: form.cliente_id,
+          fecha: new Date().toISOString().split('T')[0],
+          validez: form.validez || 15,
+          estado: 'pendiente',
+          subtotal,
+          descuento_aplicado: descuentoAplicado,
+          base_imponible: baseImponible,
+          iva_porcentaje: ivaPorcentaje,
+          iva,
+          recargo_equivalencia: aplicaRE,
+          re_importe: reImporte,
+          total,
+          notas: form.notas || '',
+        }).select().single();
+        
+        if (error) throw error;
+        
+        // Insertar items
+        for (const item of itemsConPrecio) {
+          await supabase.from('presupuesto_items').insert({
+            presupuesto_id: presupuestoId,
+            producto_id: item.producto_id,
+            cantidad: item.cantidad,
+            precio_unitario: item.precio_unitario,
+            subtotal: item.subtotal,
+          });
+        }
+        
+        refetchPresupuestos();
+        refetchPresupuestoItems();
+        setShowModal(null);
+        alert(`✅ Presupuesto ${presupuestoId} creado correctamente`);
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error al crear presupuesto: ' + error.message);
+      }
+    };
+
+    const convertirAPedido = async (presupuesto) => {
+      if (!confirm(`¿Convertir presupuesto ${presupuesto.id} en pedido?`)) return;
+      
+      try {
+        const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+        
+        // Crear pedido usando la misma lógica
+        const form = {
+          cliente_id: presupuesto.cliente_id,
+          fecha: new Date().toISOString().split('T')[0],
+          fecha_entrega: new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0],
+          estado: 'pendiente',
+          items: items.map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })),
+          notas: `Desde presupuesto ${presupuesto.id}`,
+        };
+        
+        await handleCreatePedido(form);
+        
+        // Marcar presupuesto como convertido
+        await supabase.from('presupuestos').update({ estado: 'convertido' }).eq('id', presupuesto.id);
+        refetchPresupuestos();
+        
+        alert(`✅ Presupuesto convertido a pedido`);
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    // Formulario de presupuesto
+    const PresupuestoForm = ({ onSave, onCancel }) => {
+      const [form, setForm] = useState({
+        cliente_id: clientes.length > 0 ? clientes[0].id : null,
+        validez: 15,
+        items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : [],
+        notas: '',
+      });
+
+      if (clientes.length === 0 || productos.length === 0) {
+        return (
+          <div className="text-center py-8">
+            <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+            <h3 className="text-lg font-bold text-neutral-900 mb-2">Faltan datos</h3>
+            <p className="text-neutral-500 mb-4">Necesitas al menos un cliente y un producto para crear presupuestos.</p>
+            <Button onClick={onCancel}>Cerrar</Button>
+          </div>
+        );
+      }
+
+      const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0].id, cantidad: 1 }]});
+      const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
+      const updateItem = (idx, field, value) => { 
+        const newItems = [...form.items]; 
+        newItems[idx] = {...newItems[idx], [field]: value}; 
+        setForm({...form, items: newItems}); 
+      };
+
+      const cliente = clientes.find(c => c.id === form.cliente_id);
+      const descuento = cliente?.descuento || 0;
+      let subtotal = 0;
+      form.items.forEach(item => {
+        const precio = getPrecioCliente(item.producto_id, form.cliente_id);
+        subtotal += precio * item.cantidad;
+      });
+      const baseImponible = subtotal * (1 - descuento / 100);
+      const iva = baseImponible * (IVA_VENTAS / 100);
+      const re = cliente?.recargo_equivalencia ? baseImponible * (RE_VENTAS / 100) : 0;
+      const total = baseImponible + iva + re;
+
+      return (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Select 
+              label="Cliente" 
+              value={form.cliente_id} 
+              onChange={e => setForm({...form, cliente_id: parseInt(e.target.value)})} 
+              options={clientes.map(c => ({ value: c.id, label: `${c.nombre} (${c.descuento}% dto)` }))} 
+            />
+            <Input 
+              label="Validez (días)" 
+              type="number" 
+              value={form.validez} 
+              onChange={e => setForm({...form, validez: parseInt(e.target.value) || 15})} 
+            />
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="flex justify-between mb-2">
+              <label className="text-sm font-semibold text-neutral-700">Productos</label>
+              <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1">
+                <Plus size={16} />Añadir
+              </button>
+            </div>
+            <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
+              {form.items.map((item, idx) => {
+                const precio = getPrecioCliente(item.producto_id, form.cliente_id);
+                const prod = productos.find(p => p.id === item.producto_id);
+                const tieneTarifa = tarifasCliente.some(t => t.cliente_id === form.cliente_id && t.producto_id === item.producto_id);
+                return (
+                  <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                    <select 
+                      value={item.producto_id} 
+                      onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} 
+                      className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                    >
+                      {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
+                    </select>
+                    <input 
+                      type="number" 
+                      value={item.cantidad} 
+                      onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} 
+                      className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
+                      min="1" 
+                    />
+                    <span className={`text-sm font-semibold w-24 text-right ${tieneTarifa ? 'text-green-600' : ''}`}>
+                      {tieneTarifa && '★'} {formatCurrency(precio * item.cantidad)}
+                    </span>
+                    {form.items.length > 1 && (
+                      <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-neutral-500 mt-1">★ = Precio especial para este cliente</p>
+          </div>
+
+          {/* Notas */}
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+            <textarea 
+              value={form.notas} 
+              onChange={e => setForm({...form, notas: e.target.value})} 
+              className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
+              rows={2} 
+              placeholder="Condiciones especiales, observaciones..."
+            />
+          </div>
+
+          {/* Totales */}
+          <Card className="p-4 bg-blue-50 border-blue-200">
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(subtotal)}</span></div>
+              {descuento > 0 && <div className="flex justify-between text-green-600"><span>Descuento ({descuento}%):</span><span>-{formatCurrency(subtotal * descuento / 100)}</span></div>}
+              <div className="flex justify-between"><span>Base Imponible:</span><span>{formatCurrency(baseImponible)}</span></div>
+              <div className="flex justify-between"><span>IVA ({IVA_VENTAS}%):</span><span>{formatCurrency(iva)}</span></div>
+              {re > 0 && <div className="flex justify-between text-amber-600"><span>R.E. ({RE_VENTAS}%):</span><span>{formatCurrency(re)}</span></div>}
+              <div className="flex justify-between text-lg font-black pt-2 border-t border-blue-200">
+                <span>TOTAL:</span>
+                <span className="text-blue-600">{formatCurrency(total)}</span>
+              </div>
+            </div>
+          </Card>
+
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+            <Button onClick={() => onSave(form)}>Crear Presupuesto</Button>
+          </div>
+        </div>
+      );
+    };
+
+    const presupuestosPendientes = presupuestos.filter(p => p.estado === 'pendiente' || p.estado === 'enviado');
+    const presupuestosAceptados = presupuestos.filter(p => p.estado === 'aceptado');
+
+    return (
+      <div className="space-y-6">
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg"><Clock size={20} className="text-amber-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{presupuestosPendientes.length}</p>
+                <p className="text-xs text-neutral-500">Pendientes</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-100 rounded-lg"><CheckCircle size={20} className="text-green-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{presupuestosAceptados.length}</p>
+                <p className="text-xs text-neutral-500">Aceptados</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg"><Euro size={20} className="text-blue-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{formatCurrency(presupuestosPendientes.reduce((s, p) => s + (p.total || 0), 0))}</p>
+                <p className="text-xs text-neutral-500">Valor Pendiente</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-purple-100 rounded-lg"><Percent size={20} className="text-purple-600" /></div>
+              <div>
+                <p className="text-2xl font-black">
+                  {presupuestos.length > 0 ? Math.round((presupuestos.filter(p => p.estado === 'aceptado' || p.estado === 'convertido').length / presupuestos.length) * 100) : 0}%
+                </p>
+                <p className="text-xs text-neutral-500">Tasa Conversión</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Lista */}
+        <Card>
+          <div className="p-4 border-b flex justify-between items-center">
+            <h3 className="font-bold">Presupuestos</h3>
+            <Button onClick={() => setShowModal('presupuesto')}><Plus size={16} /> Nuevo Presupuesto</Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Nº</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Fecha</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Cliente</th>
+                  <th className="text-right p-4 text-xs font-semibold text-neutral-500">Total</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Validez</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Estado</th>
+                  <th className="text-right p-4 text-xs font-semibold text-neutral-500">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {presupuestos.length === 0 ? (
+                  <tr><td colSpan={7} className="p-8 text-center text-neutral-500">No hay presupuestos</td></tr>
+                ) : (
+                  presupuestos.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(presupuesto => {
+                    const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
+                    const config = estadoPresupuestoConfig[presupuesto.estado] || estadoPresupuestoConfig.pendiente;
+                    const fechaValidez = new Date(presupuesto.fecha);
+                    fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
+                    const expirado = fechaValidez < new Date() && presupuesto.estado === 'pendiente';
+                    
+                    return (
+                      <tr key={presupuesto.id} className="border-t hover:bg-neutral-50">
+                        <td className="p-4 font-mono font-bold text-blue-600">{presupuesto.id}</td>
+                        <td className="p-4 text-sm">{formatDate(presupuesto.fecha)}</td>
+                        <td className="p-4 font-medium">{cliente?.nombre || 'Sin cliente'}</td>
+                        <td className="p-4 text-right font-bold">{formatCurrency(presupuesto.total)}</td>
+                        <td className="p-4 text-sm">
+                          <span className={expirado ? 'text-red-500 font-semibold' : ''}>
+                            {formatDate(fechaValidez)} {expirado && '⚠️'}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <Badge className={config.color}>{config.label}</Badge>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex justify-end gap-1">
+                            {presupuesto.estado === 'pendiente' && (
+                              <>
+                                <button 
+                                  onClick={() => supabase.from('presupuestos').update({ estado: 'enviado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())}
+                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" 
+                                  title="Marcar como enviado"
+                                >
+                                  <Send size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => supabase.from('presupuestos').update({ estado: 'aceptado' }).eq('id', presupuesto.id).then(() => refetchPresupuestos())}
+                                  className="p-2 text-green-600 hover:bg-green-50 rounded-lg" 
+                                  title="Aceptar"
+                                >
+                                  <CheckCircle size={16} />
+                                </button>
+                              </>
+                            )}
+                            {(presupuesto.estado === 'aceptado' || presupuesto.estado === 'enviado') && (
+                              <button 
+                                onClick={() => convertirAPedido(presupuesto)}
+                                className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" 
+                                title="Convertir a pedido"
+                              >
+                                <ShoppingCart size={16} />
+                              </button>
+                            )}
+                            <button 
+                              onClick={() => handleDelete('presupuestos', presupuesto.id)}
+                              className="p-2 text-red-500 hover:bg-red-50 rounded-lg" 
+                              title="Eliminar"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Modal */}
+        {showModal === 'presupuesto' && (
+          <Modal title="Nuevo Presupuesto" onClose={() => setShowModal(null)} size="max-w-3xl">
+            <PresupuestoForm onSave={crearPresupuesto} onCancel={() => setShowModal(null)} />
+          </Modal>
+        )}
+      </div>
+    );
+  };
+
+  // ==================== RENDER TARIFAS ====================
+  const renderTarifas = () => {
+    const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
+    const [editandoTarifa, setEditandoTarifa] = useState(null);
+
+    const tarifasDelCliente = clienteSeleccionado 
+      ? tarifasCliente.filter(t => t.cliente_id === clienteSeleccionado.id)
+      : [];
+
+    const guardarTarifa = async (productoId, precioEspecial) => {
+      try {
+        const existente = tarifasCliente.find(t => 
+          t.cliente_id === clienteSeleccionado.id && t.producto_id === productoId
+        );
+
+        if (existente) {
+          await supabase.from('tarifas_cliente').update({ precio_especial: precioEspecial }).eq('id', existente.id);
+        } else {
+          await supabase.from('tarifas_cliente').insert({
+            cliente_id: clienteSeleccionado.id,
+            producto_id: productoId,
+            precio_especial: precioEspecial,
+          });
+        }
+        
+        refetchTarifasCliente();
+        setEditandoTarifa(null);
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    const eliminarTarifa = async (tarifaId) => {
+      if (!confirm('¿Eliminar esta tarifa especial?')) return;
+      await supabase.from('tarifas_cliente').delete().eq('id', tarifaId);
+      refetchTarifasCliente();
+    };
+
+    return (
+      <div className="space-y-6">
+        {/* Info */}
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <div className="flex items-start gap-3">
+            <Tag size={24} className="text-blue-600 mt-1" />
+            <div>
+              <h3 className="font-bold text-blue-900">Tarifas por Cliente</h3>
+              <p className="text-sm text-blue-700">
+                Define precios especiales para cada cliente. Estos precios se aplicarán automáticamente en pedidos y presupuestos.
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid md:grid-cols-3 gap-6">
+          {/* Lista de clientes */}
+          <Card className="md:col-span-1">
+            <div className="p-4 border-b">
+              <h3 className="font-bold">Clientes</h3>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto">
+              {clientes.map(cliente => {
+                const numTarifas = tarifasCliente.filter(t => t.cliente_id === cliente.id).length;
+                const isSelected = clienteSeleccionado?.id === cliente.id;
+                
+                return (
+                  <button
+                    key={cliente.id}
+                    onClick={() => setClienteSeleccionado(cliente)}
+                    className={`w-full p-4 text-left border-b hover:bg-neutral-50 flex items-center justify-between transition-colors ${isSelected ? 'bg-orange-50 border-l-4 border-l-orange-500' : ''}`}
+                  >
+                    <div>
+                      <p className="font-semibold">{cliente.nombre}</p>
+                      <p className="text-xs text-neutral-500">{tipoClienteConfig[cliente.tipo]?.label}</p>
+                    </div>
+                    {numTarifas > 0 && (
+                      <Badge className="bg-green-100 text-green-700">{numTarifas} tarifas</Badge>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Tarifas del cliente seleccionado */}
+          <Card className="md:col-span-2">
+            {clienteSeleccionado ? (
+              <>
+                <div className="p-4 border-b bg-neutral-50">
+                  <h3 className="font-bold">{clienteSeleccionado.nombre}</h3>
+                  <p className="text-sm text-neutral-500">
+                    Descuento general: {clienteSeleccionado.descuento || 0}% · 
+                    Tipo: {tipoClienteConfig[clienteSeleccionado.tipo]?.label}
+                  </p>
+                </div>
+                <div className="p-4">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-2 text-xs font-semibold text-neutral-500">Producto</th>
+                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Precio Base</th>
+                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Precio Especial</th>
+                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Dto.</th>
+                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productos.map(producto => {
+                        const tarifa = tarifasDelCliente.find(t => t.producto_id === producto.id);
+                        const precioEspecial = tarifa?.precio_especial;
+                        const descuentoProducto = precioEspecial ? Math.round((1 - precioEspecial / producto.precio) * 100) : 0;
+                        const isEditing = editandoTarifa === producto.id;
+
+                        return (
+                          <tr key={producto.id} className="border-b hover:bg-neutral-50">
+                            <td className="p-2">
+                              <span className="font-medium">{producto.nombre}</span>
+                              <span className="text-xs text-neutral-500 ml-2">({producto.unidad})</span>
+                            </td>
+                            <td className="p-2 text-right">{formatCurrency(producto.precio)}</td>
+                            <td className="p-2 text-right">
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  defaultValue={precioEspecial || producto.precio}
+                                  className="w-24 px-2 py-1 border rounded text-right"
+                                  autoFocus
+                                  onBlur={(e) => {
+                                    const valor = parseFloat(e.target.value);
+                                    if (valor && valor !== producto.precio) {
+                                      guardarTarifa(producto.id, valor);
+                                    } else {
+                                      setEditandoTarifa(null);
+                                    }
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.target.blur();
+                                    } else if (e.key === 'Escape') {
+                                      setEditandoTarifa(null);
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <span className={precioEspecial ? 'text-green-600 font-bold' : 'text-neutral-400'}>
+                                  {precioEspecial ? formatCurrency(precioEspecial) : '-'}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-2 text-right">
+                              {precioEspecial && (
+                                <Badge className={descuentoProducto > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}>
+                                  {descuentoProducto > 0 ? `-${descuentoProducto}%` : `+${Math.abs(descuentoProducto)}%`}
+                                </Badge>
+                              )}
+                            </td>
+                            <td className="p-2">
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={() => setEditandoTarifa(producto.id)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+                                  title="Editar precio"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                {tarifa && (
+                                  <button
+                                    onClick={() => eliminarTarifa(tarifa.id)}
+                                    className="p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                    title="Eliminar tarifa"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <div className="p-8 text-center text-neutral-500">
+                <Users size={48} className="mx-auto mb-4 opacity-50" />
+                <p>Selecciona un cliente para ver y editar sus tarifas</p>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== MAIN RENDER ====================
   if (loading) return <LoadingScreen />;
 
@@ -7743,13 +8545,15 @@ Firma repartidor: _________________
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Comercial</p>}</div>
           <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
           <NavItem icon={Users} label="Clientes" section="clientes" />
+          <NavItem icon={ClipboardList} label="Presupuestos" section="presupuestos" badge={presupuestos.filter(p => p.estado === 'pendiente').length} />
           <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
           <NavItem icon={Truck} label="Rutas Reparto" section="rutas" />
           <NavItem icon={Package} label="Productos" section="productos" badge={stockBajo} />
+          <NavItem icon={Tag} label="Tarifas" section="tarifas" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
           <NavItem icon={Receipt} label="Facturación" section="facturacion" />
           <NavItem icon={Wallet} label="Gastos" section="gastos" />
-          <NavItem icon={Building2} label="Proveedores" section="proveedores" />
+          <NavItem icon={Building2} label="Proveedores" section="proveedores" badge={pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) <= new Date()).length} />
           <NavItem icon={BarChart3} label="Informes" section="informes" />
           <NavItem icon={Euro} label="Contabilidad" section="contabilidad" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
@@ -7971,9 +8775,11 @@ Firma repartidor: _________________
           {activeSection === 'tareas' && renderTareas()}
           {activeSection === 'leads' && renderLeads()}
           {activeSection === 'clientes' && renderClientes()}
+          {activeSection === 'presupuestos' && renderPresupuestos()}
           {activeSection === 'pedidos' && renderPedidos()}
           {activeSection === 'rutas' && renderRutas()}
           {activeSection === 'productos' && renderProductos()}
+          {activeSection === 'tarifas' && renderTarifas()}
           {activeSection === 'facturacion' && renderFacturacion()}
           {activeSection === 'gastos' && renderGastos()}
           {activeSection === 'proveedores' && renderProveedores()}
