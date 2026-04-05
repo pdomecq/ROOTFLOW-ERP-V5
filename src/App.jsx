@@ -10,7 +10,8 @@ import {
   CreditCard, MoreVertical, Zap, List, Table, FileSpreadsheet, LayoutGrid,
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
-  Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList
+  Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
+  Banknote, CalendarClock, PackageCheck
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -301,24 +302,32 @@ const origenLeadConfig = {
 
 // Categorías de gasto alineadas con PGC español
 const categoriasGasto = {
-  semillas: { label: "🌱 Semillas/Materias primas (601)", icon: Sprout, color: "bg-green-100 text-green-700", cuenta: "601" },
-  sustratos: { label: "🪴 Sustratos/Aprovisionamientos (602)", icon: Layers, color: "bg-amber-100 text-amber-700", cuenta: "602" },
-  embalajes: { label: "📦 Embalajes y envases (602)", icon: Package, color: "bg-blue-100 text-blue-700", cuenta: "602" },
-  alquiler: { label: "🏠 Alquiler local (621)", icon: Building2, color: "bg-neutral-100 text-neutral-700", cuenta: "621" },
-  reparaciones: { label: "🔧 Reparaciones/Mantenimiento (622)", icon: AlertTriangle, color: "bg-orange-100 text-orange-700", cuenta: "622" },
-  asesoria: { label: "👔 Asesoría/Gestoría (623)", icon: FileText, color: "bg-slate-100 text-slate-700", cuenta: "623" },
-  transporte: { label: "🚚 Transporte/Logística (624)", icon: Truck, color: "bg-purple-100 text-purple-700", cuenta: "624" },
-  seguros: { label: "🛡️ Seguros (625)", icon: FileText, color: "bg-teal-100 text-teal-700", cuenta: "625" },
-  banco: { label: "🏦 Comisiones bancarias (626)", icon: Receipt, color: "bg-gray-100 text-gray-700", cuenta: "626" },
-  publicidad: { label: "📣 Publicidad/Marketing (627)", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700", cuenta: "627" },
-  energia: { label: "💡 Suministros: Luz/Agua/Gas (628)", icon: Zap, color: "bg-yellow-100 text-yellow-700", cuenta: "628" },
-  servicios: { label: "⚙️ Otros servicios (629)", icon: MoreVertical, color: "bg-cyan-100 text-cyan-700", cuenta: "629" },
-  tributos: { label: "📋 Tributos e impuestos (631)", icon: Receipt, color: "bg-red-100 text-red-700", cuenta: "631" },
-  nominas: { label: "👥 Sueldos y salarios (640)", icon: Users, color: "bg-pink-100 text-pink-700", cuenta: "640" },
-  seguridad_social: { label: "🏥 Seg. Social empresa (642)", icon: Users, color: "bg-rose-100 text-rose-700", cuenta: "642" },
-  software: { label: "💻 Software/IT (629)", icon: BarChart3, color: "bg-violet-100 text-violet-700", cuenta: "629" },
-  formacion: { label: "📚 Formación (649)", icon: Star, color: "bg-emerald-100 text-emerald-700", cuenta: "649" },
-  otros: { label: "📝 Otros gastos (629)", icon: MoreVertical, color: "bg-gray-100 text-gray-700", cuenta: "629" },
+  // OPEX - Gastos operativos (cuenta 6xx)
+  semillas: { label: "🌱 Semillas/Materias primas (601)", icon: Sprout, color: "bg-green-100 text-green-700", cuenta: "601", tipo: "opex" },
+  sustratos: { label: "🪴 Sustratos/Aprovisionamientos (602)", icon: Layers, color: "bg-amber-100 text-amber-700", cuenta: "602", tipo: "opex" },
+  embalajes: { label: "📦 Embalajes y envases (602)", icon: Package, color: "bg-blue-100 text-blue-700", cuenta: "602", tipo: "opex" },
+  alquiler: { label: "🏠 Alquiler local (621)", icon: Building2, color: "bg-neutral-100 text-neutral-700", cuenta: "621", tipo: "opex" },
+  reparaciones: { label: "🔧 Reparaciones/Mantenimiento (622)", icon: AlertTriangle, color: "bg-orange-100 text-orange-700", cuenta: "622", tipo: "opex" },
+  asesoria: { label: "👔 Asesoría/Gestoría (623)", icon: FileText, color: "bg-slate-100 text-slate-700", cuenta: "623", tipo: "opex" },
+  transporte: { label: "🚚 Transporte/Logística (624)", icon: Truck, color: "bg-purple-100 text-purple-700", cuenta: "624", tipo: "opex" },
+  seguros: { label: "🛡️ Seguros (625)", icon: FileText, color: "bg-teal-100 text-teal-700", cuenta: "625", tipo: "opex" },
+  banco: { label: "🏦 Comisiones bancarias (626)", icon: Receipt, color: "bg-gray-100 text-gray-700", cuenta: "626", tipo: "opex" },
+  publicidad: { label: "📣 Publicidad/Marketing (627)", icon: TrendingUp, color: "bg-indigo-100 text-indigo-700", cuenta: "627", tipo: "opex" },
+  energia: { label: "💡 Suministros: Luz/Agua/Gas (628)", icon: Zap, color: "bg-yellow-100 text-yellow-700", cuenta: "628", tipo: "opex" },
+  servicios: { label: "⚙️ Otros servicios (629)", icon: MoreVertical, color: "bg-cyan-100 text-cyan-700", cuenta: "629", tipo: "opex" },
+  tributos: { label: "📋 Tributos e impuestos (631)", icon: Receipt, color: "bg-red-100 text-red-700", cuenta: "631", tipo: "opex" },
+  nominas: { label: "👥 Sueldos y salarios (640)", icon: Users, color: "bg-pink-100 text-pink-700", cuenta: "640", tipo: "opex" },
+  seguridad_social: { label: "🏥 Seg. Social empresa (642)", icon: Users, color: "bg-rose-100 text-rose-700", cuenta: "642", tipo: "opex" },
+  software: { label: "💻 Software/IT (629)", icon: BarChart3, color: "bg-violet-100 text-violet-700", cuenta: "629", tipo: "opex" },
+  formacion: { label: "📚 Formación (649)", icon: Star, color: "bg-emerald-100 text-emerald-700", cuenta: "649", tipo: "opex" },
+  otros: { label: "📝 Otros gastos (629)", icon: MoreVertical, color: "bg-gray-100 text-gray-700", cuenta: "629", tipo: "opex" },
+  // CAPEX - Inversiones/Inmovilizado (cuenta 2xx)
+  capex_equipos: { label: "🖥️ CAPEX: Equipos informáticos (217)", icon: BarChart3, color: "bg-indigo-200 text-indigo-800", cuenta: "217", tipo: "capex", amortizacion: 4 },
+  capex_mobiliario: { label: "🪑 CAPEX: Mobiliario (216)", icon: Building2, color: "bg-indigo-200 text-indigo-800", cuenta: "216", tipo: "capex", amortizacion: 10 },
+  capex_maquinaria: { label: "⚙️ CAPEX: Maquinaria (213)", icon: Zap, color: "bg-indigo-200 text-indigo-800", cuenta: "213", tipo: "capex", amortizacion: 10 },
+  capex_instalaciones: { label: "🏗️ CAPEX: Instalaciones (212)", icon: Building2, color: "bg-indigo-200 text-indigo-800", cuenta: "212", tipo: "capex", amortizacion: 10 },
+  capex_vehiculos: { label: "🚗 CAPEX: Vehículos (218)", icon: Truck, color: "bg-indigo-200 text-indigo-800", cuenta: "218", tipo: "capex", amortizacion: 6 },
+  capex_otros: { label: "📦 CAPEX: Otro inmovilizado (219)", icon: Package, color: "bg-indigo-200 text-indigo-800", cuenta: "219", tipo: "capex", amortizacion: 10 },
 };
 
 const prioridadTareaConfig = {
@@ -1365,6 +1374,8 @@ const MainApp = () => {
   const { data: presupuestosData, refetch: refetchPresupuestos } = useRealtime('presupuestos');
   const { data: presupuestoItemsData, refetch: refetchPresupuestoItems } = useRealtime('presupuesto_items');
   const { data: pagosProveedorData, refetch: refetchPagosProveedor } = useRealtime('pagos_proveedor');
+  const { data: muestrasData, refetch: refetchMuestras } = useRealtime('muestras');
+  const { data: muestraItemsData, refetch: refetchMuestraItems } = useRealtime('muestra_items');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1409,6 +1420,8 @@ const MainApp = () => {
   const presupuestos = presupuestosData || [];
   const presupuestoItems = presupuestoItemsData || [];
   const pagosProveedor = pagosProveedorData || [];
+  const muestras = muestrasData || [];
+  const muestraItems = muestraItemsData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2944,13 +2957,34 @@ const MainApp = () => {
     const divisor = 1 + (ivaPorcentaje / 100);
     const base = form.importe ? (parseFloat(form.importe) / divisor).toFixed(2) : '0.00';
     const iva = form.importe ? (parseFloat(form.importe) - parseFloat(base)).toFixed(2) : '0.00';
-    const cuentaGasto = categoriasGasto[form.categoria]?.cuenta || '629';
+    const categoriaInfo = categoriasGasto[form.categoria] || categoriasGasto.otros;
+    const cuentaGasto = categoriaInfo?.cuenta || '629';
+    const esCapex = categoriaInfo?.tipo === 'capex';
+    const amortizacionAnios = categoriaInfo?.amortizacion || 0;
+
+    // Separar categorías OPEX y CAPEX para el selector
+    const categoriasOPEX = Object.entries(categoriasGasto).filter(([k, v]) => v.tipo !== 'capex');
+    const categoriasCAPEX = Object.entries(categoriasGasto).filter(([k, v]) => v.tipo === 'capex');
 
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
-          <Select label="Categoría (cuenta PGC)" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Categoría (cuenta PGC)</label>
+            <select 
+              value={form.categoria} 
+              onChange={e => setForm({...form, categoria: e.target.value})}
+              className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+            >
+              <optgroup label="📋 GASTOS OPERATIVOS (OPEX)">
+                {categoriasOPEX.map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </optgroup>
+              <optgroup label="📦 INVERSIONES (CAPEX)">
+                {categoriasCAPEX.map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </optgroup>
+            </select>
+          </div>
           <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
           <Select 
             label="Proveedor" 
@@ -2973,12 +3007,34 @@ const MainApp = () => {
           />
         </div>
 
+        {/* Aviso CAPEX */}
+        {esCapex && (
+          <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
+            <div className="flex items-start gap-2">
+              <Banknote size={20} className="text-indigo-600 mt-0.5" />
+              <div>
+                <p className="font-semibold text-indigo-800">📦 CAPEX - Inversión en Activo Fijo</p>
+                <p className="text-sm text-indigo-700">
+                  Este gasto se registra como <strong>inmovilizado</strong> (cuenta {cuentaGasto}), no como gasto del ejercicio.
+                  {amortizacionAnios > 0 && (
+                    <span> Amortización estimada: <strong>{amortizacionAnios} años</strong> ({(100/amortizacionAnios).toFixed(1)}% anual).</span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Desglose contable */}
         {form.importe > 0 && (
-          <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-sm">
-            <p className="font-semibold text-purple-800 mb-2">📊 Desglose contable (asiento automático):</p>
-            <div className="grid grid-cols-3 gap-2 text-purple-700">
-              <div><span className="font-mono">{cuentaGasto}</span> Gasto: <strong>{base}€</strong> (D)</div>
+          <div className={`p-3 ${esCapex ? 'bg-indigo-50 border-indigo-200' : 'bg-purple-50 border-purple-200'} border rounded-xl text-sm`}>
+            <p className={`font-semibold ${esCapex ? 'text-indigo-800' : 'text-purple-800'} mb-2`}>
+              📊 Asiento contable {esCapex ? '(CAPEX)' : '(OPEX)'}:
+            </p>
+            <div className={`grid grid-cols-3 gap-2 ${esCapex ? 'text-indigo-700' : 'text-purple-700'}`}>
+              <div>
+                <span className="font-mono">{cuentaGasto}</span> {esCapex ? 'Activo' : 'Gasto'}: <strong>{base}€</strong> (D)
+              </div>
               <div><span className="font-mono">472</span> IVA {ivaPorcentaje}%: <strong>{iva}€</strong> (D)</div>
               <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
             </div>
@@ -3357,6 +3413,18 @@ const MainApp = () => {
                          dashboardPeriodo === 'año_actual' ? 'Este año' : 
                          getMesesDisponibles().find(m => m.value === dashboardPeriodo)?.label || 'Periodo';
 
+    // Alertas
+    const hoy = new Date();
+    const pagosVencidos = pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) < hoy);
+    const muestrasPendientes = muestras.filter(m => m.estado === 'pendiente' && new Date(m.fecha_entrega) <= new Date(hoy.getTime() + 2*24*60*60*1000));
+    const presupuestosExpiran = presupuestos.filter(p => {
+      if (p.estado !== 'pendiente' && p.estado !== 'enviado') return false;
+      const fechaValidez = new Date(p.fecha);
+      fechaValidez.setDate(fechaValidez.getDate() + (p.validez || 15));
+      return fechaValidez <= new Date(hoy.getTime() + 3*24*60*60*1000);
+    });
+    const totalAlertas = pagosVencidos.length + muestrasPendientes.length + presupuestosExpiran.length;
+
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -3381,6 +3449,45 @@ const MainApp = () => {
             </select>
           </div>
         </div>
+
+        {/* Alertas importantes */}
+        {totalAlertas > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {pagosVencidos.length > 0 && (
+              <Card className="p-4 bg-red-50 border-red-200 cursor-pointer hover:bg-red-100" onClick={() => setActiveSection('proveedores')}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-red-100 rounded-lg"><AlertCircle size={20} className="text-red-600" /></div>
+                  <div>
+                    <p className="font-bold text-red-800">⚠️ {pagosVencidos.length} pagos vencidos</p>
+                    <p className="text-sm text-red-600">{formatCurrency(pagosVencidos.reduce((s, p) => s + p.importe, 0))} pendiente</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+            {muestrasPendientes.length > 0 && (
+              <Card className="p-4 bg-purple-50 border-purple-200 cursor-pointer hover:bg-purple-100" onClick={() => setActiveSection('muestras')}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-lg"><Gift size={20} className="text-purple-600" /></div>
+                  <div>
+                    <p className="font-bold text-purple-800">🎁 {muestrasPendientes.length} muestras pendientes</p>
+                    <p className="text-sm text-purple-600">Entregar pronto</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+            {presupuestosExpiran.length > 0 && (
+              <Card className="p-4 bg-amber-50 border-amber-200 cursor-pointer hover:bg-amber-100" onClick={() => setActiveSection('presupuestos')}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 rounded-lg"><ClipboardList size={20} className="text-amber-600" /></div>
+                  <div>
+                    <p className="font-bold text-amber-800">⏰ {presupuestosExpiran.length} presupuestos expiran</p>
+                    <p className="text-sm text-amber-600">Hacer seguimiento</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
         
         <Card className="p-3 md:p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
           <p className="text-xs md:text-sm font-medium text-orange-700">📊 Mostrando datos de: <span className="font-bold">{periodoLabel}</span></p>
@@ -5762,6 +5869,8 @@ Firma repartidor: _________________
 
   // ==================== PROVEEDORES ====================
   const renderProveedores = () => {
+    const [vistaProveedores, setVistaProveedores] = useState('proveedores'); // proveedores, pagos
+    
     const handleDeleteProveedor = async (id) => {
       if (window.confirm('¿Eliminar este proveedor?')) {
         await supabase.from('proveedores').delete().eq('id', id);
@@ -5773,53 +5882,353 @@ Firma repartidor: _________________
     const proveedoresConTotales = proveedores.map(p => {
       const gastosProveedor = gastos.filter(g => g.proveedor_id === p.id);
       const total = gastosProveedor.reduce((sum, g) => sum + (g.importe || 0), 0);
-      return { ...p, totalGastos: total, numFacturas: gastosProveedor.length };
+      const pagosProv = pagosProveedor.filter(pg => pg.proveedor_id === p.id);
+      const pendientes = pagosProv.filter(pg => !pg.pagado);
+      const vencidos = pendientes.filter(pg => new Date(pg.fecha_vencimiento) < new Date());
+      return { 
+        ...p, 
+        totalGastos: total, 
+        numFacturas: gastosProveedor.length,
+        pagosPendientes: pendientes.length,
+        pagosVencidos: vencidos.length,
+        importePendiente: pendientes.reduce((s, pg) => s + (pg.importe || 0), 0)
+      };
     });
+
+    // Pagos pendientes
+    const hoy = new Date();
+    const en7dias = new Date(hoy.getTime() + 7*24*60*60*1000);
+    const en30dias = new Date(hoy.getTime() + 30*24*60*60*1000);
+    
+    const pagosVencidos = pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) < hoy);
+    const pagosProximos7 = pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) >= hoy && new Date(p.fecha_vencimiento) <= en7dias);
+    const pagosProximos30 = pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) > en7dias && new Date(p.fecha_vencimiento) <= en30dias);
+    const pagosPendientesTotal = pagosProveedor.filter(p => !p.pagado);
+
+    const totalVencido = pagosVencidos.reduce((s, p) => s + (p.importe || 0), 0);
+    const totalPendiente = pagosPendientesTotal.reduce((s, p) => s + (p.importe || 0), 0);
+
+    // Crear pago desde gasto
+    const crearPagoDesdeGasto = async (gasto, fechaVencimiento) => {
+      try {
+        await supabase.from('pagos_proveedor').insert({
+          proveedor_id: gasto.proveedor_id,
+          gasto_id: gasto.id,
+          importe: gasto.importe,
+          fecha_vencimiento: fechaVencimiento,
+          pagado: false,
+          forma_pago: gasto.forma_pago || 'banco',
+          referencia: gasto.concepto,
+        });
+        refetchPagosProveedor();
+        alert('✅ Pago programado correctamente');
+      } catch (error) {
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    // Marcar pago como pagado
+    const marcarPagado = async (pagoId) => {
+      await supabase.from('pagos_proveedor').update({ 
+        pagado: true, 
+        fecha_pago: new Date().toISOString().split('T')[0] 
+      }).eq('id', pagoId);
+      refetchPagosProveedor();
+    };
+
+    // Eliminar pago
+    const eliminarPago = async (pagoId) => {
+      if (!confirm('¿Eliminar este pago pendiente?')) return;
+      await supabase.from('pagos_proveedor').delete().eq('id', pagoId);
+      refetchPagosProveedor();
+    };
+
+    // Form para nuevo pago
+    const NuevoPagoForm = ({ onSave, onCancel }) => {
+      const [form, setForm] = useState({
+        proveedor_id: proveedores[0]?.id || null,
+        importe: 0,
+        fecha_vencimiento: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+        referencia: '',
+        notas: '',
+      });
+
+      return (
+        <div className="space-y-4">
+          <Select 
+            label="Proveedor" 
+            value={form.proveedor_id || ''} 
+            onChange={e => setForm({...form, proveedor_id: parseInt(e.target.value)})} 
+            options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} 
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+            <Input label="Fecha Vencimiento" type="date" value={form.fecha_vencimiento} onChange={e => setForm({...form, fecha_vencimiento: e.target.value})} />
+          </div>
+          <Input label="Referencia / Concepto" value={form.referencia} onChange={e => setForm({...form, referencia: e.target.value})} />
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+            <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border" rows={2} />
+          </div>
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+            <Button onClick={() => onSave(form)}>Guardar Pago</Button>
+          </div>
+        </div>
+      );
+    };
+
+    const handleSavePago = async (form) => {
+      try {
+        await supabase.from('pagos_proveedor').insert({
+          proveedor_id: form.proveedor_id,
+          importe: form.importe,
+          fecha_vencimiento: form.fecha_vencimiento,
+          referencia: form.referencia,
+          notas: form.notas,
+          pagado: false,
+        });
+        refetchPagosProveedor();
+        setShowModal(null);
+        alert('✅ Pago programado');
+      } catch (error) {
+        alert('❌ Error: ' + error.message);
+      }
+    };
 
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-black text-neutral-900">Proveedores</h1>
-            <p className="text-neutral-500 font-medium">{proveedores.length} proveedores</p>
+            <p className="text-neutral-500 font-medium">{proveedores.length} proveedores · {formatCurrency(totalPendiente)} pendiente</p>
           </div>
-          <Button onClick={() => { setEditingItem(null); setShowModal('proveedor'); }}><Plus size={20} /> Nuevo</Button>
+          <div className="flex gap-2">
+            <Button variant={vistaProveedores === 'proveedores' ? 'primary' : 'secondary'} onClick={() => setVistaProveedores('proveedores')}>
+              <Building2 size={16} /> Proveedores
+            </Button>
+            <Button variant={vistaProveedores === 'pagos' ? 'primary' : 'secondary'} onClick={() => setVistaProveedores('pagos')}>
+              <Banknote size={16} /> Pagos
+              {pagosVencidos.length > 0 && <span className="ml-1 px-1.5 py-0.5 text-xs bg-red-500 text-white rounded-full">{pagosVencidos.length}</span>}
+            </Button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {proveedoresConTotales.map(prov => {
-            const catConfig = categoriaProveedorConfig[prov.categoria] || categoriaProveedorConfig.otros;
-            return (
-              <Card key={prov.id} className="p-5 hover:shadow-md transition-all">
-                <div className="flex items-start justify-between mb-3">
-                  <Badge className={catConfig.color}>{catConfig.label}</Badge>
-                  <div className="flex gap-1">
-                    <button onClick={() => { setEditingItem(prov); setShowModal('proveedor'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                    <button onClick={() => handleDeleteProveedor(prov.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+        {vistaProveedores === 'pagos' ? (
+          <>
+            {/* Stats de pagos */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Card className={`p-4 ${pagosVencidos.length > 0 ? 'bg-red-50 border-red-200' : ''}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg ${pagosVencidos.length > 0 ? 'bg-red-100' : 'bg-neutral-100'}`}>
+                    <AlertCircle size={20} className={pagosVencidos.length > 0 ? 'text-red-600' : 'text-neutral-400'} />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-black text-red-600">{formatCurrency(totalVencido)}</p>
+                    <p className="text-xs text-neutral-500">{pagosVencidos.length} vencidos</p>
                   </div>
                 </div>
-                <h3 className="font-bold text-lg text-neutral-900">{prov.nombre}</h3>
-                <p className="text-sm text-neutral-500 mb-2">{prov.contacto}</p>
-                <div className="text-sm text-neutral-400 space-y-1">
-                  {prov.email && <p className="flex items-center gap-2"><Mail size={14} /> {prov.email}</p>}
-                  {prov.telefono && <p className="flex items-center gap-2"><Phone size={14} /> {prov.telefono}</p>}
-                </div>
-                <div className="mt-4 pt-3 border-t flex justify-between items-center">
-                  <span className="text-sm text-neutral-500">{prov.numFacturas} facturas</span>
-                  <span className="font-bold text-neutral-900">{formatCurrency(prov.totalGastos)}</span>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-100 rounded-lg"><Clock size={20} className="text-amber-600" /></div>
+                  <div>
+                    <p className="text-2xl font-black">{pagosProximos7.length}</p>
+                    <p className="text-xs text-neutral-500">Próximos 7 días</p>
+                  </div>
                 </div>
               </Card>
-            );
-          })}
-          {proveedores.length === 0 && (
-            <Card className="col-span-3 p-8 text-center">
-              <Package size={48} className="mx-auto text-neutral-300 mb-4" />
-              <h3 className="font-bold text-neutral-900 mb-2">No hay proveedores</h3>
-              <p className="text-neutral-500 mb-4">Añade tus proveedores para gestionar mejor las compras</p>
-              <Button onClick={() => setShowModal('proveedor')}><Plus size={16} /> Añadir Proveedor</Button>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-100 rounded-lg"><Calendar size={20} className="text-blue-600" /></div>
+                  <div>
+                    <p className="text-2xl font-black">{pagosProximos30.length}</p>
+                    <p className="text-xs text-neutral-500">Próximos 30 días</p>
+                  </div>
+                </div>
+              </Card>
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-100 rounded-lg"><Euro size={20} className="text-purple-600" /></div>
+                  <div>
+                    <p className="text-2xl font-black">{formatCurrency(totalPendiente)}</p>
+                    <p className="text-xs text-neutral-500">Total pendiente</p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* Lista de pagos */}
+            <Card>
+              <div className="p-4 border-b flex justify-between items-center">
+                <h3 className="font-bold">Pagos Pendientes</h3>
+                <Button onClick={() => setShowModal('nuevoPago')}><Plus size={16} /> Nuevo Pago</Button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-50">
+                    <tr>
+                      <th className="text-left p-4 text-xs font-semibold text-neutral-500">Proveedor</th>
+                      <th className="text-left p-4 text-xs font-semibold text-neutral-500">Referencia</th>
+                      <th className="text-right p-4 text-xs font-semibold text-neutral-500">Importe</th>
+                      <th className="text-left p-4 text-xs font-semibold text-neutral-500">Vencimiento</th>
+                      <th className="text-left p-4 text-xs font-semibold text-neutral-500">Estado</th>
+                      <th className="text-right p-4 text-xs font-semibold text-neutral-500">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagosPendientesTotal.length === 0 ? (
+                      <tr><td colSpan={6} className="p-8 text-center text-neutral-500">
+                        <CheckCircle size={48} className="mx-auto mb-2 text-green-400" />
+                        No hay pagos pendientes
+                      </td></tr>
+                    ) : (
+                      pagosPendientesTotal.sort((a, b) => new Date(a.fecha_vencimiento) - new Date(b.fecha_vencimiento)).map(pago => {
+                        const prov = proveedores.find(p => p.id === pago.proveedor_id);
+                        const fechaVenc = new Date(pago.fecha_vencimiento);
+                        const diasHasta = Math.ceil((fechaVenc - hoy) / (1000*60*60*24));
+                        const vencido = diasHasta < 0;
+                        const urgente = diasHasta >= 0 && diasHasta <= 7;
+
+                        return (
+                          <tr key={pago.id} className={`border-t hover:bg-neutral-50 ${vencido ? 'bg-red-50' : urgente ? 'bg-amber-50' : ''}`}>
+                            <td className="p-4">
+                              <p className="font-semibold">{prov?.nombre || 'Sin proveedor'}</p>
+                              <p className="text-xs text-neutral-500">{prov?.categoria}</p>
+                            </td>
+                            <td className="p-4 text-sm">{pago.referencia || '-'}</td>
+                            <td className="p-4 text-right font-bold">{formatCurrency(pago.importe)}</td>
+                            <td className="p-4">
+                              <p className={`text-sm ${vencido ? 'text-red-600 font-bold' : urgente ? 'text-amber-600' : ''}`}>
+                                {formatDate(pago.fecha_vencimiento)}
+                              </p>
+                              <p className={`text-xs ${vencido ? 'text-red-500' : urgente ? 'text-amber-500' : 'text-neutral-400'}`}>
+                                {vencido ? `Vencido hace ${Math.abs(diasHasta)} días` : `En ${diasHasta} días`}
+                              </p>
+                            </td>
+                            <td className="p-4">
+                              {vencido ? (
+                                <Badge className="bg-red-100 text-red-700">⚠️ Vencido</Badge>
+                              ) : urgente ? (
+                                <Badge className="bg-amber-100 text-amber-700">⏰ Urgente</Badge>
+                              ) : (
+                                <Badge className="bg-blue-100 text-blue-700">Pendiente</Badge>
+                              )}
+                            </td>
+                            <td className="p-4">
+                              <div className="flex justify-end gap-1">
+                                <button 
+                                  onClick={() => marcarPagado(pago.id)}
+                                  className="p-2 text-green-600 hover:bg-green-50 rounded-lg" 
+                                  title="Marcar como pagado"
+                                >
+                                  <CheckCircle size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => eliminarPago(pago.id)}
+                                  className="p-2 text-red-500 hover:bg-red-50 rounded-lg" 
+                                  title="Eliminar"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </Card>
-          )}
-        </div>
+
+            {/* Gastos sin pago programado */}
+            <Card>
+              <div className="p-4 border-b">
+                <h3 className="font-bold">Gastos sin Pago Programado</h3>
+                <p className="text-sm text-neutral-500">Gastos con proveedor que no tienen fecha de vencimiento</p>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {gastos.filter(g => g.proveedor_id && !pagosProveedor.some(p => p.gasto_id === g.id)).slice(0, 10).map(gasto => {
+                  const prov = proveedores.find(p => p.id === gasto.proveedor_id);
+                  return (
+                    <div key={gasto.id} className="p-3 border-b flex items-center justify-between hover:bg-neutral-50">
+                      <div>
+                        <p className="font-medium">{gasto.concepto}</p>
+                        <p className="text-xs text-neutral-500">{prov?.nombre} · {formatDate(gasto.fecha)}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold">{formatCurrency(gasto.importe)}</span>
+                        <Button size="sm" variant="secondary" onClick={() => {
+                          const fecha = prompt('Fecha de vencimiento (YYYY-MM-DD):', new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0]);
+                          if (fecha) crearPagoDesdeGasto(gasto, fecha);
+                        }}>
+                          <Plus size={14} /> Programar
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          </>
+        ) : (
+          /* Vista de proveedores */
+          <>
+            <div className="flex justify-end">
+              <Button onClick={() => { setEditingItem(null); setShowModal('proveedor'); }}><Plus size={20} /> Nuevo Proveedor</Button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {proveedoresConTotales.map(prov => {
+                const catConfig = categoriaProveedorConfig[prov.categoria] || categoriaProveedorConfig.otros;
+                return (
+                  <Card key={prov.id} className={`p-5 hover:shadow-md transition-all ${prov.pagosVencidos > 0 ? 'border-red-300 bg-red-50' : ''}`}>
+                    <div className="flex items-start justify-between mb-3">
+                      <Badge className={catConfig.color}>{catConfig.label}</Badge>
+                      <div className="flex gap-1">
+                        <button onClick={() => { setEditingItem(prov); setShowModal('proveedor'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                        <button onClick={() => handleDeleteProveedor(prov.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                      </div>
+                    </div>
+                    <h3 className="font-bold text-lg text-neutral-900">{prov.nombre}</h3>
+                    <p className="text-sm text-neutral-500 mb-2">{prov.contacto}</p>
+                    <div className="text-sm text-neutral-400 space-y-1">
+                      {prov.email && <p className="flex items-center gap-2"><Mail size={14} /> {prov.email}</p>}
+                      {prov.telefono && <p className="flex items-center gap-2"><Phone size={14} /> {prov.telefono}</p>}
+                    </div>
+                    <div className="mt-4 pt-3 border-t">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-sm text-neutral-500">{prov.numFacturas} facturas</span>
+                        <span className="font-bold text-neutral-900">{formatCurrency(prov.totalGastos)}</span>
+                      </div>
+                      {prov.pagosPendientes > 0 && (
+                        <div className={`flex justify-between items-center text-sm ${prov.pagosVencidos > 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                          <span>{prov.pagosVencidos > 0 ? `⚠️ ${prov.pagosVencidos} vencidos` : `⏰ ${prov.pagosPendientes} pendientes`}</span>
+                          <span className="font-bold">{formatCurrency(prov.importePendiente)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                );
+              })}
+              {proveedores.length === 0 && (
+                <Card className="col-span-3 p-8 text-center">
+                  <Package size={48} className="mx-auto text-neutral-300 mb-4" />
+                  <h3 className="font-bold text-neutral-900 mb-2">No hay proveedores</h3>
+                  <p className="text-neutral-500 mb-4">Añade tus proveedores para gestionar mejor las compras</p>
+                  <Button onClick={() => setShowModal('proveedor')}><Plus size={16} /> Añadir Proveedor</Button>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Modal nuevo pago */}
+        {showModal === 'nuevoPago' && (
+          <Modal title="Nuevo Pago a Proveedor" onClose={() => setShowModal(null)}>
+            <NuevoPagoForm onSave={handleSavePago} onCancel={() => setShowModal(null)} />
+          </Modal>
+        )}
       </div>
     );
   };
@@ -8515,6 +8924,442 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== RENDER MUESTRAS ====================
+  const renderMuestras = () => {
+    const estadoMuestraConfig = {
+      pendiente: { label: 'Pendiente', color: 'bg-amber-100 text-amber-700', icon: Clock },
+      programada: { label: 'Programada', color: 'bg-blue-100 text-blue-700', icon: CalendarClock },
+      entregada: { label: 'Entregada', color: 'bg-green-100 text-green-700', icon: PackageCheck },
+      seguimiento: { label: 'En Seguimiento', color: 'bg-purple-100 text-purple-700', icon: Phone },
+      convertido: { label: 'Convertido a Cliente', color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
+      rechazado: { label: 'No Interesado', color: 'bg-red-100 text-red-700', icon: XCircle },
+    };
+
+    const crearMuestra = async (form) => {
+      try {
+        const { data: nuevaMuestra, error } = await supabase.from('muestras').insert({
+          lead_id: form.lead_id || null,
+          nombre_contacto: form.nombre_contacto,
+          empresa: form.empresa,
+          telefono: form.telefono,
+          email: form.email,
+          direccion: form.direccion,
+          fecha_entrega: form.fecha_entrega,
+          fecha_siguiente: form.fecha_siguiente || null,
+          estado: 'pendiente',
+          notas: form.notas || '',
+          tipo_negocio: form.tipo_negocio || 'restaurante',
+        }).select().single();
+
+        if (error) throw error;
+
+        // Insertar items de muestra
+        for (const item of form.items) {
+          await supabase.from('muestra_items').insert({
+            muestra_id: nuevaMuestra.id,
+            producto_id: item.producto_id,
+            cantidad: item.cantidad,
+          });
+        }
+
+        refetchMuestras();
+        refetchMuestraItems();
+        setShowModal(null);
+        alert('✅ Muestra programada correctamente');
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    const convertirACliente = async (muestra) => {
+      if (!confirm(`¿Convertir "${muestra.empresa || muestra.nombre_contacto}" en cliente?`)) return;
+
+      try {
+        // Crear cliente
+        const { data: nuevoCliente, error } = await supabase.from('clientes').insert({
+          nombre: muestra.empresa || muestra.nombre_contacto,
+          contacto: muestra.nombre_contacto,
+          telefono: muestra.telefono,
+          email: muestra.email,
+          direccion: muestra.direccion,
+          tipo: muestra.tipo_negocio || 'restaurante',
+          zona: 'centro',
+          descuento: 0,
+        }).select().single();
+
+        if (error) throw error;
+
+        // Actualizar muestra
+        await supabase.from('muestras').update({ 
+          estado: 'convertido',
+          cliente_id: nuevoCliente.id,
+        }).eq('id', muestra.id);
+
+        refetchMuestras();
+        refetchClientes();
+        setActiveSection('clientes');
+        alert(`✅ Cliente "${nuevoCliente.nombre}" creado correctamente`);
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    // Formulario de muestra
+    const MuestraForm = ({ onSave, onCancel }) => {
+      const [form, setForm] = useState({
+        lead_id: null,
+        nombre_contacto: '',
+        empresa: '',
+        telefono: '',
+        email: '',
+        direccion: '',
+        tipo_negocio: 'restaurante',
+        fecha_entrega: new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0],
+        fecha_siguiente: '',
+        items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : [],
+        notas: '',
+      });
+
+      const [fromLead, setFromLead] = useState(false);
+
+      const cargarDesdeLead = (leadId) => {
+        const lead = leads.find(l => l.id === leadId);
+        if (lead) {
+          setForm({
+            ...form,
+            lead_id: lead.id,
+            nombre_contacto: lead.contacto || lead.nombre,
+            empresa: lead.empresa || lead.nombre,
+            telefono: lead.telefono,
+            email: lead.email,
+            direccion: lead.direccion,
+            tipo_negocio: lead.tipo || 'restaurante',
+          });
+        }
+      };
+
+      const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0].id, cantidad: 1 }]});
+      const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
+      const updateItem = (idx, field, value) => { 
+        const newItems = [...form.items]; 
+        newItems[idx] = {...newItems[idx], [field]: value}; 
+        setForm({...form, items: newItems}); 
+      };
+
+      // Calcular coste estimado de la muestra
+      const costeTotal = form.items.reduce((sum, item) => {
+        const prod = productos.find(p => p.id === item.producto_id);
+        return sum + ((prod?.coste || 0) * item.cantidad);
+      }, 0);
+
+      return (
+        <div className="space-y-4">
+          {/* Cargar desde Lead */}
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={fromLead} 
+                onChange={e => setFromLead(e.target.checked)} 
+                className="w-4 h-4 rounded"
+              />
+              <span className="text-sm font-medium text-blue-800">Cargar datos desde un Lead existente</span>
+            </label>
+            {fromLead && (
+              <select 
+                className="w-full mt-2 px-3 py-2 rounded-lg border text-sm"
+                onChange={e => cargarDesdeLead(parseInt(e.target.value))}
+              >
+                <option value="">Seleccionar lead...</option>
+                {leads.filter(l => l.estado !== 'ganado' && l.estado !== 'perdido').map(l => (
+                  <option key={l.id} value={l.id}>{l.nombre} - {l.empresa}</option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Datos contacto */}
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Nombre Contacto" value={form.nombre_contacto} onChange={e => setForm({...form, nombre_contacto: e.target.value})} />
+            <Input label="Empresa" value={form.empresa} onChange={e => setForm({...form, empresa: e.target.value})} />
+            <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+            <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
+            <Select 
+              label="Tipo de Negocio" 
+              value={form.tipo_negocio} 
+              onChange={e => setForm({...form, tipo_negocio: e.target.value})} 
+              options={Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }))} 
+            />
+            <Input label="Fecha Entrega Muestra" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
+          </div>
+
+          {/* Productos de la muestra */}
+          <div>
+            <div className="flex justify-between mb-2">
+              <label className="text-sm font-semibold text-neutral-700">Productos a enviar</label>
+              <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1">
+                <Plus size={16} />Añadir
+              </button>
+            </div>
+            <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
+              {form.items.map((item, idx) => {
+                const prod = productos.find(p => p.id === item.producto_id);
+                return (
+                  <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                    <select 
+                      value={item.producto_id} 
+                      onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} 
+                      className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                    >
+                      {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
+                    </select>
+                    <input 
+                      type="number" 
+                      value={item.cantidad} 
+                      onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} 
+                      className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
+                      min="1" 
+                    />
+                    <span className="text-xs text-neutral-500 w-20">
+                      Coste: {formatCurrency((prod?.coste || 0) * item.cantidad)}
+                    </span>
+                    {form.items.length > 1 && (
+                      <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Siguiente muestra */}
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+            <Input 
+              label="📅 Programar siguiente muestra (opcional)" 
+              type="date" 
+              value={form.fecha_siguiente} 
+              onChange={e => setForm({...form, fecha_siguiente: e.target.value})} 
+            />
+            <p className="text-xs text-amber-700 mt-1">Si el cliente quiere probar otro mes, programa aquí la siguiente entrega</p>
+          </div>
+
+          {/* Notas */}
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+            <textarea 
+              value={form.notas} 
+              onChange={e => setForm({...form, notas: e.target.value})} 
+              className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
+              rows={2} 
+              placeholder="Preferencias, observaciones..."
+            />
+          </div>
+
+          {/* Resumen coste */}
+          <Card className="p-3 bg-red-50 border-red-200">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-red-700">💰 Coste estimado de la muestra:</span>
+              <span className="font-bold text-red-700">{formatCurrency(costeTotal)}</span>
+            </div>
+            <p className="text-xs text-red-600 mt-1">Este coste se puede registrar como gasto de marketing</p>
+          </Card>
+
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+            <Button onClick={() => onSave(form)}>
+              <Gift size={16} /> Programar Muestra
+            </Button>
+          </div>
+        </div>
+      );
+    };
+
+    // Stats
+    const muestrasPendientes = muestras.filter(m => m.estado === 'pendiente' || m.estado === 'programada');
+    const muestrasEntregadas = muestras.filter(m => m.estado === 'entregada' || m.estado === 'seguimiento');
+    const convertidos = muestras.filter(m => m.estado === 'convertido').length;
+    const tasaConversion = muestras.length > 0 ? Math.round((convertidos / muestras.length) * 100) : 0;
+
+    return (
+      <div className="space-y-6">
+        {/* Info */}
+        <Card className="p-4 bg-gradient-to-r from-pink-50 to-purple-50 border-pink-200">
+          <div className="flex items-start gap-3">
+            <Gift size={28} className="text-pink-600" />
+            <div>
+              <h3 className="font-bold text-pink-900">Programa de Muestras Gratuitas</h3>
+              <p className="text-sm text-pink-700">
+                Envía muestras mensuales a potenciales clientes. Haz seguimiento y conviértelos en clientes recurrentes.
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg"><Clock size={20} className="text-amber-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{muestrasPendientes.length}</p>
+                <p className="text-xs text-neutral-500">Pendientes</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-100 rounded-lg"><PackageCheck size={20} className="text-green-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{muestrasEntregadas.length}</p>
+                <p className="text-xs text-neutral-500">En Seguimiento</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-emerald-100 rounded-lg"><UserPlus size={20} className="text-emerald-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{convertidos}</p>
+                <p className="text-xs text-neutral-500">Convertidos</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-purple-100 rounded-lg"><Percent size={20} className="text-purple-600" /></div>
+              <div>
+                <p className="text-2xl font-black">{tasaConversion}%</p>
+                <p className="text-xs text-neutral-500">Tasa Conversión</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Lista */}
+        <Card>
+          <div className="p-4 border-b flex justify-between items-center">
+            <h3 className="font-bold">Muestras Programadas</h3>
+            <Button onClick={() => setShowModal('muestra')}><Plus size={16} /> Nueva Muestra</Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Contacto / Empresa</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Tipo</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Productos</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Fecha Entrega</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Siguiente</th>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">Estado</th>
+                  <th className="text-right p-4 text-xs font-semibold text-neutral-500">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {muestras.length === 0 ? (
+                  <tr><td colSpan={7} className="p-8 text-center text-neutral-500">No hay muestras programadas</td></tr>
+                ) : (
+                  muestras.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(muestra => {
+                    const config = estadoMuestraConfig[muestra.estado] || estadoMuestraConfig.pendiente;
+                    const items = muestraItems.filter(i => i.muestra_id === muestra.id);
+                    const productosTexto = items.map(i => {
+                      const prod = productos.find(p => p.id === i.producto_id);
+                      return `${prod?.nombre || '?'} x${i.cantidad}`;
+                    }).join(', ');
+
+                    return (
+                      <tr key={muestra.id} className="border-t hover:bg-neutral-50">
+                        <td className="p-4">
+                          <div>
+                            <p className="font-semibold">{muestra.empresa || muestra.nombre_contacto}</p>
+                            <p className="text-xs text-neutral-500">{muestra.nombre_contacto} · {muestra.telefono}</p>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <Badge className={tipoClienteConfig[muestra.tipo_negocio]?.color || 'bg-neutral-100'}>
+                            {tipoClienteConfig[muestra.tipo_negocio]?.label || muestra.tipo_negocio}
+                          </Badge>
+                        </td>
+                        <td className="p-4 text-sm max-w-[200px] truncate" title={productosTexto}>
+                          {productosTexto || 'Sin productos'}
+                        </td>
+                        <td className="p-4 text-sm">{formatDate(muestra.fecha_entrega)}</td>
+                        <td className="p-4 text-sm">
+                          {muestra.fecha_siguiente ? (
+                            <span className="text-purple-600 font-medium">{formatDate(muestra.fecha_siguiente)}</span>
+                          ) : '-'}
+                        </td>
+                        <td className="p-4">
+                          <Badge className={config.color}>{config.label}</Badge>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex justify-end gap-1">
+                            {muestra.estado === 'pendiente' && (
+                              <button 
+                                onClick={() => supabase.from('muestras').update({ estado: 'entregada' }).eq('id', muestra.id).then(() => refetchMuestras())}
+                                className="p-2 text-green-600 hover:bg-green-50 rounded-lg" 
+                                title="Marcar como entregada"
+                              >
+                                <PackageCheck size={16} />
+                              </button>
+                            )}
+                            {(muestra.estado === 'entregada' || muestra.estado === 'seguimiento') && (
+                              <>
+                                <button 
+                                  onClick={() => supabase.from('muestras').update({ estado: 'seguimiento' }).eq('id', muestra.id).then(() => refetchMuestras())}
+                                  className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" 
+                                  title="En seguimiento"
+                                >
+                                  <Phone size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => convertirACliente(muestra)}
+                                  className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg" 
+                                  title="Convertir a cliente"
+                                >
+                                  <UserPlus size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => supabase.from('muestras').update({ estado: 'rechazado' }).eq('id', muestra.id).then(() => refetchMuestras())}
+                                  className="p-2 text-red-500 hover:bg-red-50 rounded-lg" 
+                                  title="No interesado"
+                                >
+                                  <XCircle size={16} />
+                                </button>
+                              </>
+                            )}
+                            <button 
+                              onClick={() => handleDelete('muestras', muestra.id)}
+                              className="p-2 text-neutral-400 hover:bg-neutral-100 rounded-lg" 
+                              title="Eliminar"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Modal */}
+        {showModal === 'muestra' && (
+          <Modal title="Nueva Muestra Gratuita" onClose={() => setShowModal(null)} size="max-w-2xl">
+            <MuestraForm onSave={crearMuestra} onCancel={() => setShowModal(null)} />
+          </Modal>
+        )}
+      </div>
+    );
+  };
+
   // ==================== MAIN RENDER ====================
   if (loading) return <LoadingScreen />;
 
@@ -8544,6 +9389,7 @@ Firma repartidor: _________________
           <NavItem icon={CheckCircle} label="Tareas" section="tareas" badge={tareasPendientes} />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Comercial</p>}</div>
           <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
+          <NavItem icon={Gift} label="Muestras" section="muestras" badge={muestras.filter(m => m.estado === 'pendiente').length} />
           <NavItem icon={Users} label="Clientes" section="clientes" />
           <NavItem icon={ClipboardList} label="Presupuestos" section="presupuestos" badge={presupuestos.filter(p => p.estado === 'pendiente').length} />
           <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
@@ -8774,6 +9620,7 @@ Firma repartidor: _________________
           {activeSection === 'calendario' && renderCalendario()}
           {activeSection === 'tareas' && renderTareas()}
           {activeSection === 'leads' && renderLeads()}
+          {activeSection === 'muestras' && renderMuestras()}
           {activeSection === 'clientes' && renderClientes()}
           {activeSection === 'presupuestos' && renderPresupuestos()}
           {activeSection === 'pedidos' && renderPedidos()}
