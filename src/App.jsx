@@ -715,6 +715,11 @@ const MainApp = () => {
   const [viewGastos, setViewGastos] = useState('table');
   const [viewLotes, setViewLotes] = useState('table');
 
+  // Estados para vistas de Proveedores y Tarifas
+  const [vistaProveedores, setVistaProveedores] = useState('proveedores');
+  const [clienteSeleccionadoTarifa, setClienteSeleccionadoTarifa] = useState(null);
+  const [editandoTarifa, setEditandoTarifa] = useState(null);
+
   // Estados de ordenación para tablas
   const [sortGastos, setSortGastos] = useState({ field: 'fecha', direction: 'desc' });
   const [sortFacturas, setSortFacturas] = useState({ field: 'fecha', direction: 'desc' });
@@ -5869,8 +5874,6 @@ Firma repartidor: _________________
 
   // ==================== PROVEEDORES ====================
   const renderProveedores = () => {
-    const [vistaProveedores, setVistaProveedores] = useState('proveedores'); // proveedores, pagos
-    
     const handleDeleteProveedor = async (id) => {
       if (window.confirm('¿Eliminar este proveedor?')) {
         await supabase.from('proveedores').delete().eq('id', id);
@@ -8730,24 +8733,21 @@ Firma repartidor: _________________
 
   // ==================== RENDER TARIFAS ====================
   const renderTarifas = () => {
-    const [clienteSeleccionado, setClienteSeleccionado] = useState(null);
-    const [editandoTarifa, setEditandoTarifa] = useState(null);
-
-    const tarifasDelCliente = clienteSeleccionado 
-      ? tarifasCliente.filter(t => t.cliente_id === clienteSeleccionado.id)
+    const tarifasDelCliente = clienteSeleccionadoTarifa 
+      ? tarifasCliente.filter(t => t.cliente_id === clienteSeleccionadoTarifa.id)
       : [];
 
     const guardarTarifa = async (productoId, precioEspecial) => {
       try {
         const existente = tarifasCliente.find(t => 
-          t.cliente_id === clienteSeleccionado.id && t.producto_id === productoId
+          t.cliente_id === clienteSeleccionadoTarifa.id && t.producto_id === productoId
         );
 
         if (existente) {
           await supabase.from('tarifas_cliente').update({ precio_especial: precioEspecial }).eq('id', existente.id);
         } else {
           await supabase.from('tarifas_cliente').insert({
-            cliente_id: clienteSeleccionado.id,
+            cliente_id: clienteSeleccionadoTarifa.id,
             producto_id: productoId,
             precio_especial: precioEspecial,
           });
@@ -8791,12 +8791,12 @@ Firma repartidor: _________________
             <div className="max-h-[60vh] overflow-y-auto">
               {clientes.map(cliente => {
                 const numTarifas = tarifasCliente.filter(t => t.cliente_id === cliente.id).length;
-                const isSelected = clienteSeleccionado?.id === cliente.id;
+                const isSelected = clienteSeleccionadoTarifa?.id === cliente.id;
                 
                 return (
                   <button
                     key={cliente.id}
-                    onClick={() => setClienteSeleccionado(cliente)}
+                    onClick={() => setClienteSeleccionadoTarifa(cliente)}
                     className={`w-full p-4 text-left border-b hover:bg-neutral-50 flex items-center justify-between transition-colors ${isSelected ? 'bg-orange-50 border-l-4 border-l-orange-500' : ''}`}
                   >
                     <div>
@@ -8814,13 +8814,13 @@ Firma repartidor: _________________
 
           {/* Tarifas del cliente seleccionado */}
           <Card className="md:col-span-2">
-            {clienteSeleccionado ? (
+            {clienteSeleccionadoTarifa ? (
               <>
                 <div className="p-4 border-b bg-neutral-50">
-                  <h3 className="font-bold">{clienteSeleccionado.nombre}</h3>
+                  <h3 className="font-bold">{clienteSeleccionadoTarifa.nombre}</h3>
                   <p className="text-sm text-neutral-500">
-                    Descuento general: {clienteSeleccionado.descuento || 0}% · 
-                    Tipo: {tipoClienteConfig[clienteSeleccionado.tipo]?.label}
+                    Descuento general: {clienteSeleccionadoTarifa.descuento || 0}% · 
+                    Tipo: {tipoClienteConfig[clienteSeleccionadoTarifa.tipo]?.label}
                   </p>
                 </div>
                 <div className="p-4">
