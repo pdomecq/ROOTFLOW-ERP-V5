@@ -22,6 +22,49 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ==================== HOOK DE PERSISTENCIA DE FORMULARIOS ====================
+// Evita pérdida de datos al cambiar de pestaña del navegador
+const useFormPersistence = (key, initialValue, enabled = true) => {
+  const storageKey = `rootflow_form_${key}`;
+  
+  // Inicializar con valor guardado o inicial
+  const [value, setValue] = useState(() => {
+    if (!enabled) return initialValue;
+    try {
+      const saved = sessionStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Merge con initialValue para asegurar que nuevos campos estén presentes
+        return { ...initialValue, ...parsed };
+      }
+    } catch (e) {
+      console.warn('Error loading form from storage:', e);
+    }
+    return initialValue;
+  });
+
+  // Guardar en sessionStorage cada vez que cambie
+  useEffect(() => {
+    if (!enabled) return;
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(value));
+    } catch (e) {
+      console.warn('Error saving form to storage:', e);
+    }
+  }, [value, storageKey, enabled]);
+
+  // Función para limpiar el storage (llamar al guardar/cancelar)
+  const clearStorage = () => {
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch (e) {
+      console.warn('Error clearing form storage:', e);
+    }
+  };
+
+  return [value, setValue, clearStorage];
+};
+
 // ==================== DATOS DE EMPRESA ====================
 const EMPRESA = {
   nombre: 'ROOTFLOW HYDROPONICS SL',
@@ -1387,6 +1430,7 @@ const MainApp = () => {
   const { data: pagosProveedorData, refetch: refetchPagosProveedor } = useRealtime('pagos_proveedor');
   const { data: muestrasData, refetch: refetchMuestras } = useRealtime('muestras');
   const { data: muestraItemsData, refetch: refetchMuestraItems } = useRealtime('muestra_items');
+  const { data: recetasData, refetch: refetchRecetas } = useRealtime('recetas_produccion');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1403,6 +1447,7 @@ const MainApp = () => {
     refetchMermas();
     refetchPedidosRecurrentes();
     refetchAsientos();
+    refetchRecetas();
   };
 
   // Variables seguras (nunca undefined)
@@ -1433,6 +1478,7 @@ const MainApp = () => {
   const pagosProveedor = pagosProveedorData || [];
   const muestras = muestrasData || [];
   const muestraItems = muestraItemsData || [];
+  const recetas = recetasData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -1509,9 +1555,9 @@ const MainApp = () => {
       
       const importeTotal = parseFloat(gasto.importe) || 0;
       
-      // Usar el tipo de IVA seleccionado o por defecto 21%
+      // Usar el tipo de IVA seleccionado - CORREGIDO para manejar 0%
       const ivaTipo = gasto.iva_tipo || 'general';
-      const ivaPorcentaje = TIPOS_IVA[ivaTipo]?.valor || 21;
+      const ivaPorcentaje = TIPOS_IVA[ivaTipo]?.valor ?? 21; // usar ?? en lugar de || para manejar 0
       const divisor = 1 + (ivaPorcentaje / 100);
       const base = parseFloat((importeTotal / divisor).toFixed(2));
       const iva = parseFloat((importeTotal - base).toFixed(2));
@@ -2511,6 +2557,7 @@ const MainApp = () => {
       else if (table === 'presupuestos') { refetchPresupuestos(); refetchPresupuestoItems(); }
       else if (table === 'muestras') { refetchMuestras(); refetchMuestraItems(); }
       else if (table === 'pagos_proveedor') refetchPagosProveedor();
+      else if (table === 'recetas_produccion') refetchRecetas();
     }
   };
 
@@ -2819,14 +2866,32 @@ const MainApp = () => {
   const PedidoForm = ({ pedido, onSave, onCancel }) => {
     const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
     
-    const [form, setForm] = useState({ 
+    const initialForm = { 
       cliente_id: pedido?.cliente_id || (clientes.length > 0 ? clientes[0].id : null), 
       fecha: pedido?.fecha || new Date().toISOString().split('T')[0], 
       fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], 
       estado: pedido?.estado || 'pendiente', 
       items: existingItems.length > 0 ? existingItems : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []), 
       notas: pedido?.notas || '' 
-    });
+    };
+
+    // Usar hook de persistencia
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `pedido_${pedido?.id || 'new'}`,
+      initialForm,
+      !pedido
+    );
+
+    // Wrapper para limpiar storage
+    const handleSaveWithClear = (formData) => {
+      clearFormStorage();
+      onSave(formData);
+    };
+    
+    const handleCancelWithClear = () => {
+      clearFormStorage();
+      onCancel();
+    };
 
     // Cargar último pedido del cliente
     const cargarUltimoPedido = () => {
@@ -2865,7 +2930,7 @@ const MainApp = () => {
           <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
           <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay clientes</h3>
           <p className="text-neutral-500 mb-4">Primero debes crear al menos un cliente para poder hacer pedidos.</p>
-          <Button onClick={onCancel}>Cerrar</Button>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
         </div>
       );
     }
@@ -2876,7 +2941,7 @@ const MainApp = () => {
           <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
           <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
           <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto para poder hacer pedidos.</p>
-          <Button onClick={onCancel}>Cerrar</Button>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
         </div>
       );
     }
@@ -2954,25 +3019,44 @@ const MainApp = () => {
             <div className="flex justify-between text-lg font-black pt-2 border-t border-orange-200"><span>Total:</span><span className="text-orange-600">{formatCurrency(total)}</span></div>
           </div>
         </Card>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{pedido ? 'Guardar' : 'Crear Pedido'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{pedido ? 'Guardar' : 'Crear Pedido'}</Button></div>
       </div>
     );
   };
 
   const GastoForm = ({ gasto, onSave, onCancel }) => {
-    const [form, setForm] = useState(gasto || { 
-      fecha: new Date().toISOString().split('T')[0], 
-      categoria: 'otros', 
-      concepto: '', 
-      proveedor_id: null, 
-      importe: 0, 
-      iva_tipo: 'general', // general, reducido, superreducido, exento
-      pagado: false, 
-      forma_pago: 'banco', 
-      factura_url: '' 
-    });
+    // Inicialización correcta - manejar valores null/undefined explícitamente
+    const initialForm = {
+      fecha: gasto?.fecha || new Date().toISOString().split('T')[0], 
+      categoria: gasto?.categoria || 'otros', 
+      concepto: gasto?.concepto || '', 
+      proveedor_id: gasto?.proveedor_id || null, 
+      importe: gasto?.importe || 0, 
+      iva_tipo: gasto?.iva_tipo || 'general',
+      pagado: gasto?.pagado || false, 
+      forma_pago: gasto?.forma_pago || 'banco', 
+      factura_url: gasto?.factura_url || ''
+    };
+    
+    // Usar hook de persistencia (solo para formularios nuevos, no edición)
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `gasto_${gasto?.id || 'new'}`, 
+      initialForm, 
+      !gasto // Solo persistir si es nuevo
+    );
     const [uploading, setUploading] = useState(false);
     const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
+
+    // Limpiar storage al guardar o cancelar
+    const handleSave = (formData) => {
+      clearFormStorage();
+      onSave(formData);
+    };
+    
+    const handleCancel = () => {
+      clearFormStorage();
+      onCancel();
+    };
 
     // Opciones de forma de pago
     const formasPago = [
@@ -2984,12 +3068,12 @@ const MainApp = () => {
       { value: 'socio_guzman', label: '👤 Pagado por Guzmán - Deuda a socio (551)' },
     ];
 
-    // Tipos de IVA
+    // Tipos de IVA - IMPORTANTE: usar los mismos valores que TIPOS_IVA global
     const tiposIVA = [
       { value: 'general', label: '21% General (servicios, suministros)' },
       { value: 'reducido', label: '10% Reducido (transporte, hostelería)' },
       { value: 'superreducido', label: '4% Superreducido (alimentos básicos)' },
-      { value: 'exento', label: '0% Exento (seguros, formación)' },
+      { value: 'exento', label: '0% Exento (seguros, formación, intracomunitario)' },
     ];
 
     const handleFileUpload = async (e) => {
@@ -3028,8 +3112,9 @@ const MainApp = () => {
       setFileName('');
     };
 
-    // Calcular base e IVA según el tipo seleccionado
-    const ivaPorcentaje = TIPOS_IVA[form.iva_tipo || 'general']?.valor || 21;
+    // Calcular base e IVA según el tipo seleccionado - CORREGIDO para 0%
+    const tipoIVASeleccionado = form.iva_tipo || 'general';
+    const ivaPorcentaje = TIPOS_IVA[tipoIVASeleccionado]?.valor ?? 21; // usar ?? en lugar de || para manejar 0
     const divisor = 1 + (ivaPorcentaje / 100);
     const base = form.importe ? (parseFloat(form.importe) / divisor).toFixed(2) : '0.00';
     const iva = form.importe ? (parseFloat(form.importe) - parseFloat(base)).toFixed(2) : '0.00';
@@ -3148,7 +3233,7 @@ const MainApp = () => {
           </label>
         </div>
         
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{gasto ? 'Guardar' : 'Crear Gasto'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancel}>Cancelar</Button><Button onClick={() => handleSave(form)}>{gasto ? 'Guardar' : 'Crear Gasto'}</Button></div>
       </div>
     );
   };
@@ -3294,6 +3379,339 @@ const MainApp = () => {
           </div>
         </div>
         <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{merma ? 'Guardar' : 'Registrar Merma'}</Button></div>
+      </div>
+    );
+  };
+
+  // ==================== RECETA PRODUCCIÓN FORM ====================
+  const RecetaForm = ({ receta, onSave, onCancel }) => {
+    // Campos personalizados por defecto
+    const defaultCamposPersonalizados = [
+      { id: 1, nombre: 'pH agua', tipo: 'numero', valor: '', unidad: 'pH' },
+      { id: 2, nombre: 'EC nutrientes', tipo: 'numero', valor: '', unidad: 'mS/cm' },
+    ];
+
+    const initialForm = {
+      producto_id: receta?.producto_id || (productos.length > 0 ? productos[0].id : null),
+      variedad: receta?.variedad || '',
+      dias_ciclo: receta?.dias_ciclo || 10,
+      rendimiento_esperado: receta?.rendimiento_esperado || 85,
+      semillas_por_bandeja: receta?.semillas_por_bandeja || '',
+      sustrato: receta?.sustrato || 'Fibra de coco',
+      riego_frecuencia: receta?.riego_frecuencia || '2 veces/día',
+      luz_horas: receta?.luz_horas || 16,
+      temperatura_min: receta?.temperatura_min || 18,
+      temperatura_max: receta?.temperatura_max || 24,
+      humedad_min: receta?.humedad_min || 50,
+      humedad_max: receta?.humedad_max || 70,
+      instrucciones_siembra: receta?.instrucciones_siembra || '',
+      instrucciones_cosecha: receta?.instrucciones_cosecha || '',
+      notas: receta?.notas || '',
+      campos_personalizados: receta?.campos_personalizados || defaultCamposPersonalizados
+    };
+    
+    // Usar hook de persistencia
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `receta_${receta?.id || 'new'}`,
+      initialForm,
+      !receta
+    );
+
+    const [showAddCampo, setShowAddCampo] = useState(false);
+    const [nuevoCampo, setNuevoCampo] = useState({ nombre: '', tipo: 'texto', unidad: '' });
+
+    // Tipos de campos personalizables
+    const tiposCampo = [
+      { value: 'texto', label: '📝 Texto libre' },
+      { value: 'numero', label: '🔢 Número' },
+      { value: 'porcentaje', label: '📊 Porcentaje (%)' },
+      { value: 'temperatura', label: '🌡️ Temperatura (°C)' },
+      { value: 'tiempo', label: '⏱️ Tiempo' },
+      { value: 'peso', label: '⚖️ Peso (g/kg)' },
+      { value: 'volumen', label: '💧 Volumen (ml/L)' },
+      { value: 'booleano', label: '✓ Sí/No' },
+      { value: 'rango', label: '↔️ Rango (min-max)' },
+    ];
+
+    const sustratos = [
+      'Fibra de coco', 'Perlita', 'Vermiculita', 'Turba',
+      'Mezcla coco/perlita', 'Lana de roca', 'Papel húmedo', 'Otro'
+    ];
+
+    // Añadir campo personalizado
+    const addCampoPersonalizado = () => {
+      if (!nuevoCampo.nombre.trim()) {
+        alert('El nombre del campo es obligatorio');
+        return;
+      }
+      const newId = Math.max(0, ...form.campos_personalizados.map(c => c.id)) + 1;
+      const campo = { 
+        id: newId, 
+        nombre: nuevoCampo.nombre.trim(), 
+        tipo: nuevoCampo.tipo, 
+        unidad: nuevoCampo.unidad.trim(),
+        valor: nuevoCampo.tipo === 'booleano' ? false : (nuevoCampo.tipo === 'rango' ? { min: '', max: '' } : '')
+      };
+      setForm({ ...form, campos_personalizados: [...form.campos_personalizados, campo] });
+      setNuevoCampo({ nombre: '', tipo: 'texto', unidad: '' });
+      setShowAddCampo(false);
+    };
+
+    // Eliminar campo personalizado
+    const removeCampoPersonalizado = (id) => {
+      setForm({ ...form, campos_personalizados: form.campos_personalizados.filter(c => c.id !== id) });
+    };
+
+    // Actualizar valor de campo personalizado
+    const updateCampoValor = (id, valor) => {
+      setForm({
+        ...form,
+        campos_personalizados: form.campos_personalizados.map(c => 
+          c.id === id ? { ...c, valor } : c
+        )
+      });
+    };
+
+    // Renderizar input según tipo de campo
+    const renderCampoInput = (campo) => {
+      switch (campo.tipo) {
+        case 'booleano':
+          return (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={campo.valor || false}
+                onChange={e => updateCampoValor(campo.id, e.target.checked)}
+                className="w-5 h-5 rounded border-neutral-300 text-orange-500 focus:ring-orange-500"
+              />
+              <span className="text-sm">{campo.valor ? 'Sí' : 'No'}</span>
+            </label>
+          );
+        case 'rango':
+          return (
+            <div className="flex items-center gap-2">
+              <input 
+                type="number" 
+                value={campo.valor?.min || ''}
+                onChange={e => updateCampoValor(campo.id, { ...campo.valor, min: e.target.value })}
+                className="w-20 px-2 py-1 rounded-lg border text-sm text-center"
+                placeholder="Mín"
+              />
+              <span className="text-neutral-400">-</span>
+              <input 
+                type="number" 
+                value={campo.valor?.max || ''}
+                onChange={e => updateCampoValor(campo.id, { ...campo.valor, max: e.target.value })}
+                className="w-20 px-2 py-1 rounded-lg border text-sm text-center"
+                placeholder="Máx"
+              />
+              {campo.unidad && <span className="text-xs text-neutral-500">{campo.unidad}</span>}
+            </div>
+          );
+        case 'numero':
+        case 'porcentaje':
+        case 'temperatura':
+        case 'peso':
+        case 'volumen':
+          return (
+            <div className="flex items-center gap-2">
+              <input 
+                type="number" 
+                step="0.1"
+                value={campo.valor || ''}
+                onChange={e => updateCampoValor(campo.id, e.target.value)}
+                className="w-24 px-3 py-1.5 rounded-lg border text-sm"
+                placeholder="Valor"
+              />
+              <span className="text-xs text-neutral-500">{campo.unidad || (campo.tipo === 'porcentaje' ? '%' : campo.tipo === 'temperatura' ? '°C' : '')}</span>
+            </div>
+          );
+        default:
+          return (
+            <input 
+              type="text" 
+              value={campo.valor || ''}
+              onChange={e => updateCampoValor(campo.id, e.target.value)}
+              className="flex-1 px-3 py-1.5 rounded-lg border text-sm"
+              placeholder={`Valor ${campo.unidad ? `(${campo.unidad})` : ''}`}
+            />
+          );
+      }
+    };
+
+    const handleSubmit = async () => {
+      if (!form.producto_id) {
+        alert('Selecciona un producto');
+        return;
+      }
+      
+      try {
+        clearFormStorage();
+        if (receta?.id) {
+          await supabase.from('recetas_produccion').update(form).eq('id', receta.id);
+        } else {
+          await supabase.from('recetas_produccion').insert(form);
+        }
+        refetchRecetas();
+        onSave();
+        alert(`✅ Receta ${receta ? 'actualizada' : 'creada'} correctamente`);
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
+      }
+    };
+
+    const handleCancel = () => {
+      clearFormStorage();
+      onCancel();
+    };
+
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        {/* Producto y variedad */}
+        <div className="grid grid-cols-2 gap-4">
+          <Select 
+            label="Producto" 
+            value={form.producto_id} 
+            onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} 
+            options={productos.map(p => ({ value: p.id, label: p.nombre }))} 
+          />
+          <Input 
+            label="Variedad/Tipo" 
+            value={form.variedad} 
+            onChange={e => setForm({...form, variedad: e.target.value})} 
+            placeholder="Ej: Semilla italiana, Estándar..."
+          />
+        </div>
+
+        {/* Ciclo y rendimiento */}
+        <Card className="p-4 bg-green-50 border-green-200">
+          <h4 className="font-semibold text-green-800 mb-3">🌱 Ciclo de Producción</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Días de ciclo" type="number" value={form.dias_ciclo} onChange={e => setForm({...form, dias_ciclo: parseInt(e.target.value) || 0})} />
+            <Input label="Rendimiento esperado (%)" type="number" value={form.rendimiento_esperado} onChange={e => setForm({...form, rendimiento_esperado: parseInt(e.target.value) || 0})} />
+          </div>
+        </Card>
+
+        {/* Siembra */}
+        <Card className="p-4 bg-amber-50 border-amber-200">
+          <h4 className="font-semibold text-amber-800 mb-3">🪴 Siembra</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Semillas por bandeja (g)" value={form.semillas_por_bandeja} onChange={e => setForm({...form, semillas_por_bandeja: e.target.value})} placeholder="Ej: 30-35g" />
+            <Select label="Sustrato" value={form.sustrato} onChange={e => setForm({...form, sustrato: e.target.value})} options={sustratos.map(s => ({ value: s, label: s }))} />
+          </div>
+          <div className="mt-3">
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Instrucciones de siembra</label>
+            <textarea value={form.instrucciones_siembra} onChange={e => setForm({...form, instrucciones_siembra: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none text-sm" rows={2} placeholder="Ej: Remojar semillas 6-8h, distribuir uniformemente..." />
+          </div>
+        </Card>
+
+        {/* Condiciones ambientales */}
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <h4 className="font-semibold text-blue-800 mb-3">🌡️ Condiciones Ambientales</h4>
+          <div className="grid grid-cols-3 gap-4">
+            <Input label="Riego frecuencia" value={form.riego_frecuencia} onChange={e => setForm({...form, riego_frecuencia: e.target.value})} placeholder="Ej: 2 veces/día" />
+            <Input label="Horas de luz" type="number" value={form.luz_horas} onChange={e => setForm({...form, luz_horas: parseInt(e.target.value) || 0})} />
+            <div></div>
+          </div>
+          <div className="grid grid-cols-4 gap-3 mt-3">
+            <Input label="Temp. mín (°C)" type="number" value={form.temperatura_min} onChange={e => setForm({...form, temperatura_min: parseInt(e.target.value) || 0})} />
+            <Input label="Temp. máx (°C)" type="number" value={form.temperatura_max} onChange={e => setForm({...form, temperatura_max: parseInt(e.target.value) || 0})} />
+            <Input label="Hum. mín (%)" type="number" value={form.humedad_min} onChange={e => setForm({...form, humedad_min: parseInt(e.target.value) || 0})} />
+            <Input label="Hum. máx (%)" type="number" value={form.humedad_max} onChange={e => setForm({...form, humedad_max: parseInt(e.target.value) || 0})} />
+          </div>
+        </Card>
+
+        {/* Cosecha */}
+        <Card className="p-4 bg-purple-50 border-purple-200">
+          <h4 className="font-semibold text-purple-800 mb-3">✂️ Cosecha</h4>
+          <textarea value={form.instrucciones_cosecha} onChange={e => setForm({...form, instrucciones_cosecha: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none text-sm" rows={2} placeholder="Ej: Cortar a 2cm de altura cuando alcancen 5-7cm..." />
+        </Card>
+
+        {/* CAMPOS PERSONALIZADOS */}
+        <Card className="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-200">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-semibold text-indigo-800">🔧 Variables Personalizadas</h4>
+            <button 
+              onClick={() => setShowAddCampo(true)} 
+              className="text-sm text-indigo-600 font-semibold flex items-center gap-1 hover:text-indigo-800"
+            >
+              <Plus size={16} /> Añadir variable
+            </button>
+          </div>
+
+          {/* Formulario para añadir campo */}
+          {showAddCampo && (
+            <div className="mb-4 p-3 bg-white rounded-xl border border-indigo-200">
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                <Input 
+                  label="Nombre de la variable" 
+                  value={nuevoCampo.nombre} 
+                  onChange={e => setNuevoCampo({...nuevoCampo, nombre: e.target.value})} 
+                  placeholder="Ej: Densidad semillas, pH óptimo..."
+                />
+                <Select 
+                  label="Tipo de dato" 
+                  value={nuevoCampo.tipo} 
+                  onChange={e => setNuevoCampo({...nuevoCampo, tipo: e.target.value})} 
+                  options={tiposCampo}
+                />
+                <Input 
+                  label="Unidad (opcional)" 
+                  value={nuevoCampo.unidad} 
+                  onChange={e => setNuevoCampo({...nuevoCampo, unidad: e.target.value})} 
+                  placeholder="Ej: g/m², mL, días..."
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setShowAddCampo(false)}>Cancelar</Button>
+                <Button size="sm" onClick={addCampoPersonalizado}>Añadir Variable</Button>
+              </div>
+            </div>
+          )}
+
+          {/* Lista de campos personalizados */}
+          {form.campos_personalizados.length === 0 ? (
+            <p className="text-sm text-indigo-600 italic">No hay variables personalizadas. Añade las que necesites para optimizar tu receta.</p>
+          ) : (
+            <div className="space-y-2">
+              {form.campos_personalizados.map(campo => (
+                <div key={campo.id} className="flex items-center gap-3 p-2 bg-white rounded-lg border">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-neutral-700">{campo.nombre}</span>
+                      <span className="text-xs px-2 py-0.5 bg-indigo-100 text-indigo-600 rounded-full">
+                        {tiposCampo.find(t => t.value === campo.tipo)?.label.split(' ')[0] || '📝'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {renderCampoInput(campo)}
+                    <button 
+                      onClick={() => removeCampoPersonalizado(campo.id)} 
+                      className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          
+          <p className="text-xs text-indigo-500 mt-3">💡 Añade variables como pH, EC, densidad de siembra, tiempo de remojo, etc. para afinar tus recetas.</p>
+        </Card>
+
+        {/* Notas generales */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">📝 Notas y observaciones</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} placeholder="Trucos, problemas frecuentes, ajustes que funcionan bien..." />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white">
+          <Button variant="secondary" onClick={handleCancel}>Cancelar</Button>
+          <Button onClick={handleSubmit}>{receta ? 'Guardar Cambios' : 'Crear Receta'}</Button>
+        </div>
       </div>
     );
   };
@@ -5199,6 +5617,12 @@ const MainApp = () => {
             <Calendar size={18} />Planificación
             {siembrasUrgentes > 0 && <span className={`text-xs px-2 py-0.5 rounded-full ${produccionTab === 'planificacion' ? 'bg-white/20' : 'bg-red-500 text-white'}`}>{siembrasUrgentes}</span>}
           </button>
+          <button 
+            onClick={() => setProduccionTab('recetas')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'recetas' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <ClipboardList size={18} />Recetas
+          </button>
         </div>
 
         {produccionTab === 'lotes' && (
@@ -5381,12 +5805,112 @@ const MainApp = () => {
             )}
           </div>
         )}
+
+        {produccionTab === 'recetas' && (
+          <div className="space-y-4">
+            {/* Cabecera */}
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-lg font-bold text-neutral-900">📖 Libro de Recetas de Producción</h2>
+                <p className="text-sm text-neutral-500">Documenta y optimiza el proceso de cultivo de cada producto</p>
+              </div>
+              <Button onClick={() => setShowModal('receta')}><Plus size={16} /> Nueva Receta</Button>
+            </div>
+
+            {/* Lista de recetas */}
+            {recetas.length === 0 ? (
+              <Card className="p-8 text-center">
+                <ClipboardList size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className="text-lg font-bold">Sin recetas de producción</h3>
+                <p className="text-sm text-neutral-500 mb-4">Crea recetas para documentar el proceso óptimo de cultivo de cada producto</p>
+                <Button onClick={() => setShowModal('receta')}><Plus size={16} /> Crear primera receta</Button>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {recetas.map(receta => {
+                  const producto = productos.find(p => p.id === receta.producto_id);
+                  const lotesReceta = lotes.filter(l => l.producto_id === receta.producto_id && l.estado === 'cosechado');
+                  const rendimientoReal = lotesReceta.length > 0 
+                    ? Math.round(lotesReceta.reduce((sum, l) => sum + (l.cantidad_real || 0), 0) / lotesReceta.length)
+                    : null;
+                  
+                  return (
+                    <Card key={receta.id} className="p-4 hover:shadow-lg transition-shadow">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-green-500 flex items-center justify-center text-white">
+                            <Leaf size={24} />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-neutral-900">{producto?.nombre || 'Producto'}</h3>
+                            <p className="text-sm text-neutral-500">{receta.variedad || 'Variedad estándar'}</p>
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => { setEditingItem(receta); setShowModal('receta'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                          <button onClick={() => handleDelete('recetas_produccion', receta.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 mb-3">
+                        <div className="p-2 bg-blue-50 rounded-lg text-center">
+                          <p className="text-xs text-blue-600 font-medium">Ciclo</p>
+                          <p className="text-lg font-bold text-blue-700">{receta.dias_ciclo || '-'}d</p>
+                        </div>
+                        <div className="p-2 bg-green-50 rounded-lg text-center">
+                          <p className="text-xs text-green-600 font-medium">Rend. Esperado</p>
+                          <p className="text-lg font-bold text-green-700">{receta.rendimiento_esperado || '-'}%</p>
+                        </div>
+                        <div className={`p-2 rounded-lg text-center ${rendimientoReal ? 'bg-purple-50' : 'bg-neutral-50'}`}>
+                          <p className={`text-xs font-medium ${rendimientoReal ? 'text-purple-600' : 'text-neutral-400'}`}>Rend. Real</p>
+                          <p className={`text-lg font-bold ${rendimientoReal ? 'text-purple-700' : 'text-neutral-300'}`}>{rendimientoReal || '-'}%</p>
+                        </div>
+                      </div>
+
+                      {/* Detalles de la receta */}
+                      <div className="space-y-2 text-sm">
+                        {receta.semillas_por_bandeja && (
+                          <div className="flex justify-between p-2 bg-amber-50 rounded-lg">
+                            <span className="text-amber-700">🌱 Semillas/bandeja:</span>
+                            <span className="font-bold text-amber-800">{receta.semillas_por_bandeja}g</span>
+                          </div>
+                        )}
+                        {receta.sustrato && (
+                          <div className="flex justify-between p-2 bg-orange-50 rounded-lg">
+                            <span className="text-orange-700">🪴 Sustrato:</span>
+                            <span className="font-bold text-orange-800">{receta.sustrato}</span>
+                          </div>
+                        )}
+                        {receta.riego_frecuencia && (
+                          <div className="flex justify-between p-2 bg-blue-50 rounded-lg">
+                            <span className="text-blue-700">💧 Riego:</span>
+                            <span className="font-bold text-blue-800">{receta.riego_frecuencia}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {receta.notas && (
+                        <div className="mt-3 p-2 bg-neutral-50 rounded-lg">
+                          <p className="text-xs text-neutral-500 font-medium mb-1">📝 Notas:</p>
+                          <p className="text-sm text-neutral-700">{receta.notas}</p>
+                        </div>
+                      )}
+
+                      {lotesReceta.length > 0 && (
+                        <div className="mt-3 pt-3 border-t">
+                          <p className="text-xs text-neutral-400">Basado en {lotesReceta.length} lotes cosechados</p>
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
-
-  // ==================== CALENDARIO ====================
-  const renderCalendario = () => {
     const mesActual = mesCalendario || new Date();
     
     const primerDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth(), 1);
@@ -7402,7 +7926,7 @@ Firma repartidor: _________________
       const ivaRepercutido = facturasT.reduce((sum, f) => sum + (f.iva || 0) + (f.re_importe || 0), 0);
       // Calcular IVA soportado usando el tipo real de cada gasto
       const ivaSoportado = gastosT.reduce((sum, g) => {
-        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
         const base = (g.importe || 0) / (1 + ivaPct/100);
         return sum + ((g.importe || 0) - base);
       }, 0);
@@ -7498,13 +8022,13 @@ Firma repartidor: _________________
           { header: 'CIF Proveedor', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.cif || '' },
           { header: 'Concepto', accessor: g => g.concepto },
           { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
-          { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21}%` },
+          { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21}%` },
           { header: 'Base Imponible', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             return (g.importe / (1 + ivaPct/100)).toFixed(2);
           }},
           { header: 'IVA', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             const base = g.importe / (1 + ivaPct/100);
             return (g.importe - base).toFixed(2);
           }},
@@ -7529,7 +8053,7 @@ Firma repartidor: _________________
             total: f.total || 0,
           })),
           ...gastosFiltrados.map(g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             const base = g.importe / (1 + ivaPct/100);
             return {
               fecha: g.fecha,
@@ -7623,13 +8147,13 @@ Firma repartidor: _________________
           { header: 'CIF', accessor: g => proveedores.find(p => p.id === g.proveedor_id)?.cif || '' },
           { header: 'Concepto', accessor: g => g.concepto },
           { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
-          { header: 'IVA %', accessor: g => TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21 },
+          { header: 'IVA %', accessor: g => TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21 },
           { header: 'Base', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             return (g.importe / (1 + ivaPct/100)).toFixed(2);
           }},
           { header: 'IVA €', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             const base = g.importe / (1 + ivaPct/100);
             return (g.importe - base).toFixed(2);
           }},
@@ -7655,7 +8179,7 @@ Firma repartidor: _________________
             total: f.total || 0,
           })),
           ...gastosFiltrados.map(g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor || 21;
+            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
             const base = g.importe / (1 + ivaPct/100);
             return {
               fecha: g.fecha,
@@ -10069,6 +10593,7 @@ Firma repartidor: _________________
       {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}><TareaForm tarea={editingItem} onSave={form => handleSave('tareas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido_recurrente' && <Modal title="Nuevo Pedido Recurrente" onClose={() => setShowModal(null)} size="max-w-2xl"><PedidoRecurrenteForm onSave={() => setShowModal(null)} onCancel={() => setShowModal(null)} /></Modal>}
+      {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
     </div>
   );
 };
