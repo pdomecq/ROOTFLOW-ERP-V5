@@ -1017,6 +1017,130 @@ const MainApp = () => {
   const [filtrosLotes, setFiltrosLotes] = useState({});
   const [filtrosAsientos, setFiltrosAsientos] = useState({});
 
+  // ==================== COLUMNAS CONFIGURABLES ====================
+  // Definición de columnas disponibles por módulo
+  const columnasDisponibles = {
+    pedidos: [
+      { id: 'id', label: 'Pedido', visible: true, orden: 1 },
+      { id: 'cliente', label: 'Cliente', visible: true, orden: 2 },
+      { id: 'concepto', label: 'Concepto', visible: true, orden: 3 },
+      { id: 'fecha_entrega', label: 'Entrega', visible: true, orden: 4 },
+      { id: 'horario', label: 'Horario', visible: true, orden: 5 },
+      { id: 'total', label: 'Total', visible: true, orden: 6 },
+      { id: 'estado', label: 'Estado', visible: true, orden: 7 },
+    ],
+    clientes: [
+      { id: 'nombre', label: 'Nombre', visible: true, orden: 1 },
+      { id: 'tipo', label: 'Tipo', visible: true, orden: 2 },
+      { id: 'zona', label: 'Zona', visible: true, orden: 3 },
+      { id: 'telefono', label: 'Teléfono', visible: true, orden: 4 },
+      { id: 'email', label: 'Email', visible: false, orden: 5 },
+      { id: 'descuento', label: 'Descuento', visible: true, orden: 6 },
+      { id: 'pedidos', label: 'Pedidos', visible: true, orden: 7 },
+      { id: 'total', label: 'Total', visible: true, orden: 8 },
+    ],
+    gastos: [
+      { id: 'fecha', label: 'Fecha', visible: true, orden: 1 },
+      { id: 'concepto', label: 'Concepto', visible: true, orden: 2 },
+      { id: 'categoria', label: 'Categoría', visible: true, orden: 3 },
+      { id: 'proveedor', label: 'Proveedor', visible: true, orden: 4 },
+      { id: 'importe', label: 'Importe', visible: true, orden: 5 },
+      { id: 'factura', label: 'Factura', visible: true, orden: 6 },
+      { id: 'estado', label: 'Estado', visible: true, orden: 7 },
+    ],
+    facturas: [
+      { id: 'numero', label: 'Nº Factura', visible: true, orden: 1 },
+      { id: 'cliente', label: 'Cliente', visible: true, orden: 2 },
+      { id: 'fecha', label: 'Fecha', visible: true, orden: 3 },
+      { id: 'base', label: 'Base', visible: true, orden: 4 },
+      { id: 'iva', label: 'IVA', visible: false, orden: 5 },
+      { id: 'total', label: 'Total', visible: true, orden: 6 },
+      { id: 'estado', label: 'Estado', visible: true, orden: 7 },
+    ],
+  };
+
+  // Estado para columnas visibles (persistido en localStorage)
+  const [columnasVisibles, setColumnasVisibles] = useState(() => {
+    const saved = localStorage.getItem('columnasVisibles');
+    return saved ? JSON.parse(saved) : columnasDisponibles;
+  });
+
+  // Estado para mostrar configurador de columnas
+  const [showColumnConfig, setShowColumnConfig] = useState(null);
+
+  // Guardar configuración de columnas
+  const guardarColumnasConfig = (modulo, nuevasColumnas) => {
+    const updated = { ...columnasVisibles, [modulo]: nuevasColumnas };
+    setColumnasVisibles(updated);
+    localStorage.setItem('columnasVisibles', JSON.stringify(updated));
+  };
+
+  // Toggle visibilidad de columna
+  const toggleColumna = (modulo, colId) => {
+    const cols = columnasVisibles[modulo] || columnasDisponibles[modulo];
+    const updated = cols.map(c => c.id === colId ? { ...c, visible: !c.visible } : c);
+    guardarColumnasConfig(modulo, updated);
+  };
+
+  // Reordenar columnas
+  const reordenarColumnas = (modulo, fromIndex, toIndex) => {
+    const cols = [...(columnasVisibles[modulo] || columnasDisponibles[modulo])];
+    const [removed] = cols.splice(fromIndex, 1);
+    cols.splice(toIndex, 0, removed);
+    const reordered = cols.map((c, i) => ({ ...c, orden: i + 1 }));
+    guardarColumnasConfig(modulo, reordered);
+  };
+
+  // Componente de configuración de columnas
+  const ColumnConfigModal = ({ modulo, onClose }) => {
+    const cols = columnasVisibles[modulo] || columnasDisponibles[modulo];
+    const [draggedIndex, setDraggedIndex] = useState(null);
+    
+    return (
+      <Modal title="Configurar Columnas" onClose={onClose}>
+        <div className="space-y-4">
+          <p className="text-sm text-neutral-500">Arrastra para reordenar. Marca/desmarca para mostrar/ocultar.</p>
+          <div className="space-y-2">
+            {cols.sort((a, b) => a.orden - b.orden).map((col, index) => (
+              <div
+                key={col.id}
+                draggable
+                onDragStart={() => setDraggedIndex(index)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  if (draggedIndex !== null && draggedIndex !== index) {
+                    reordenarColumnas(modulo, draggedIndex, index);
+                  }
+                  setDraggedIndex(null);
+                }}
+                className={`flex items-center gap-3 p-3 bg-white border rounded-lg cursor-move hover:bg-neutral-50 ${draggedIndex === index ? 'opacity-50' : ''}`}
+              >
+                <div className="text-neutral-400 cursor-grab">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/>
+                    <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
+                  </svg>
+                </div>
+                <label className="flex items-center gap-2 flex-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={col.visible}
+                    onChange={() => toggleColumna(modulo, col.id)}
+                    className="w-4 h-4 rounded border-neutral-300 text-orange-500"
+                  />
+                  <span className="font-medium">{col.label}</span>
+                </label>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end pt-4 border-t">
+            <Button onClick={onClose}>Cerrar</Button>
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
   // Función helper para actualizar filtros
   const updateFilter = (setter) => (field, value) => {
     setter(prev => ({ ...prev, [field]: value }));
@@ -4718,16 +4842,20 @@ const MainApp = () => {
                   </div>
                 </div>
               )}
+              {/* Botón configurar columnas */}
+              <div className="p-2 border-b flex justify-end">
+                <button onClick={() => setShowColumnConfig('pedidos')} className="text-xs text-neutral-500 hover:text-orange-600 flex items-center gap-1">
+                  <Settings size={14} /> Columnas
+                </button>
+              </div>
               <table className="w-full min-w-[600px]">
                 <thead className="bg-neutral-900 text-white"><tr>
                   <th className="px-3 py-3 text-left w-10">
                     <input type="checkbox" checked={filtered.length > 0 && selectedPedidos.length === filtered.length} onChange={e => setSelectedPedidos(e.target.checked ? filtered.map(p => p.id) : [])} className="w-4 h-4 rounded" />
                   </th>
-                  <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Pedido</th>
-                  <FilterableHeader label="Cliente" field="cliente_id" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="text" />
-                  <FilterableHeader label="Entrega" field="fecha_entrega" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="date" />
-                  <FilterableHeader label="Total" field="total" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="number" />
-                  <FilterableHeader label="Estado" field="estado" filters={filtrosPedidos} onFilter={updateFilter(setFiltrosPedidos)} type="select" options={estadoOptions} />
+                  {(columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden).map(col => (
+                    <th key={col.id} className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">{col.label}</th>
+                  ))}
                   <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
                 </tr></thead>
                 <tbody>
@@ -4736,16 +4864,25 @@ const MainApp = () => {
                     const config = estadoConfig[pedido.estado];
                     const Icon = config?.icon || Clock;
                     const isSelected = selectedPedidos.includes(pedido.id);
+                    const colsVisibles = (columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden);
+                    
                     return (
                       <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} ${isSelected ? 'bg-blue-50' : ''}`}>
                         <td className="px-3 py-3">
                           <input type="checkbox" checked={isSelected} onChange={e => setSelectedPedidos(e.target.checked ? [...selectedPedidos, pedido.id] : selectedPedidos.filter(id => id !== pedido.id))} className="w-4 h-4 rounded" />
                         </td>
-                        <td className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>
-                        <td className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>
-                        <td className="px-3 md:px-5 py-3 md:py-4 text-sm hidden sm:table-cell">{formatDate(pedido.fecha_entrega)}</td>
-                        <td className={`px-3 md:px-5 py-3 md:py-4 font-bold text-sm ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</td>
-                        <td className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>
+                        {colsVisibles.map(col => {
+                          switch(col.id) {
+                            case 'id': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>;
+                            case 'cliente': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>;
+                            case 'concepto': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{pedido.concepto ? <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">{pedido.concepto}</span> : <span className="text-neutral-300">-</span>}</td>;
+                            case 'fecha_entrega': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>;
+                            case 'horario': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-xs">{pedido.horario_entrega ? <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg font-medium">{pedido.horario_entrega}</span> : '-'}</td>;
+                            case 'total': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-bold text-sm ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</td>;
+                            case 'estado': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>;
+                            default: return null;
+                          }
+                        })}
                         <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
                       </tr>
                     );
@@ -4755,6 +4892,9 @@ const MainApp = () => {
               </div>
               {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
             </Card>
+
+            {/* Modal configuración columnas */}
+            {showColumnConfig === 'pedidos' && <ColumnConfigModal modulo="pedidos" onClose={() => setShowColumnConfig(null)} />}
           </>
         ) : (
           /* Vista de Pedidos Recurrentes */
