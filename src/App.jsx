@@ -5391,6 +5391,15 @@ const MainApp = () => {
 
   // Estado para pestaña de producción
   const [produccionTab, setProduccionTab] = useState('lotes');
+  
+  // Configuración de etiquetas Zebra (debe estar fuera de renderProduccion)
+  const [etiquetaConfig, setEtiquetaConfig] = useState({
+    ancho: 60,        // mm
+    alto: 40,         // mm
+    dpi: 203,         // dots per inch (203 o 300)
+    cantidad: 1,      // etiquetas por lote/bandeja
+    formato: 'zpl'    // 'zpl' o 'html'
+  });
 
   const renderProduccion = () => {
     // Aplicar filtros de columna
@@ -5408,15 +5417,6 @@ const MainApp = () => {
     const exportColumns = [{ header: 'Lote', accessor: l => l.id },{ header: 'Producto', accessor: l => productos.find(p => p.id === l.producto_id)?.nombre },{ header: 'Siembra', accessor: l => formatDate(l.fecha_siembra) },{ header: 'Cosecha', accessor: l => formatDate(l.fecha_cosecha_prevista) },{ header: 'Bandejas', accessor: l => l.bandejas },{ header: 'Estado', accessor: l => estadoLoteConfig[l.estado]?.label }];
     
     // ==================== SISTEMA DE ETIQUETAS ZEBRA ZPL ====================
-    
-    // Configuración de etiquetas Zebra
-    const [etiquetaConfig, setEtiquetaConfig] = useState({
-      ancho: 60,        // mm
-      alto: 40,         // mm
-      dpi: 203,         // dots per inch (203 o 300)
-      cantidad: 1,      // etiquetas por lote/bandeja
-      formato: 'zpl'    // 'zpl' o 'html'
-    });
 
     // Convertir mm a dots según DPI
     const mmToDots = (mm, dpi = 203) => Math.round(mm * dpi / 25.4);
