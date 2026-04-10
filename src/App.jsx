@@ -11,7 +11,7 @@ import {
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
   Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
-  Banknote, CalendarClock, PackageCheck, RotateCcw
+  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator
 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
@@ -2647,6 +2647,8 @@ const MainApp = () => {
         cliente_id: form.cliente_id, 
         fecha: form.fecha, 
         fecha_entrega: form.fecha_entrega, 
+        horario_entrega: form.horario_entrega || null,
+        concepto: form.concepto || null,
         estado: form.estado, 
         notas: form.notas || '', 
         total 
@@ -3785,6 +3787,137 @@ const MainApp = () => {
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{pago ? 'Guardar' : 'Crear Pago'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== MUESTRA FORM ====================
+  const MuestraForm = ({ onSave, onCancel }) => {
+    const initialForm = {
+      lead_id: null,
+      nombre_contacto: '',
+      empresa: '',
+      telefono: '',
+      email: '',
+      direccion: '',
+      tipo_negocio: 'restaurante',
+      fecha_entrega: new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0],
+      fecha_siguiente: '',
+      items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : [],
+      notas: '',
+    };
+
+    const [form, setForm, clearFormStorage] = useFormPersistence('muestra_new', initialForm, true);
+    const [fromLead, setFromLead] = useState(false);
+    
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    const cargarDesdeLead = (leadId) => {
+      const lead = leads.find(l => l.id === leadId);
+      if (lead) {
+        setForm({
+          ...form,
+          lead_id: lead.id,
+          nombre_contacto: lead.contacto || lead.nombre,
+          empresa: lead.empresa || lead.nombre,
+          telefono: lead.telefono,
+          email: lead.email,
+          direccion: lead.direccion,
+          tipo_negocio: lead.tipo || 'restaurante',
+        });
+      }
+    };
+
+    const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0]?.id, cantidad: 1 }]});
+    const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
+    const updateItem = (idx, field, value) => { 
+      const newItems = [...form.items]; 
+      newItems[idx] = {...newItems[idx], [field]: value}; 
+      setForm({...form, items: newItems}); 
+    };
+
+    const costeTotal = form.items.reduce((sum, item) => {
+      const prod = productos.find(p => p.id === item.producto_id);
+      return sum + ((prod?.coste || 0) * item.cantidad);
+    }, 0);
+
+    if (productos.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto.</p>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={fromLead} onChange={e => setFromLead(e.target.checked)} className="w-4 h-4 rounded" />
+            <span className="text-sm font-medium text-blue-800">Cargar datos desde un Lead existente</span>
+          </label>
+          {fromLead && (
+            <select className="w-full mt-2 px-3 py-2 rounded-lg border text-sm" onChange={e => cargarDesdeLead(parseInt(e.target.value))}>
+              <option value="">Seleccionar lead...</option>
+              {leads.filter(l => l.estado !== 'ganado' && l.estado !== 'perdido').map(l => (
+                <option key={l.id} value={l.id}>{l.nombre} - {l.empresa}</option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre Contacto" value={form.nombre_contacto} onChange={e => setForm({...form, nombre_contacto: e.target.value})} />
+          <Input label="Empresa" value={form.empresa} onChange={e => setForm({...form, empresa: e.target.value})} />
+          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+          <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
+          <Select label="Tipo de Negocio" value={form.tipo_negocio} onChange={e => setForm({...form, tipo_negocio: e.target.value})} options={Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+          <Input label="Fecha Entrega Muestra" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
+        </div>
+        <div>
+          <div className="flex justify-between mb-2">
+            <label className="text-sm font-semibold text-neutral-700">Productos a enviar</label>
+            <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button>
+          </div>
+          <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
+            {form.items.map((item, idx) => {
+              const prod = productos.find(p => p.id === item.producto_id);
+              return (
+                <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                  <select value={item.producto_id} onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} className="flex-1 px-3 py-2 rounded-lg border text-sm">
+                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
+                  </select>
+                  <input type="number" value={item.cantidad} onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} className="w-20 px-3 py-2 rounded-lg border text-sm text-center" min="1" />
+                  <span className="text-xs text-neutral-500 w-20">Coste: {formatCurrency((prod?.coste || 0) * item.cantidad)}</span>
+                  {form.items.length > 1 && <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <Input label="📅 Programar siguiente muestra (opcional)" type="date" value={form.fecha_siguiente} onChange={e => setForm({...form, fecha_siguiente: e.target.value})} />
+          <p className="text-xs text-amber-700 mt-1">Si el cliente quiere probar otro mes, programa aquí la siguiente entrega</p>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} placeholder="Preferencias, observaciones..." />
+        </div>
+        <Card className="p-3 bg-red-50 border-red-200">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-red-700">💰 Coste estimado de la muestra:</span>
+            <span className="font-bold text-red-700">{formatCurrency(costeTotal)}</span>
+          </div>
+          <p className="text-xs text-red-600 mt-1">Este coste se puede registrar como gasto de marketing</p>
+        </Card>
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}><Gift size={16} /> Programar Muestra</Button>
         </div>
       </div>
     );
@@ -10497,179 +10630,6 @@ Firma repartidor: _________________
         console.error('Error:', error);
         alert('❌ Error: ' + error.message);
       }
-    };
-
-    // Formulario de muestra
-    const MuestraForm = ({ onSave, onCancel }) => {
-      const [form, setForm] = useState({
-        lead_id: null,
-        nombre_contacto: '',
-        empresa: '',
-        telefono: '',
-        email: '',
-        direccion: '',
-        tipo_negocio: 'restaurante',
-        fecha_entrega: new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0],
-        fecha_siguiente: '',
-        items: productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : [],
-        notas: '',
-      });
-
-      const [fromLead, setFromLead] = useState(false);
-
-      const cargarDesdeLead = (leadId) => {
-        const lead = leads.find(l => l.id === leadId);
-        if (lead) {
-          setForm({
-            ...form,
-            lead_id: lead.id,
-            nombre_contacto: lead.contacto || lead.nombre,
-            empresa: lead.empresa || lead.nombre,
-            telefono: lead.telefono,
-            email: lead.email,
-            direccion: lead.direccion,
-            tipo_negocio: lead.tipo || 'restaurante',
-          });
-        }
-      };
-
-      const addItem = () => setForm({...form, items: [...form.items, { producto_id: productos[0].id, cantidad: 1 }]});
-      const removeItem = (idx) => setForm({...form, items: form.items.filter((_, i) => i !== idx)});
-      const updateItem = (idx, field, value) => { 
-        const newItems = [...form.items]; 
-        newItems[idx] = {...newItems[idx], [field]: value}; 
-        setForm({...form, items: newItems}); 
-      };
-
-      // Calcular coste estimado de la muestra
-      const costeTotal = form.items.reduce((sum, item) => {
-        const prod = productos.find(p => p.id === item.producto_id);
-        return sum + ((prod?.coste || 0) * item.cantidad);
-      }, 0);
-
-      return (
-        <div className="space-y-4">
-          {/* Cargar desde Lead */}
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={fromLead} 
-                onChange={e => setFromLead(e.target.checked)} 
-                className="w-4 h-4 rounded"
-              />
-              <span className="text-sm font-medium text-blue-800">Cargar datos desde un Lead existente</span>
-            </label>
-            {fromLead && (
-              <select 
-                className="w-full mt-2 px-3 py-2 rounded-lg border text-sm"
-                onChange={e => cargarDesdeLead(parseInt(e.target.value))}
-              >
-                <option value="">Seleccionar lead...</option>
-                {leads.filter(l => l.estado !== 'ganado' && l.estado !== 'perdido').map(l => (
-                  <option key={l.id} value={l.id}>{l.nombre} - {l.empresa}</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Datos contacto */}
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Nombre Contacto" value={form.nombre_contacto} onChange={e => setForm({...form, nombre_contacto: e.target.value})} />
-            <Input label="Empresa" value={form.empresa} onChange={e => setForm({...form, empresa: e.target.value})} />
-            <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
-            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
-            <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
-            <Select 
-              label="Tipo de Negocio" 
-              value={form.tipo_negocio} 
-              onChange={e => setForm({...form, tipo_negocio: e.target.value})} 
-              options={Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }))} 
-            />
-            <Input label="Fecha Entrega Muestra" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
-          </div>
-
-          {/* Productos de la muestra */}
-          <div>
-            <div className="flex justify-between mb-2">
-              <label className="text-sm font-semibold text-neutral-700">Productos a enviar</label>
-              <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1">
-                <Plus size={16} />Añadir
-              </button>
-            </div>
-            <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
-              {form.items.map((item, idx) => {
-                const prod = productos.find(p => p.id === item.producto_id);
-                return (
-                  <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
-                    <select 
-                      value={item.producto_id} 
-                      onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} 
-                      className="flex-1 px-3 py-2 rounded-lg border text-sm"
-                    >
-                      {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
-                    </select>
-                    <input 
-                      type="number" 
-                      value={item.cantidad} 
-                      onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} 
-                      className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
-                      min="1" 
-                    />
-                    <span className="text-xs text-neutral-500 w-20">
-                      Coste: {formatCurrency((prod?.coste || 0) * item.cantidad)}
-                    </span>
-                    {form.items.length > 1 && (
-                      <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={16} />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Siguiente muestra */}
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
-            <Input 
-              label="📅 Programar siguiente muestra (opcional)" 
-              type="date" 
-              value={form.fecha_siguiente} 
-              onChange={e => setForm({...form, fecha_siguiente: e.target.value})} 
-            />
-            <p className="text-xs text-amber-700 mt-1">Si el cliente quiere probar otro mes, programa aquí la siguiente entrega</p>
-          </div>
-
-          {/* Notas */}
-          <div>
-            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
-            <textarea 
-              value={form.notas} 
-              onChange={e => setForm({...form, notas: e.target.value})} 
-              className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
-              rows={2} 
-              placeholder="Preferencias, observaciones..."
-            />
-          </div>
-
-          {/* Resumen coste */}
-          <Card className="p-3 bg-red-50 border-red-200">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-red-700">💰 Coste estimado de la muestra:</span>
-              <span className="font-bold text-red-700">{formatCurrency(costeTotal)}</span>
-            </div>
-            <p className="text-xs text-red-600 mt-1">Este coste se puede registrar como gasto de marketing</p>
-          </Card>
-
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-            <Button onClick={() => onSave(form)}>
-              <Gift size={16} /> Programar Muestra
-            </Button>
-          </div>
-        </div>
-      );
     };
 
     // Stats
