@@ -5407,8 +5407,184 @@ const MainApp = () => {
     
     const exportColumns = [{ header: 'Lote', accessor: l => l.id },{ header: 'Producto', accessor: l => productos.find(p => p.id === l.producto_id)?.nombre },{ header: 'Siembra', accessor: l => formatDate(l.fecha_siembra) },{ header: 'Cosecha', accessor: l => formatDate(l.fecha_cosecha_prevista) },{ header: 'Bandejas', accessor: l => l.bandejas },{ header: 'Estado', accessor: l => estadoLoteConfig[l.estado]?.label }];
     
-    // Función para imprimir etiquetas
-    const imprimirEtiquetas = (lote) => {
+    // ==================== SISTEMA DE ETIQUETAS ZEBRA ZPL ====================
+    
+    // Configuración de etiquetas Zebra
+    const [etiquetaConfig, setEtiquetaConfig] = useState({
+      ancho: 60,        // mm
+      alto: 40,         // mm
+      dpi: 203,         // dots per inch (203 o 300)
+      cantidad: 1,      // etiquetas por lote/bandeja
+      formato: 'zpl'    // 'zpl' o 'html'
+    });
+
+    // Convertir mm a dots según DPI
+    const mmToDots = (mm, dpi = 203) => Math.round(mm * dpi / 25.4);
+
+    // Generar código ZPL para una etiqueta
+    const generarZPL = (lote, index = 1) => {
+      const producto = productos.find(p => p.id === lote.producto_id);
+      const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+      const fechaConsumo = new Date(fechaCosecha);
+      fechaConsumo.setDate(fechaConsumo.getDate() + 7);
+      
+      const dpi = etiquetaConfig.dpi;
+      const anchoLabel = mmToDots(etiquetaConfig.ancho, dpi);
+      const altoLabel = mmToDots(etiquetaConfig.alto, dpi);
+      
+      // Posiciones calculadas según tamaño de etiqueta
+      const margen = mmToDots(2, dpi);
+      const anchoUtil = anchoLabel - (margen * 2);
+      
+      // Formato de fechas corto
+      const fechaCosechaStr = formatDate(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+      const fechaConsumoStr = formatDate(fechaConsumo.toISOString().split('T')[0]);
+      
+      // Código ZPL optimizado para etiquetas pequeñas
+      return `
+^XA
+^CI28
+^PW${anchoLabel}
+^LL${altoLabel}
+^LH0,0
+
+^FO${margen},${mmToDots(2, dpi)}
+^A0N,${mmToDots(4, dpi)},${mmToDots(3, dpi)}
+^FDRootFlow^FS
+
+^FO${mmToDots(35, dpi)},${mmToDots(2, dpi)}
+^A0N,${mmToDots(2.5, dpi)},${mmToDots(2, dpi)}
+^FDPRODUCTO FRESCO^FS
+
+^FO${margen},${mmToDots(8, dpi)}
+^GB${anchoUtil},0,2^FS
+
+^FO${margen},${mmToDots(10, dpi)}
+^A0N,${mmToDots(5, dpi)},${mmToDots(4, dpi)}
+^FD${(producto?.nombre || 'Brotes').toUpperCase()}^FS
+
+^FO${margen},${mmToDots(16, dpi)}
+^A0N,${mmToDots(2.5, dpi)},${mmToDots(2, dpi)}
+^FDBrotes tiernos cultivados en invernadero^FS
+
+^FO${margen},${mmToDots(20, dpi)}
+^GB${anchoUtil},${mmToDots(5, dpi)},${mmToDots(5, dpi)},B^FS
+^FO${mmToDots(8, dpi)},${mmToDots(21, dpi)}
+^A0N,${mmToDots(3, dpi)},${mmToDots(2.5, dpi)}
+^FR^FDLAVAR ANTES DE CONSUMIR^FS
+
+^FO${margen},${mmToDots(27, dpi)}
+^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FDLote: ${lote.codigo || 'L-'+lote.id}^FS
+
+^FO${mmToDots(30, dpi)},${mmToDots(27, dpi)}
+^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FDPeso: 100g aprox.^FS
+
+^FO${margen},${mmToDots(30, dpi)}
+^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FDF.Cosecha: ${fechaCosechaStr}^FS
+
+^FO${mmToDots(30, dpi)},${mmToDots(30, dpi)}
+^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FDConsumir: ${fechaConsumoStr}^FS
+
+^FO${margen},${mmToDots(33, dpi)}
+^A0N,${mmToDots(1.8, dpi)},${mmToDots(1.5, dpi)}
+^FDConservar refrigerado 2-5C^FS
+
+^FO${margen},${mmToDots(36, dpi)}
+^GB${anchoUtil},0,1^FS
+
+^FO${margen},${mmToDots(37, dpi)}
+^A0N,${mmToDots(1.5, dpi)},${mmToDots(1.2, dpi)}
+^FDOrigen: Madrid | ROOTFLOW HYDROPONICS SL | CIF: B27535137^FS
+
+^XZ
+`.trim();
+    };
+
+    // Generar ZPL para múltiples etiquetas
+    const generarZPLMultiple = (lote) => {
+      const cantidad = etiquetaConfig.cantidad === 'bandejas' ? lote.bandejas : parseInt(etiquetaConfig.cantidad) || 1;
+      let zplCompleto = '';
+      for (let i = 0; i < cantidad; i++) {
+        zplCompleto += generarZPL(lote, i + 1) + '\n';
+      }
+      return zplCompleto;
+    };
+
+    // Descargar archivo ZPL
+    const descargarZPL = (lote) => {
+      const zpl = generarZPLMultiple(lote);
+      const blob = new Blob([zpl], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `etiquetas-${lote.codigo || 'L-'+lote.id}.zpl`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    // Enviar a impresora Zebra (requiere conexión directa o servidor de impresión)
+    const enviarAZebra = async (lote) => {
+      const zpl = generarZPLMultiple(lote);
+      
+      // Opción 1: Copiar al portapapeles para pegar en software de impresión
+      try {
+        await navigator.clipboard.writeText(zpl);
+        alert(`✅ Código ZPL copiado al portapapeles!\n\nPuedes:\n1. Pegarlo en Zebra Setup Utilities\n2. Enviarlo via Raw Print\n3. Usar el archivo .zpl descargado\n\nEtiquetas: ${etiquetaConfig.cantidad === 'bandejas' ? lote.bandejas : etiquetaConfig.cantidad}`);
+      } catch (err) {
+        // Si falla el portapapeles, ofrecer descarga
+        descargarZPL(lote);
+        alert('Archivo ZPL descargado. Envíalo a la impresora Zebra.');
+      }
+    };
+
+    // Vista previa ZPL (muestra el código)
+    const verPreviewZPL = (lote) => {
+      const zpl = generarZPL(lote, 1);
+      const ventana = window.open('', '_blank', 'width=600,height=700');
+      ventana.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>ZPL Preview - ${lote.codigo || 'L-'+lote.id}</title>
+          <style>
+            body { font-family: 'Courier New', monospace; padding: 20px; background: #1a1a1a; color: #00ff00; }
+            h1 { color: #f97316; font-family: Arial; }
+            pre { background: #0a0a0a; padding: 20px; border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.4; }
+            .info { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fff; font-family: Arial; }
+            .info h3 { color: #f97316; margin-bottom: 10px; }
+            button { background: #f97316; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-right: 10px; }
+            button:hover { background: #ea580c; }
+            .buttons { margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>🏷️ Código ZPL - Zebra AD220</h1>
+          <div class="info">
+            <h3>Configuración de etiqueta</h3>
+            <p>📐 Tamaño: ${etiquetaConfig.ancho}mm x ${etiquetaConfig.alto}mm</p>
+            <p>🖨️ DPI: ${etiquetaConfig.dpi}</p>
+            <p>📦 Producto: ${productos.find(p => p.id === lote.producto_id)?.nombre || 'Brotes'}</p>
+            <p>🔢 Lote: ${lote.codigo || 'L-'+lote.id}</p>
+          </div>
+          <pre>${zpl.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+          <div class="buttons">
+            <button onclick="navigator.clipboard.writeText(\`${zpl.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`).then(() => alert('✅ Copiado!'))">📋 Copiar ZPL</button>
+            <button onclick="window.print()">🖨️ Imprimir código</button>
+          </div>
+        </body>
+        </html>
+      `);
+      ventana.document.close();
+    };
+
+    // Función original para imprimir etiquetas HTML (mantener compatibilidad)
+    const imprimirEtiquetasHTML = (lote) => {
       const producto = productos.find(p => p.id === lote.producto_id);
       const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
       const fechaConsumo = new Date(fechaCosecha);
@@ -5417,7 +5593,9 @@ const MainApp = () => {
       const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
       
       const etiquetas = [];
-      for (let i = 0; i < lote.bandejas; i++) {
+      const cantidad = etiquetaConfig.cantidad === 'bandejas' ? lote.bandejas : parseInt(etiquetaConfig.cantidad) || 1;
+      
+      for (let i = 0; i < cantidad; i++) {
         etiquetas.push(`
           <div class="etiqueta">
             <div class="header">
@@ -5484,6 +5662,8 @@ const MainApp = () => {
               page-break-inside: avoid;
               font-size: 9px;
               line-height: 1.3;
+              width: ${etiquetaConfig.ancho}mm;
+              height: ${etiquetaConfig.alto}mm;
             }
             .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
             .logo { display: flex; align-items: center; gap: 6px; }
@@ -5531,6 +5711,15 @@ const MainApp = () => {
       `);
       ventana.document.close();
       ventana.print();
+    };
+
+    // Función principal de impresión (según formato seleccionado)
+    const imprimirEtiquetas = (lote) => {
+      if (etiquetaConfig.formato === 'zpl') {
+        enviarAZebra(lote);
+      } else {
+        imprimirEtiquetasHTML(lote);
+      }
     };
 
     // Planificación de siembras
@@ -5687,17 +5876,104 @@ const MainApp = () => {
 
         {produccionTab === 'etiquetas' && (
           <div className="space-y-4">
-            <Card className={`p-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
-              <h3 className={`font-bold mb-2 ${darkMode ? 'text-white' : ''}`}>📦 Generar Etiquetas</h3>
-              <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                Selecciona un lote cosechado para imprimir etiquetas para cada bandeja. 
-                Incluyen: producto, lote, fecha de cosecha, caducidad y conservación.
-              </p>
+            {/* Configuración de impresora Zebra */}
+            <Card className={`p-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200'}`}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-purple-500 rounded-xl text-white">
+                  <Printer size={20} />
+                </div>
+                <div>
+                  <h3 className={`font-bold ${darkMode ? 'text-white' : 'text-purple-900'}`}>🖨️ Configuración Zebra AD220</h3>
+                  <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-purple-600'}`}>Impresora térmica directa • Lenguaje ZPL</p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div>
+                  <label className={`block text-xs font-semibold mb-1 ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>Formato</label>
+                  <select 
+                    value={etiquetaConfig.formato} 
+                    onChange={e => setEtiquetaConfig({...etiquetaConfig, formato: e.target.value})}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm font-medium ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white border-neutral-300'}`}
+                  >
+                    <option value="zpl">🏷️ ZPL (Zebra)</option>
+                    <option value="html">🖨️ HTML (Normal)</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className={`block text-xs font-semibold mb-1 ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>Ancho (mm)</label>
+                  <select 
+                    value={etiquetaConfig.ancho} 
+                    onChange={e => setEtiquetaConfig({...etiquetaConfig, ancho: parseInt(e.target.value)})}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white border-neutral-300'}`}
+                  >
+                    <option value="40">40mm</option>
+                    <option value="50">50mm</option>
+                    <option value="60">60mm</option>
+                    <option value="80">80mm</option>
+                    <option value="100">100mm</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className={`block text-xs font-semibold mb-1 ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>Alto (mm)</label>
+                  <select 
+                    value={etiquetaConfig.alto} 
+                    onChange={e => setEtiquetaConfig({...etiquetaConfig, alto: parseInt(e.target.value)})}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white border-neutral-300'}`}
+                  >
+                    <option value="25">25mm</option>
+                    <option value="30">30mm</option>
+                    <option value="40">40mm</option>
+                    <option value="50">50mm</option>
+                    <option value="60">60mm</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className={`block text-xs font-semibold mb-1 ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>DPI</label>
+                  <select 
+                    value={etiquetaConfig.dpi} 
+                    onChange={e => setEtiquetaConfig({...etiquetaConfig, dpi: parseInt(e.target.value)})}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white border-neutral-300'}`}
+                  >
+                    <option value="203">203 DPI</option>
+                    <option value="300">300 DPI</option>
+                  </select>
+                </div>
+                
+                <div>
+                  <label className={`block text-xs font-semibold mb-1 ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>Cantidad</label>
+                  <select 
+                    value={etiquetaConfig.cantidad} 
+                    onChange={e => setEtiquetaConfig({...etiquetaConfig, cantidad: e.target.value})}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : 'bg-white border-neutral-300'}`}
+                  >
+                    <option value="bandejas">Por bandeja</option>
+                    <option value="1">1 etiqueta</option>
+                    <option value="5">5 etiquetas</option>
+                    <option value="10">10 etiquetas</option>
+                    <option value="25">25 etiquetas</option>
+                    <option value="50">50 etiquetas</option>
+                  </select>
+                </div>
+              </div>
+              
+              {etiquetaConfig.formato === 'zpl' && (
+                <div className={`mt-3 p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-purple-100'}`}>
+                  <p className={`text-xs ${darkMode ? 'text-neutral-300' : 'text-purple-700'}`}>
+                    💡 <strong>ZPL:</strong> El código se copiará al portapapeles. Pégalo en Zebra Setup Utilities o envíalo via RAW print al puerto de la impresora.
+                  </p>
+                </div>
+              )}
             </Card>
             
+            {/* Lista de lotes cosechados */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {lotes.filter(l => l.estado === 'cosechado').map(lote => {
                 const producto = productos.find(p => p.id === lote.producto_id);
+                const cantidadEtiquetas = etiquetaConfig.cantidad === 'bandejas' ? lote.bandejas : etiquetaConfig.cantidad;
                 return (
                   <Card key={lote.id} className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
                     <div className="p-4 bg-gradient-to-r from-green-500 to-emerald-500 text-white">
@@ -5716,11 +5992,37 @@ const MainApp = () => {
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className={darkMode ? 'text-neutral-400' : 'text-neutral-500'}>Cosecha:</span>
-                        <span className={darkMode ? 'text-neutral-200' : ''}>{formatDate(lote.fecha_cosecha_prevista)}</span>
+                        <span className={darkMode ? 'text-neutral-200' : ''}>{formatDate(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista)}</span>
                       </div>
-                      <Button className="w-full mt-3" onClick={() => imprimirEtiquetas(lote)}>
-                        <Printer size={18} /> Imprimir {lote.bandejas} Etiquetas
-                      </Button>
+                      
+                      {/* Botones según formato */}
+                      <div className="space-y-2 pt-2">
+                        {etiquetaConfig.formato === 'zpl' ? (
+                          <>
+                            <Button className="w-full" onClick={() => imprimirEtiquetas(lote)}>
+                              <Printer size={18} /> Generar ZPL ({cantidadEtiquetas})
+                            </Button>
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => descargarZPL(lote)}
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 ${darkMode ? 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+                              >
+                                <Download size={14} /> .ZPL
+                              </button>
+                              <button 
+                                onClick={() => verPreviewZPL(lote)}
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 ${darkMode ? 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+                              >
+                                <Eye size={14} /> Ver código
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <Button className="w-full" onClick={() => imprimirEtiquetas(lote)}>
+                            <Printer size={18} /> Imprimir HTML ({cantidadEtiquetas})
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </Card>
                 );
