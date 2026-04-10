@@ -2751,11 +2751,20 @@ const MainApp = () => {
 
   // ==================== FORMS ====================
   const ClienteForm = ({ cliente, onSave, onCancel }) => {
-    const [form, setForm] = useState(cliente || { 
+    const initialForm = cliente || { 
       nombre: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', 
       direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', 
       descuento: 0, cif: '', recargo_equivalencia: false, tipo_fiscal: 'empresa' 
-    });
+    };
+    
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `cliente_${cliente?.id || 'new'}`,
+      initialForm,
+      !cliente
+    );
+    
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     
     return (
       <div className="space-y-4">
@@ -2811,15 +2820,18 @@ const MainApp = () => {
         </p>
         
         <div className="flex justify-end gap-3 pt-4 border-t">
-          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-          <Button onClick={() => onSave(form)}>{cliente ? 'Guardar' : 'Crear'}</Button>
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{cliente ? 'Guardar' : 'Crear'}</Button>
         </div>
       </div>
     );
   };
 
   const LeadForm = ({ lead, onSave, onCancel }) => {
-    const [form, setForm] = useState(lead || { nombre: '', empresa: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', estado: 'nuevo', origen: 'web', valor_estimado: 0, notas: '' });
+    const initialForm = lead || { nombre: '', empresa: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', estado: 'nuevo', origen: 'web', valor_estimado: 0, notas: '' };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`lead_${lead?.id || 'new'}`, initialForm, !lead);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -2838,13 +2850,16 @@ const MainApp = () => {
           <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
         </div>
         <div><label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label><textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} /></div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lead ? 'Guardar' : 'Crear'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{lead ? 'Guardar' : 'Crear'}</Button></div>
       </div>
     );
   };
 
   const ProductoForm = ({ producto, onSave, onCancel }) => {
-    const [form, setForm] = useState(producto || { nombre: '', categoria: 'nutritivos', precio: 0, coste: 0, stock: 0, stock_minimo: 20, unidad: 'bandeja 100g', dias_crecimiento: 7 });
+    const initialForm = producto || { nombre: '', categoria: 'nutritivos', precio: 0, coste: 0, stock: 0, stock_minimo: 20, unidad: 'bandeja 100g', dias_crecimiento: 7 };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`producto_${producto?.id || 'new'}`, initialForm, !producto);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -2858,7 +2873,7 @@ const MainApp = () => {
           <Input label="Días Crecimiento" type="number" value={form.dias_crecimiento || 7} onChange={e => setForm({...form, dias_crecimiento: parseInt(e.target.value) || 7})} />
         </div>
         <p className="text-xs text-neutral-500">💡 Los días de crecimiento se usan para calcular la planificación de siembras</p>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{producto ? 'Guardar' : 'Crear'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{producto ? 'Guardar' : 'Crear'}</Button></div>
       </div>
     );
   };
@@ -2866,11 +2881,24 @@ const MainApp = () => {
   const PedidoForm = ({ pedido, onSave, onCancel }) => {
     const existingItems = pedido ? pedidoItems.filter(i => i.pedido_id === pedido.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad })) : [];
     
+    // Franjas horarias disponibles
+    const franjasHorarias = [
+      { value: '', label: 'Sin especificar' },
+      { value: '08:00-10:00', label: '🌅 08:00 - 10:00 (Primera hora)' },
+      { value: '09:00-12:00', label: '☀️ 09:00 - 12:00 (Mañana)' },
+      { value: '12:00-15:00', label: '🌞 12:00 - 15:00 (Mediodía)' },
+      { value: '15:00-18:00', label: '🌤️ 15:00 - 18:00 (Tarde)' },
+      { value: '15:00-20:00', label: '🌆 15:00 - 20:00 (Tarde amplio)' },
+      { value: '18:00-21:00', label: '🌙 18:00 - 21:00 (Noche)' },
+    ];
+    
     const initialForm = { 
       cliente_id: pedido?.cliente_id || (clientes.length > 0 ? clientes[0].id : null), 
       fecha: pedido?.fecha || new Date().toISOString().split('T')[0], 
       fecha_entrega: pedido?.fecha_entrega || new Date(Date.now() + 2*24*60*60*1000).toISOString().split('T')[0], 
+      horario_entrega: pedido?.horario_entrega || '',
       estado: pedido?.estado || 'pendiente', 
+      concepto: pedido?.concepto || '',
       items: existingItems.length > 0 ? existingItems : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []), 
       notas: pedido?.notas || '' 
     };
@@ -2988,6 +3016,8 @@ const MainApp = () => {
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
           <Input label="Entrega" type="date" value={form.fecha_entrega} onChange={e => setForm({...form, fecha_entrega: e.target.value})} />
+          <Select label="Horario de entrega" value={form.horario_entrega || ''} onChange={e => setForm({...form, horario_entrega: e.target.value})} options={franjasHorarias} />
+          <Input label="Concepto (interno)" value={form.concepto || ''} onChange={e => setForm({...form, concepto: e.target.value})} placeholder="Ej: Evento boda, Pedido semanal..." />
         </div>
         <div>
           <div className="flex justify-between mb-2"><label className="text-sm font-semibold text-neutral-700">Productos</label><button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1"><Plus size={16} />Añadir</button></div>
@@ -3239,13 +3269,16 @@ const MainApp = () => {
   };
 
   const LoteForm = ({ lote, onSave, onCancel }) => {
-    const [form, setForm] = useState({ 
+    const initialForm = { 
       producto_id: lote?.producto_id || (productos.length > 0 ? productos[0].id : null), 
       fecha_siembra: lote?.fecha_siembra || new Date().toISOString().split('T')[0], 
       fecha_cosecha_prevista: lote?.fecha_cosecha_prevista || '', 
       bandejas: lote?.bandejas || 20, 
       estado: lote?.estado || 'sembrado' 
-    });
+    };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`lote_${lote?.id || 'new'}`, initialForm, !lote);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     
     useEffect(() => {
       if (form.producto_id && form.fecha_siembra && productos.length > 0) {
@@ -3265,7 +3298,7 @@ const MainApp = () => {
           <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
           <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
           <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto para crear lotes de producción.</p>
-          <Button onClick={onCancel}>Cerrar</Button>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
         </div>
       );
     }
@@ -3279,22 +3312,17 @@ const MainApp = () => {
           <Input label="Bandejas" type="number" value={form.bandejas} onChange={e => setForm({...form, bandejas: parseInt(e.target.value) || 1})} />
           <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{lote ? 'Guardar' : 'Crear Lote'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{lote ? 'Guardar' : 'Crear Lote'}</Button></div>
       </div>
     );
   };
 
   // ==================== PROVEEDOR FORM ====================
   const ProveedorForm = ({ proveedor, onSave, onCancel }) => {
-    const [form, setForm] = useState(proveedor || { 
-      nombre: '', 
-      categoria: 'otros', 
-      contacto: '', 
-      email: '', 
-      telefono: '', 
-      direccion: '', 
-      notas: '' 
-    });
+    const initialForm = proveedor || { nombre: '', categoria: 'otros', contacto: '', email: '', telefono: '', direccion: '', notas: '' };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`proveedor_${proveedor?.id || 'new'}`, initialForm, !proveedor);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -3309,23 +3337,17 @@ const MainApp = () => {
             <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} />
           </div>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{proveedor ? 'Guardar' : 'Crear Proveedor'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{proveedor ? 'Guardar' : 'Crear Proveedor'}</Button></div>
       </div>
     );
   };
 
   // ==================== TAREA FORM ====================
   const TareaForm = ({ tarea, onSave, onCancel }) => {
-    const [form, setForm] = useState(tarea || { 
-      titulo: '', 
-      descripcion: '', 
-      categoria: 'otro', 
-      prioridad: 'media', 
-      fecha_limite: '', 
-      cliente_id: null,
-      asignado_a: null,
-      completada: false 
-    });
+    const initialForm = tarea || { titulo: '', descripcion: '', categoria: 'otro', prioridad: 'media', fecha_limite: '', cliente_id: null, asignado_a: null, completada: false };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`tarea_${tarea?.id || 'new'}`, initialForm, !tarea);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
@@ -3340,20 +3362,17 @@ const MainApp = () => {
             <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} />
           </div>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{tarea ? 'Guardar' : 'Crear Tarea'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{tarea ? 'Guardar' : 'Crear Tarea'}</Button></div>
       </div>
     );
   };
 
   // ==================== MERMA FORM ====================
   const MermaForm = ({ merma, onSave, onCancel }) => {
-    const [form, setForm] = useState(merma || { 
-      lote_id: lotes.length > 0 ? lotes[0].id : '', 
-      cantidad: 1, 
-      motivo: 'plagas', 
-      fecha: new Date().toISOString().split('T')[0],
-      notas: '' 
-    });
+    const initialForm = merma || { lote_id: lotes.length > 0 ? lotes[0].id : '', cantidad: 1, motivo: 'plagas', fecha: new Date().toISOString().split('T')[0], notas: '' };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`merma_${merma?.id || 'new'}`, initialForm, !merma);
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
 
     const motivosConfig = {
       plagas: 'Plagas',
@@ -3378,7 +3397,7 @@ const MainApp = () => {
             <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} />
           </div>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(form)}>{merma ? 'Guardar' : 'Registrar Merma'}</Button></div>
+        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{merma ? 'Guardar' : 'Registrar Merma'}</Button></div>
       </div>
     );
   };
@@ -3711,6 +3730,61 @@ const MainApp = () => {
         <div className="flex justify-end gap-3 pt-4 border-t sticky bottom-0 bg-white">
           <Button variant="secondary" onClick={handleCancel}>Cancelar</Button>
           <Button onClick={handleSubmit}>{receta ? 'Guardar Cambios' : 'Crear Receta'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== PAGO PROVEEDOR FORM ====================
+  const PagoProveedorForm = ({ pago, onSave, onCancel }) => {
+    const initialForm = pago || {
+      proveedor_id: proveedores.length > 0 ? proveedores[0].id : null,
+      importe: 0,
+      fecha_vencimiento: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+      referencia: '',
+      notas: '',
+    };
+    
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `pago_proveedor_${pago?.id || 'new'}`,
+      initialForm,
+      !pago
+    );
+    
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    if (proveedores.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay proveedores</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear al menos un proveedor para programar pagos.</p>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <Select 
+          label="Proveedor" 
+          value={form.proveedor_id || ''} 
+          onChange={e => setForm({...form, proveedor_id: parseInt(e.target.value)})} 
+          options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} 
+        />
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+          <Input label="Fecha Vencimiento" type="date" value={form.fecha_vencimiento} onChange={e => setForm({...form, fecha_vencimiento: e.target.value})} />
+        </div>
+        <Input label="Referencia / Concepto" value={form.referencia} onChange={e => setForm({...form, referencia: e.target.value})} />
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border" rows={2} />
+        </div>
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{pago ? 'Guardar' : 'Crear Pago'}</Button>
         </div>
       </div>
     );
@@ -5271,6 +5345,50 @@ const MainApp = () => {
       exportToExcel(toExport, 'gastos', exportColumns);
     };
 
+    // ==================== CÁLCULOS CAPEX ====================
+    // Identificar gastos CAPEX (inversiones en activo fijo)
+    const gastosCapex = gastos.filter(g => categoriasGasto[g.categoria]?.tipo === 'capex');
+    
+    // Calcular amortización para cada activo
+    const hoy = new Date();
+    const capexConAmortizacion = gastosCapex.map(gasto => {
+      const catInfo = categoriasGasto[gasto.categoria] || {};
+      const aniosAmortizacion = catInfo.amortizacion || 5;
+      const fechaCompra = new Date(gasto.fecha);
+      const aniosTranscurridos = (hoy - fechaCompra) / (365.25 * 24 * 60 * 60 * 1000);
+      
+      // IVA deducible - calcular base imponible
+      const tipoIVA = TIPOS_IVA[gasto.iva_tipo] || TIPOS_IVA.general;
+      const ivaPct = tipoIVA?.valor ?? 21;
+      const baseImponible = gasto.importe / (1 + ivaPct / 100);
+      
+      // Amortización lineal
+      const amortizacionAnual = baseImponible / aniosAmortizacion;
+      const amortizacionAcumulada = Math.min(aniosTranscurridos * amortizacionAnual, baseImponible);
+      const valorNetoContable = baseImponible - amortizacionAcumulada;
+      const porcentajeAmortizado = (amortizacionAcumulada / baseImponible) * 100;
+      const completamenteAmortizado = porcentajeAmortizado >= 100;
+      
+      return {
+        ...gasto,
+        baseImponible,
+        aniosAmortizacion,
+        amortizacionAnual,
+        amortizacionAcumulada,
+        valorNetoContable,
+        porcentajeAmortizado,
+        completamenteAmortizado,
+        aniosTranscurridos: Math.floor(aniosTranscurridos),
+        categoria_label: catInfo.label || gasto.categoria
+      };
+    });
+
+    // Totales CAPEX
+    const totalCapexBruto = capexConAmortizacion.reduce((sum, c) => sum + c.baseImponible, 0);
+    const totalAmortizacionAcumulada = capexConAmortizacion.reduce((sum, c) => sum + c.amortizacionAcumulada, 0);
+    const totalValorNeto = capexConAmortizacion.reduce((sum, c) => sum + c.valorNetoContable, 0);
+    const totalAmortizacionAnual = capexConAmortizacion.reduce((sum, c) => sum + (c.completamenteAmortizado ? 0 : c.amortizacionAnual), 0);
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
@@ -5279,118 +5397,267 @@ const MainApp = () => {
             <p className="text-neutral-500 font-medium">{gastosFiltradosPorMes.length} gastos</p>
           </div>
           <div className="flex items-center gap-3">
-            <select 
-              value={filtroGastosMes} 
-              onChange={e => { setFiltroGastosMes(e.target.value); setSelectedGastos([]); }}
-              className="px-3 py-2 rounded-xl border bg-white font-medium text-sm"
-            >
-              <option value="todos">Todas las fechas</option>
-              <option value="mes_actual">Este mes</option>
-              <option value="año_actual">Este año</option>
-              {getMesesDisponibles().slice(1).map(m => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
-            <Button variant="secondary" size="sm" onClick={handleExportSelectedGastos}>
-              <Download size={16} /> {selectedGastos.length > 0 ? `Exportar (${selectedGastos.length})` : 'Exportar'}
-            </Button>
+            {gastosTab === 'gastos' && (
+              <>
+                <select 
+                  value={filtroGastosMes} 
+                  onChange={e => { setFiltroGastosMes(e.target.value); setSelectedGastos([]); }}
+                  className="px-3 py-2 rounded-xl border bg-white font-medium text-sm"
+                >
+                  <option value="todos">Todas las fechas</option>
+                  <option value="mes_actual">Este mes</option>
+                  <option value="año_actual">Este año</option>
+                  {getMesesDisponibles().slice(1).map(m => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+                <Button variant="secondary" size="sm" onClick={handleExportSelectedGastos}>
+                  <Download size={16} /> {selectedGastos.length > 0 ? `Exportar (${selectedGastos.length})` : 'Exportar'}
+                </Button>
+              </>
+            )}
             <Button onClick={() => { setEditingItem(null); setShowModal('gasto'); }}><Plus size={20} /> Nuevo</Button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard icon={Wallet} label="Total" value={formatCurrency(gastosFiltradosPorMes.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
-          <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastosFiltradosPorMes.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
-          <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastosFiltradosPorMes.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
-          <StatCard icon={FileText} label="Con Factura" value={gastosFiltradosPorMes.filter(g => g.factura_url).length} color="bg-blue-100 text-blue-600" />
+        {/* Pestañas Gastos / CAPEX */}
+        <div className="flex gap-2 border-b">
+          <button 
+            onClick={() => setGastosTab('gastos')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors ${gastosTab === 'gastos' ? 'border-orange-500 text-orange-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            📋 Gastos Operativos
+          </button>
+          <button 
+            onClick={() => setGastosTab('capex')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors ${gastosTab === 'capex' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            📦 CAPEX ({gastosCapex.length})
+          </button>
         </div>
 
-        {selectedGastos.length > 0 && (
-          <Card className="p-3 bg-orange-50 border-orange-200 flex items-center justify-between">
-            <span className="font-semibold text-orange-700">{selectedGastos.length} gasto(s) seleccionado(s) - Total: {formatCurrency(gastos.filter(g => selectedGastos.includes(g.id)).reduce((sum, g) => sum + (g.importe || 0), 0))}</span>
-            <Button variant="secondary" size="sm" onClick={() => setSelectedGastos([])}>Limpiar selección</Button>
-          </Card>
-        )}
-
-        <Card className="overflow-hidden">
-          {Object.values(filtrosGastos).some(v => v && v !== '') && (
-            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
-              <span className="text-sm text-orange-700">🔍 Filtros activos</span>
-              <button onClick={() => setFiltrosGastos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+        {gastosTab === 'gastos' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <StatCard icon={Wallet} label="Total" value={formatCurrency(gastosFiltradosPorMes.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
+              <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastosFiltradosPorMes.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
+              <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastosFiltradosPorMes.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
+              <StatCard icon={FileText} label="Con Factura" value={gastosFiltradosPorMes.filter(g => g.factura_url).length} color="bg-blue-100 text-blue-600" />
             </div>
-          )}
-          <table className="w-full">
-            <thead className="bg-neutral-900 text-white">
-              <tr>
-                <th className="px-5 py-4 text-left">
-                  <input 
-                    type="checkbox" 
-                    checked={gastosFiltradosPorMes.length > 0 && selectedGastos.length === gastosFiltradosPorMes.length}
-                    onChange={e => handleSelectAllGastos(e.target.checked)}
-                    className="w-4 h-4 rounded"
-                  />
-                </th>
-                <FilterableHeader label="Fecha" field="fecha" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="date" />
-                <FilterableHeader label="Concepto" field="concepto" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="text" />
-                <FilterableHeader label="Categoría" field="categoria" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
-                <FilterableHeader label="Proveedor" field="proveedor_id" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} />
-                <FilterableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="number" />
-                <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
-                <FilterableHeader label="Estado" field="pagado" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={[{ value: 'true', label: 'Pagado' }, { value: 'false', label: 'Pendiente' }]} />
-                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortData(gastosFiltradosPorMes, sortGastos).map(gasto => {
-                const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
-                const Icon = catConfig.icon;
-                const isSelected = selectedGastos.includes(gasto.id);
-                return (
-                  <tr key={gasto.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-orange-50' : ''}`}>
-                    <td className="px-5 py-4">
+
+            {selectedGastos.length > 0 && (
+              <Card className="p-3 bg-orange-50 border-orange-200 flex items-center justify-between">
+                <span className="font-semibold text-orange-700">{selectedGastos.length} gasto(s) seleccionado(s) - Total: {formatCurrency(gastos.filter(g => selectedGastos.includes(g.id)).reduce((sum, g) => sum + (g.importe || 0), 0))}</span>
+                <Button variant="secondary" size="sm" onClick={() => setSelectedGastos([])}>Limpiar selección</Button>
+              </Card>
+            )}
+
+            <Card className="overflow-hidden">
+              {Object.values(filtrosGastos).some(v => v && v !== '') && (
+                <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+                  <span className="text-sm text-orange-700">🔍 Filtros activos</span>
+                  <button onClick={() => setFiltrosGastos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+                </div>
+              )}
+              <table className="w-full">
+                <thead className="bg-neutral-900 text-white">
+                  <tr>
+                    <th className="px-5 py-4 text-left">
                       <input 
                         type="checkbox" 
-                        checked={isSelected}
-                        onChange={e => handleSelectOneGasto(gasto.id, e.target.checked)}
+                        checked={gastosFiltradosPorMes.length > 0 && selectedGastos.length === gastosFiltradosPorMes.length}
+                        onChange={e => handleSelectAllGastos(e.target.checked)}
                         className="w-4 h-4 rounded"
                       />
-                    </td>
-                    <td className="px-5 py-4 text-sm">{formatDate(gasto.fecha)}</td>
-                    <td className="px-5 py-4 font-semibold">{gasto.concepto}</td>
-                    <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
-                    <td className="px-5 py-4 text-sm font-medium">{gasto.proveedor_id ? proveedores.find(p => p.id === gasto.proveedor_id)?.nombre || '-' : '-'}</td>
-                    <td className="px-5 py-4 font-bold">{formatCurrency(gasto.importe)}</td>
-                    <td className="px-5 py-4">
-                      {gasto.factura_url ? (
-                        <a href={gasto.factura_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-green-600 hover:text-green-700">
-                          <FileText size={16} />
-                          <span className="text-sm font-medium">Ver</span>
-                        </a>
-                      ) : (
-                        <span className="text-neutral-400 text-sm">-</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-4"><Badge variant={gasto.pagado ? 'success' : 'warning'}>{gasto.pagado ? 'Pagado' : 'Pendiente'}</Badge></td>
-                    <td className="px-5 py-4">
-                      <div className="flex justify-end gap-1">
-                        {!gasto.pagado && <button onClick={() => handleMarcarPagado(gasto.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagado"><Check size={16} /></button>}
-                        <button onClick={() => { setEditingItem(gasto); setShowModal('gasto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                        <button onClick={() => handleDelete('gastos', gasto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                      </div>
-                    </td>
+                    </th>
+                    <FilterableHeader label="Fecha" field="fecha" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="date" />
+                    <FilterableHeader label="Concepto" field="concepto" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="text" />
+                    <FilterableHeader label="Categoría" field="categoria" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={Object.entries(categoriasGasto).map(([k, v]) => ({ value: k, label: v.label }))} />
+                    <FilterableHeader label="Proveedor" field="proveedor_id" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} />
+                    <FilterableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="number" />
+                    <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
+                    <FilterableHeader label="Estado" field="pagado" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={[{ value: 'true', label: 'Pagado' }, { value: 'false', label: 'Pendiente' }]} />
+                    <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {gastosFiltradosPorMes.length === 0 && <EmptyState icon={Wallet} title="No hay gastos" description="Registra tus gastos" action={<Button onClick={() => setShowModal('gasto')}><Plus size={16} />Nuevo</Button>} />}
-        </Card>
+                </thead>
+                <tbody>
+                  {sortData(gastosFiltradosPorMes, sortGastos).map(gasto => {
+                    const catConfig = categoriasGasto[gasto.categoria] || categoriasGasto.otros;
+                    const Icon = catConfig.icon;
+                    const isSelected = selectedGastos.includes(gasto.id);
+                    return (
+                      <tr key={gasto.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-orange-50' : ''}`}>
+                        <td className="px-5 py-4">
+                          <input 
+                            type="checkbox" 
+                            checked={isSelected}
+                            onChange={e => handleSelectOneGasto(gasto.id, e.target.checked)}
+                            className="w-4 h-4 rounded"
+                          />
+                        </td>
+                        <td className="px-5 py-4 text-sm">{formatDate(gasto.fecha)}</td>
+                        <td className="px-5 py-4 font-semibold">{gasto.concepto}</td>
+                        <td className="px-5 py-4"><Badge className={catConfig.color}><Icon size={12} />{catConfig.label}</Badge></td>
+                        <td className="px-5 py-4 text-sm font-medium">{gasto.proveedor_id ? proveedores.find(p => p.id === gasto.proveedor_id)?.nombre || '-' : '-'}</td>
+                        <td className="px-5 py-4 font-bold">{formatCurrency(gasto.importe)}</td>
+                        <td className="px-5 py-4">
+                          {gasto.factura_url ? (
+                            <a href={gasto.factura_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-green-600 hover:text-green-700">
+                              <FileText size={16} />
+                              <span className="text-sm font-medium">Ver</span>
+                            </a>
+                          ) : (
+                            <span className="text-neutral-400 text-sm">-</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4"><Badge variant={gasto.pagado ? 'success' : 'warning'}>{gasto.pagado ? 'Pagado' : 'Pendiente'}</Badge></td>
+                        <td className="px-5 py-4">
+                          <div className="flex justify-end gap-1">
+                            {!gasto.pagado && <button onClick={() => handleMarcarPagado(gasto.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como pagado"><Check size={16} /></button>}
+                            <button onClick={() => { setEditingItem(gasto); setShowModal('gasto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                            <button onClick={() => handleDelete('gastos', gasto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {gastosFiltradosPorMes.length === 0 && <EmptyState icon={Wallet} title="No hay gastos" description="Registra tus gastos" action={<Button onClick={() => setShowModal('gasto')}><Plus size={16} />Nuevo</Button>} />}
+            </Card>
+          </>
+        )}
+
+        {gastosTab === 'capex' && (
+          <>
+            {/* Stats CAPEX */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <StatCard icon={Package} label="Total Inversión" value={formatCurrency(totalCapexBruto)} color="bg-indigo-100 text-indigo-600" />
+              <StatCard icon={TrendingDown} label="Amortización Acumulada" value={formatCurrency(totalAmortizacionAcumulada)} color="bg-red-100 text-red-600" />
+              <StatCard icon={Banknote} label="Valor Neto Contable" value={formatCurrency(totalValorNeto)} color="bg-green-100 text-green-600" />
+              <StatCard icon={Calculator} label="Amortización Anual" value={formatCurrency(totalAmortizacionAnual)} color="bg-amber-100 text-amber-600" />
+            </div>
+
+            {/* Explicación CAPEX */}
+            <Card className="p-4 bg-indigo-50 border-indigo-200">
+              <div className="flex items-start gap-3">
+                <Package size={24} className="text-indigo-600 mt-1" />
+                <div>
+                  <h3 className="font-bold text-indigo-800">📦 Inversiones en Activo Fijo (CAPEX)</h3>
+                  <p className="text-sm text-indigo-700 mt-1">
+                    Los gastos CAPEX no afectan al resultado del ejercicio de golpe. Se amortizan (reparten) durante su vida útil.
+                    La amortización anual es el gasto que sí impacta en la cuenta de resultados cada año.
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {/* Tabla CAPEX */}
+            <Card className="overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-indigo-900 text-white">
+                  <tr>
+                    <th className="px-5 py-4 text-left text-sm font-bold">Fecha</th>
+                    <th className="px-5 py-4 text-left text-sm font-bold">Concepto</th>
+                    <th className="px-5 py-4 text-left text-sm font-bold">Categoría</th>
+                    <th className="px-5 py-4 text-right text-sm font-bold">Base Imponible</th>
+                    <th className="px-5 py-4 text-center text-sm font-bold">Años Amort.</th>
+                    <th className="px-5 py-4 text-right text-sm font-bold">Amort. Anual</th>
+                    <th className="px-5 py-4 text-right text-sm font-bold">Amort. Acumulada</th>
+                    <th className="px-5 py-4 text-right text-sm font-bold">Valor Neto</th>
+                    <th className="px-5 py-4 text-center text-sm font-bold">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {capexConAmortizacion.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="p-8 text-center">
+                        <Package size={48} className="mx-auto text-neutral-300 mb-4" />
+                        <h3 className="font-bold text-neutral-900 mb-2">No hay inversiones CAPEX</h3>
+                        <p className="text-neutral-500 mb-4">Registra inversiones en maquinaria, equipos, vehículos, etc.</p>
+                        <Button onClick={() => setShowModal('gasto')}><Plus size={16} /> Nuevo Gasto</Button>
+                      </td>
+                    </tr>
+                  ) : (
+                    capexConAmortizacion.map(capex => (
+                      <tr key={capex.id} className={`border-b border-neutral-100 hover:bg-indigo-50 ${capex.completamenteAmortizado ? 'bg-green-50' : ''}`}>
+                        <td className="px-5 py-4 text-sm">{formatDate(capex.fecha)}</td>
+                        <td className="px-5 py-4 font-semibold">{capex.concepto}</td>
+                        <td className="px-5 py-4">
+                          <Badge className="bg-indigo-100 text-indigo-700">{capex.categoria_label}</Badge>
+                        </td>
+                        <td className="px-5 py-4 text-right font-bold">{formatCurrency(capex.baseImponible)}</td>
+                        <td className="px-5 py-4 text-center">
+                          <span className="px-2 py-1 bg-neutral-100 rounded-lg text-sm font-semibold">{capex.aniosAmortizacion} años</span>
+                        </td>
+                        <td className="px-5 py-4 text-right font-semibold text-amber-600">{formatCurrency(capex.amortizacionAnual)}</td>
+                        <td className="px-5 py-4 text-right font-semibold text-red-600">{formatCurrency(capex.amortizacionAcumulada)}</td>
+                        <td className="px-5 py-4 text-right font-bold text-green-600">{formatCurrency(capex.valorNetoContable)}</td>
+                        <td className="px-5 py-4 text-center">
+                          {capex.completamenteAmortizado ? (
+                            <Badge variant="success">✓ Amortizado</Badge>
+                          ) : (
+                            <div className="w-full bg-neutral-200 rounded-full h-2.5">
+                              <div 
+                                className="bg-indigo-600 h-2.5 rounded-full" 
+                                style={{ width: `${Math.min(capex.porcentajeAmortizado, 100)}%` }}
+                              />
+                            </div>
+                          )}
+                          <span className="text-xs text-neutral-500 mt-1 block">{capex.porcentajeAmortizado.toFixed(0)}%</span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {capexConAmortizacion.length > 0 && (
+                  <tfoot className="bg-indigo-50 font-bold">
+                    <tr>
+                      <td colSpan={3} className="px-5 py-4">TOTALES</td>
+                      <td className="px-5 py-4 text-right">{formatCurrency(totalCapexBruto)}</td>
+                      <td></td>
+                      <td className="px-5 py-4 text-right text-amber-600">{formatCurrency(totalAmortizacionAnual)}</td>
+                      <td className="px-5 py-4 text-right text-red-600">{formatCurrency(totalAmortizacionAcumulada)}</td>
+                      <td className="px-5 py-4 text-right text-green-600">{formatCurrency(totalValorNeto)}</td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </Card>
+
+            {/* Cuadro de amortización anual */}
+            {capexConAmortizacion.length > 0 && (
+              <Card className="p-4">
+                <h3 className="font-bold text-neutral-900 mb-3 flex items-center gap-2">
+                  <Calculator size={20} className="text-indigo-600" />
+                  Impacto en Cuenta de Resultados
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-amber-50 rounded-xl">
+                    <p className="text-sm text-amber-700 font-medium">Amortización anual a contabilizar</p>
+                    <p className="text-2xl font-black text-amber-600">{formatCurrency(totalAmortizacionAnual)}/año</p>
+                    <p className="text-xs text-amber-600 mt-1">Este importe reduce el beneficio cada año</p>
+                  </div>
+                  <div className="p-3 bg-green-50 rounded-xl">
+                    <p className="text-sm text-green-700 font-medium">Valor neto de activos fijos</p>
+                    <p className="text-2xl font-black text-green-600">{formatCurrency(totalValorNeto)}</p>
+                    <p className="text-xs text-green-600 mt-1">Valor actual en balance de situación</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </>
+        )}
       </div>
     );
   };
 
   // Estado para pestaña de producción
   const [produccionTab, setProduccionTab] = useState('lotes');
+  
+  // Estado para pestañas de gastos (gastos vs capex)
+  const [gastosTab, setGastosTab] = useState('gastos');
   
   // Configuración de etiquetas Zebra (debe estar fuera de renderProduccion)
   const [etiquetaConfig, setEtiquetaConfig] = useState({
@@ -6860,41 +7127,6 @@ Firma repartidor: _________________
       refetchPagosProveedor();
     };
 
-    // Form para nuevo pago
-    const NuevoPagoForm = ({ onSave, onCancel }) => {
-      const [form, setForm] = useState({
-        proveedor_id: proveedores[0]?.id || null,
-        importe: 0,
-        fecha_vencimiento: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-        referencia: '',
-        notas: '',
-      });
-
-      return (
-        <div className="space-y-4">
-          <Select 
-            label="Proveedor" 
-            value={form.proveedor_id || ''} 
-            onChange={e => setForm({...form, proveedor_id: parseInt(e.target.value)})} 
-            options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} 
-          />
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Importe (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
-            <Input label="Fecha Vencimiento" type="date" value={form.fecha_vencimiento} onChange={e => setForm({...form, fecha_vencimiento: e.target.value})} />
-          </div>
-          <Input label="Referencia / Concepto" value={form.referencia} onChange={e => setForm({...form, referencia: e.target.value})} />
-          <div>
-            <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
-            <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border" rows={2} />
-          </div>
-          <div className="flex justify-end gap-3 pt-4 border-t">
-            <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-            <Button onClick={() => onSave(form)}>Guardar Pago</Button>
-          </div>
-        </div>
-      );
-    };
-
     const handleSavePago = async (form) => {
       try {
         await supabase.from('pagos_proveedor').insert({
@@ -7143,7 +7375,7 @@ Firma repartidor: _________________
         {/* Modal nuevo pago */}
         {showModal === 'nuevoPago' && (
           <Modal title="Nuevo Pago a Proveedor" onClose={() => setShowModal(null)}>
-            <NuevoPagoForm onSave={handleSavePago} onCancel={() => setShowModal(null)} />
+            <PagoProveedorForm onSave={handleSavePago} onCancel={() => setShowModal(null)} />
           </Modal>
         )}
       </div>
@@ -10559,6 +10791,42 @@ Firma repartidor: _________________
                         </td>
                         <td className="p-4">
                           <div className="flex justify-end gap-1">
+                            {/* Botón de etiquetas */}
+                            <button 
+                              onClick={() => {
+                                // Generar etiqueta ZPL para muestra
+                                const itemsMuestra = muestraItems.filter(i => i.muestra_id === muestra.id);
+                                const productosEtiqueta = itemsMuestra.map(i => {
+                                  const prod = productos.find(p => p.id === i.producto_id);
+                                  return `${prod?.nombre || '?'} x${i.cantidad}`;
+                                }).join(', ');
+                                
+                                const zpl = [
+                                  '^XA',
+                                  '^CF0,25',
+                                  '^FO20,20^FDMuestra RootFlow^FS',
+                                  '^CF0,20',
+                                  `^FO20,55^FD${muestra.empresa || muestra.nombre_contacto}^FS`,
+                                  '^CF0,16',
+                                  `^FO20,85^FD${productosEtiqueta.substring(0, 40)}^FS`,
+                                  `^FO20,110^FDFecha: ${formatDate(muestra.fecha_entrega)}^FS`,
+                                  '^FO20,135^FDwww.rootflow.es^FS',
+                                  '^XZ'
+                                ].join('\n');
+                                
+                                const blob = new Blob([zpl], { type: 'text/plain' });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = `muestra-${muestra.id}-etiqueta.zpl`;
+                                a.click();
+                                URL.revokeObjectURL(url);
+                              }}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" 
+                              title="Descargar etiqueta ZPL"
+                            >
+                              <Tag size={16} />
+                            </button>
                             {muestra.estado === 'pendiente' && (
                               <button 
                                 onClick={() => supabase.from('muestras').update({ estado: 'entregada' }).eq('id', muestra.id).then(() => refetchMuestras())}
