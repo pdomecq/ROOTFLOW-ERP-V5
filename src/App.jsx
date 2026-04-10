@@ -6227,6 +6227,9 @@ const MainApp = () => {
       </div>
     );
   };
+
+  // ==================== CALENDARIO ====================
+  const renderCalendario = () => {
     const mesActual = mesCalendario || new Date();
     
     const primerDiaMes = new Date(mesActual.getFullYear(), mesActual.getMonth(), 1);
