@@ -5546,40 +5546,54 @@ const MainApp = () => {
     // Vista previa ZPL (muestra el código)
     const verPreviewZPL = (lote) => {
       const zpl = generarZPL(lote, 1);
+      const producto = productos.find(p => p.id === lote.producto_id);
+      const zplEscaped = zpl.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
       const ventana = window.open('', '_blank', 'width=600,height=700');
-      ventana.document.write(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>ZPL Preview - ${lote.codigo || 'L-'+lote.id}</title>
-          <style>
-            body { font-family: 'Courier New', monospace; padding: 20px; background: #1a1a1a; color: #00ff00; }
-            h1 { color: #f97316; font-family: Arial; }
-            pre { background: #0a0a0a; padding: 20px; border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.4; }
-            .info { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fff; font-family: Arial; }
-            .info h3 { color: #f97316; margin-bottom: 10px; }
-            button { background: #f97316; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-right: 10px; }
-            button:hover { background: #ea580c; }
-            .buttons { margin-top: 20px; }
-          </style>
-        </head>
-        <body>
-          <h1>🏷️ Código ZPL - Zebra AD220</h1>
-          <div class="info">
-            <h3>Configuración de etiqueta</h3>
-            <p>📐 Tamaño: ${etiquetaConfig.ancho}mm x ${etiquetaConfig.alto}mm</p>
-            <p>🖨️ DPI: ${etiquetaConfig.dpi}</p>
-            <p>📦 Producto: ${productos.find(p => p.id === lote.producto_id)?.nombre || 'Brotes'}</p>
-            <p>🔢 Lote: ${lote.codigo || 'L-'+lote.id}</p>
-          </div>
-          <pre>${zpl.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
-          <div class="buttons">
-            <button onclick="navigator.clipboard.writeText(\`${zpl.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`).then(() => alert('✅ Copiado!'))">📋 Copiar ZPL</button>
-            <button onclick="window.print()">🖨️ Imprimir código</button>
-          </div>
-        </body>
-        </html>
-      `);
+      const htmlContent = [
+        '<!DOCTYPE html>',
+        '<html>',
+        '<head>',
+        '<title>ZPL Preview - ' + (lote.codigo || 'L-'+lote.id) + '</title>',
+        '<style>',
+        'body { font-family: "Courier New", monospace; padding: 20px; background: #1a1a1a; color: #00ff00; }',
+        'h1 { color: #f97316; font-family: Arial; }',
+        'pre { background: #0a0a0a; padding: 20px; border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.4; white-space: pre-wrap; }',
+        '.info { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fff; font-family: Arial; }',
+        '.info h3 { color: #f97316; margin-bottom: 10px; }',
+        'button { background: #f97316; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-right: 10px; }',
+        'button:hover { background: #ea580c; }',
+        '.buttons { margin-top: 20px; }',
+        '</style>',
+        '</head>',
+        '<body>',
+        '<h1>🏷️ Código ZPL - Zebra AD220</h1>',
+        '<div class="info">',
+        '<h3>Configuración de etiqueta</h3>',
+        '<p>📐 Tamaño: ' + etiquetaConfig.ancho + 'mm x ' + etiquetaConfig.alto + 'mm</p>',
+        '<p>🖨️ DPI: ' + etiquetaConfig.dpi + '</p>',
+        '<p>📦 Producto: ' + (producto?.nombre || 'Brotes') + '</p>',
+        '<p>🔢 Lote: ' + (lote.codigo || 'L-'+lote.id) + '</p>',
+        '</div>',
+        '<pre id="zplCode">' + zplEscaped + '</pre>',
+        '<div class="buttons">',
+        '<button onclick="copyZPL()">📋 Copiar ZPL</button>',
+        '<button onclick="window.print()">🖨️ Imprimir código</button>',
+        '</div>',
+        '<script>',
+        'function copyZPL() {',
+        '  var pre = document.getElementById("zplCode");',
+        '  var text = pre.textContent;',
+        '  navigator.clipboard.writeText(text).then(function() {',
+        '    alert("✅ Código ZPL copiado al portapapeles!");',
+        '  });',
+        '}',
+        '</script>',
+        '</body>',
+        '</html>'
+      ].join('\n');
+      
+      ventana.document.write(htmlContent);
       ventana.document.close();
     };
 
