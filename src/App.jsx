@@ -1559,6 +1559,8 @@ const MainApp = () => {
   // V17 - Sistema de turnos
   const { data: sociosData, refetch: refetchSocios } = useRealtime('socios');
   const { data: turnosData, refetch: refetchTurnos } = useRealtime('turnos');
+  // V18 - Múltiples contactos por cliente
+  const { data: clienteContactosData, refetch: refetchClienteContactos } = useRealtime('cliente_contactos');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1610,6 +1612,8 @@ const MainApp = () => {
   // V17 - Turnos
   const socios = sociosData || [];
   const turnos = turnosData || [];
+  // V18 - Contactos múltiples
+  const clienteContactos = clienteContactosData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2599,6 +2603,153 @@ const MainApp = () => {
     localStorage.setItem('darkMode', newMode.toString());
   };
 
+  // ==================== SISTEMA DE EMAILS ====================
+  // Configuración de email guardada en localStorage
+  const [emailConfig, setEmailConfig] = useState(() => {
+    const saved = localStorage.getItem('rootflow_email_config');
+    return saved ? JSON.parse(saved) : {
+      activo: false,
+      remitente: 'Rootflow <noreply@rootflow.es>',
+      destinatariosDefault: '', // emails separados por coma
+      enviarSoloCriticas: false,
+    };
+  });
+
+  const guardarEmailConfig = (config) => {
+    setEmailConfig(config);
+    localStorage.setItem('rootflow_email_config', JSON.stringify(config));
+  };
+
+  // Función para enviar email a través de la Edge Function
+  const enviarEmail = async ({ to, subject, html, alertaId = null }) => {
+    if (!emailConfig.activo) {
+      return { success: false, error: 'Sistema de emails desactivado en configuración' };
+    }
+    
+    if (!to || (Array.isArray(to) && to.length === 0)) {
+      return { success: false, error: 'No hay destinatarios configurados' };
+    }
+
+    try {
+      // Llamar a la Edge Function de Supabase
+      const { data, error } = await supabase.functions.invoke('send-email', {
+        body: {
+          to: Array.isArray(to) ? to : [to],
+          subject,
+          html,
+          from: emailConfig.remitente,
+        }
+      });
+
+      if (error) throw error;
+
+      // Registrar en log
+      await supabase.from('email_log').insert({
+        destinatarios: Array.isArray(to) ? to.join(', ') : to,
+        asunto: subject,
+        alerta_id: alertaId,
+        estado: 'enviado',
+        respuesta: JSON.stringify(data),
+      });
+
+      return { success: true, data };
+    } catch (e) {
+      // Log del error
+      await supabase.from('email_log').insert({
+        destinatarios: Array.isArray(to) ? to.join(', ') : to,
+        asunto: subject,
+        alerta_id: alertaId,
+        estado: 'error',
+        respuesta: e.message || String(e),
+      });
+      return { success: false, error: e.message || String(e) };
+    }
+  };
+
+  // Obtener emails de socios activos con notificaciones
+  const getEmailsSociosActivos = () => {
+    return (sociosData || [])
+      .filter(s => s.activo !== false && s.notificaciones_email !== false && s.email)
+      .map(s => s.email);
+  };
+
+  // Generar HTML de email para una alerta
+  const generarHtmlAlerta = (alerta) => {
+    const colorPrioridad = alerta.prioridad === 'critica' ? '#DC2626' : 
+                           alerta.prioridad === 'alta' ? '#F59E0B' : 
+                           alerta.prioridad === 'media' ? '#3B82F6' : '#6B7280';
+    
+    return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f5f5f5;">
+  <div style="background: #2C5F2D; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+    <h1 style="margin: 0; font-size: 24px;">🌱 Rootflow Hydroponics</h1>
+    <p style="margin: 5px 0 0 0; opacity: 0.9;">Alerta del ERP</p>
+  </div>
+  <div style="background: white; padding: 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <div style="display: inline-block; background: ${colorPrioridad}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; text-transform: uppercase; margin-bottom: 15px;">
+      ${alerta.prioridad}
+    </div>
+    <h2 style="margin: 0 0 10px 0; color: #1F2937;">${alerta.titulo}</h2>
+    <p style="color: #6B7280; font-size: 16px; margin: 0 0 20px 0;">${alerta.mensaje}</p>
+    <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 20px 0;">
+    <p style="color: #9CA3AF; font-size: 12px; margin: 0;">
+      Este email se envió automáticamente desde el ERP de Rootflow.<br>
+      <a href="https://rootflow.es" style="color: #F97316;">Acceder al ERP</a>
+    </p>
+  </div>
+</body>
+</html>`;
+  };
+
+  // Generar HTML de resumen de varias alertas
+  const generarHtmlResumen = (alertasList) => {
+    const filasAlertas = alertasList.map(a => {
+      const colorPrioridad = a.prioridad === 'critica' ? '#DC2626' : 
+                              a.prioridad === 'alta' ? '#F59E0B' : 
+                              a.prioridad === 'media' ? '#3B82F6' : '#6B7280';
+      return `
+        <tr style="border-bottom: 1px solid #E5E7EB;">
+          <td style="padding: 12px;">
+            <span style="display: inline-block; background: ${colorPrioridad}; color: white; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: bold; text-transform: uppercase;">
+              ${a.prioridad}
+            </span>
+          </td>
+          <td style="padding: 12px;">
+            <strong style="color: #1F2937;">${a.titulo}</strong><br>
+            <span style="color: #6B7280; font-size: 14px;">${a.mensaje}</span>
+          </td>
+        </tr>`;
+    }).join('');
+
+    return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px; background: #f5f5f5;">
+  <div style="background: #2C5F2D; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+    <h1 style="margin: 0; font-size: 24px;">🌱 Rootflow Hydroponics</h1>
+    <p style="margin: 5px 0 0 0; opacity: 0.9;">Resumen de alertas — ${new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
+  </div>
+  <div style="background: white; padding: 30px; border-radius: 0 0 8px 8px;">
+    <p style="color: #1F2937; font-size: 16px; margin: 0 0 20px 0;">
+      Hay <strong>${alertasList.length} alertas pendientes</strong> en el ERP que requieren atención:
+    </p>
+    <table style="width: 100%; border-collapse: collapse;">
+      ${filasAlertas}
+    </table>
+    <hr style="border: none; border-top: 1px solid #E5E7EB; margin: 20px 0;">
+    <p style="color: #9CA3AF; font-size: 12px; margin: 0;">
+      Email enviado desde el ERP de Rootflow.<br>
+      <a href="https://rootflow.es" style="color: #F97316;">Acceder al ERP</a>
+    </p>
+  </div>
+</body>
+</html>`;
+  };
+
   // CRUD
   const handleSave = async (table, form, id = null) => {
     try {
@@ -2895,8 +3046,79 @@ const MainApp = () => {
       initialForm,
       !cliente
     );
+
+    // Contactos adicionales del cliente
+    const contactosExistentes = cliente ? clienteContactos.filter(c => c.cliente_id === cliente.id) : [];
+    const [contactosAdicionales, setContactosAdicionales] = useState(
+      contactosExistentes.map(c => ({
+        id: c.id,
+        nombre: c.nombre || '',
+        cargo: c.cargo || '',
+        email: c.email || '',
+        telefono: c.telefono || '',
+        notas: c.notas || '',
+        _existe: true,
+      }))
+    );
+
+    const addContacto = () => {
+      setContactosAdicionales([...contactosAdicionales, { 
+        nombre: '', cargo: '', email: '', telefono: '', notas: '', _existe: false 
+      }]);
+    };
+
+    const updateContacto = (idx, field, value) => {
+      const newContactos = [...contactosAdicionales];
+      newContactos[idx] = { ...newContactos[idx], [field]: value };
+      setContactosAdicionales(newContactos);
+    };
+
+    const removeContacto = async (idx) => {
+      const contacto = contactosAdicionales[idx];
+      if (contacto._existe && contacto.id) {
+        if (!confirm('¿Eliminar este contacto?')) return;
+        await supabase.from('cliente_contactos').delete().eq('id', contacto.id);
+        refetchClienteContactos();
+      }
+      setContactosAdicionales(contactosAdicionales.filter((_, i) => i !== idx));
+    };
     
-    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleSaveWithClear = async (formData) => { 
+      clearFormStorage();
+      
+      // Guardar el cliente primero (lo hace onSave del padre)
+      const result = await onSave(formData);
+      
+      // Si tenemos contactos adicionales y el cliente se guardó (tenemos id)
+      const clienteId = cliente?.id || result?.id;
+      if (clienteId && contactosAdicionales.length > 0) {
+        for (const c of contactosAdicionales) {
+          // Solo guardar si tiene al menos nombre
+          if (!c.nombre.trim()) continue;
+          
+          if (c._existe && c.id) {
+            await supabase.from('cliente_contactos').update({
+              nombre: c.nombre,
+              cargo: c.cargo,
+              email: c.email,
+              telefono: c.telefono,
+              notas: c.notas,
+            }).eq('id', c.id);
+          } else {
+            await supabase.from('cliente_contactos').insert({
+              cliente_id: clienteId,
+              nombre: c.nombre,
+              cargo: c.cargo,
+              email: c.email,
+              telefono: c.telefono,
+              notas: c.notas,
+            });
+          }
+        }
+        refetchClienteContactos();
+      }
+    };
+    
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     
     return (
@@ -2921,12 +3143,57 @@ const MainApp = () => {
           ]} />
           <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Descuento (%)" type="number" value={form.descuento} onChange={e => setForm({...form, descuento: parseInt(e.target.value) || 0})} />
-          <Input label="Contacto" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} />
-          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
-          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
           <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
           <Input label="Código Postal" value={form.codigo_postal} onChange={e => setForm({...form, codigo_postal: e.target.value})} placeholder="28001" />
           <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
+        </div>
+
+        {/* CONTACTO PRINCIPAL */}
+        <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50">
+          <h3 className="font-semibold text-neutral-700 mb-3 flex items-center gap-2">
+            <Star size={16} className="text-orange-500" /> Contacto Principal
+          </h3>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Nombre" value={form.contacto} onChange={e => setForm({...form, contacto: e.target.value})} placeholder="Nombre del contacto" />
+            <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} />
+            <Input label="Teléfono" className="col-span-2" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} />
+          </div>
+        </div>
+
+        {/* CONTACTOS ADICIONALES */}
+        <div className="border border-blue-200 rounded-xl p-4 bg-blue-50">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-blue-700 flex items-center gap-2">
+              <Users size={16} /> Contactos Adicionales ({contactosAdicionales.length})
+            </h3>
+            <button type="button" onClick={addContacto} className="text-sm text-blue-600 font-semibold flex items-center gap-1 hover:text-blue-800">
+              <Plus size={16} /> Añadir contacto
+            </button>
+          </div>
+          
+          {contactosAdicionales.length === 0 ? (
+            <p className="text-sm text-blue-600 italic">Sin contactos adicionales. Útil para chef, jefe de compras, encargado, etc.</p>
+          ) : (
+            <div className="space-y-3">
+              {contactosAdicionales.map((c, idx) => (
+                <div key={idx} className="bg-white border border-neutral-200 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-neutral-500">Contacto #{idx + 1}</span>
+                    <button type="button" onClick={() => removeContacto(idx)} className="p-1 text-red-500 hover:bg-red-50 rounded">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input label="Nombre" value={c.nombre} onChange={e => updateContacto(idx, 'nombre', e.target.value)} placeholder="Nombre" />
+                    <Input label="Cargo" value={c.cargo} onChange={e => updateContacto(idx, 'cargo', e.target.value)} placeholder="Chef, jefe compras..." />
+                    <Input label="Email" type="email" value={c.email} onChange={e => updateContacto(idx, 'email', e.target.value)} />
+                    <Input label="Teléfono" value={c.telefono} onChange={e => updateContacto(idx, 'telefono', e.target.value)} />
+                    <Input label="Notas" className="col-span-2" value={c.notas} onChange={e => updateContacto(idx, 'notas', e.target.value)} placeholder="Disponibilidad, preferencias..." />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         
         {/* Recargo de Equivalencia */}
@@ -4304,6 +4571,187 @@ const MainApp = () => {
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{turno ? 'Guardar' : 'Asignar Turno'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== EMAIL CONFIG FORM ====================
+  const EmailConfigForm = ({ config, onSave, onCancel, enviarEmailTest, getEmailsSociosActivos }) => {
+    const [form, setForm] = useState({
+      activo: config.activo || false,
+      remitente: config.remitente || 'Rootflow <noreply@rootflow.es>',
+      destinatariosDefault: config.destinatariosDefault || '',
+      enviarSoloCriticas: config.enviarSoloCriticas || false,
+    });
+    const [testStatus, setTestStatus] = useState(null);
+
+    const probarEmail = async () => {
+      setTestStatus('enviando');
+      const emails = getEmailsSociosActivos();
+      const destinatariosTest = form.destinatariosDefault 
+        ? form.destinatariosDefault.split(',').map(e => e.trim()).filter(Boolean)
+        : emails;
+      
+      if (destinatariosTest.length === 0) {
+        setTestStatus({ success: false, message: 'No hay destinatarios. Configura emails en los socios o en destinatarios por defecto.' });
+        return;
+      }
+
+      // Guardar config temporal para que enviarEmail lo use
+      const configTemporal = { ...form, activo: true };
+      localStorage.setItem('rootflow_email_config', JSON.stringify(configTemporal));
+
+      const result = await enviarEmailTest({
+        to: destinatariosTest,
+        subject: '🌱 Rootflow ERP - Email de prueba',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 20px auto; padding: 20px; background: #f5f5f5;">
+            <div style="background: #2C5F2D; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+              <h2 style="margin: 0;">✅ Sistema de emails funciona</h2>
+            </div>
+            <div style="background: white; padding: 20px; border-radius: 0 0 8px 8px;">
+              <p>Si recibes este email es que el sistema de notificaciones está correctamente configurado.</p>
+              <p>A partir de ahora recibirás las alertas del ERP automáticamente.</p>
+              <p style="color: #6B7280; font-size: 12px; margin-top: 20px;">
+                Enviado el ${new Date().toLocaleString('es-ES')}
+              </p>
+            </div>
+          </div>
+        `,
+      });
+
+      if (result.success) {
+        setTestStatus({ success: true, message: `Email enviado a: ${destinatariosTest.join(', ')}` });
+      } else {
+        setTestStatus({ success: false, message: result.error });
+      }
+    };
+
+    const sociosConEmail = getEmailsSociosActivos();
+
+    return (
+      <div className="space-y-4">
+        {/* Estado del sistema */}
+        <div className={`p-4 rounded-xl border ${form.activo ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={form.activo} 
+              onChange={e => setForm({...form, activo: e.target.checked})} 
+              className="w-5 h-5 rounded" 
+            />
+            <div>
+              <span className={`font-bold ${form.activo ? 'text-green-800' : 'text-amber-800'}`}>
+                {form.activo ? '✅ Sistema de emails ACTIVO' : '⚠️ Sistema de emails DESACTIVADO'}
+              </span>
+              <p className={`text-xs ${form.activo ? 'text-green-700' : 'text-amber-700'}`}>
+                Activa esta opción cuando hayas desplegado la Edge Function en Supabase
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {/* Instrucciones de configuración */}
+        <details className="border border-blue-200 rounded-xl bg-blue-50">
+          <summary className="p-3 cursor-pointer font-semibold text-blue-900">
+            📋 Pasos para configurar el envío de emails (clic para expandir)
+          </summary>
+          <div className="p-4 pt-0 text-sm text-blue-900 space-y-3">
+            <div>
+              <strong>1. Crear cuenta en Resend</strong>
+              <p className="text-blue-700">Ir a <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="underline">resend.com</a> y registrarse (gratis hasta 3.000 emails/mes)</p>
+            </div>
+            <div>
+              <strong>2. Verificar el dominio rootflow.es</strong>
+              <p className="text-blue-700">En Resend → Domains → Add Domain → Añadir registros DNS (SPF, DKIM)</p>
+            </div>
+            <div>
+              <strong>3. Generar API Key</strong>
+              <p className="text-blue-700">En Resend → API Keys → Create → Copiar el valor (empieza por "re_")</p>
+            </div>
+            <div>
+              <strong>4. Añadir secret en Supabase</strong>
+              <p className="text-blue-700">Supabase → Project Settings → Edge Functions → Add Secret:<br/>
+              <code className="bg-white px-2 py-1 rounded text-xs">RESEND_API_KEY=re_xxxxx</code></p>
+            </div>
+            <div>
+              <strong>5. Desplegar Edge Function</strong>
+              <p className="text-blue-700">Sigue las instrucciones del archivo <code className="bg-white px-1 rounded">SUPABASE-EDGE-FUNCTION-EMAIL.md</code> que se descarga junto con el ERP</p>
+            </div>
+            <div>
+              <strong>6. Activar este sistema</strong>
+              <p className="text-blue-700">Marcar "Sistema de emails ACTIVO" arriba y probar con el botón "Enviar email de prueba"</p>
+            </div>
+          </div>
+        </details>
+
+        {/* Configuración */}
+        <div className="space-y-3">
+          <Input 
+            label="Remitente" 
+            value={form.remitente} 
+            onChange={e => setForm({...form, remitente: e.target.value})} 
+            placeholder="Rootflow <noreply@rootflow.es>"
+          />
+          <p className="text-xs text-neutral-500 -mt-2">Formato: "Nombre &lt;email@dominio.com&gt;". El dominio debe estar verificado en Resend.</p>
+          
+          <Input 
+            label="Destinatarios por defecto (opcional)" 
+            value={form.destinatariosDefault} 
+            onChange={e => setForm({...form, destinatariosDefault: e.target.value})} 
+            placeholder="email1@ejemplo.com, email2@ejemplo.com"
+          />
+          <p className="text-xs text-neutral-500 -mt-2">Si está vacío, se enviará a los emails de los socios activos con notificaciones.</p>
+          
+          <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={form.enviarSoloCriticas} 
+                onChange={e => setForm({...form, enviarSoloCriticas: e.target.checked})} 
+                className="w-4 h-4 rounded" 
+              />
+              <span className="text-sm font-medium">Enviar solo alertas críticas</span>
+            </label>
+            <p className="text-xs text-neutral-500 ml-6 mt-1">
+              Recomendado para evitar saturación de email. Solo se enviarán pedidos atrasados, stock 0, etc.
+            </p>
+          </div>
+        </div>
+
+        {/* Socios con email */}
+        <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+          <p className="text-sm font-semibold text-neutral-700 mb-2">📧 Destinatarios actuales:</p>
+          {sociosConEmail.length === 0 ? (
+            <p className="text-sm text-amber-600">⚠️ No hay socios con email configurado. Añade emails a los socios desde Calendario → Turnos → Socio.</p>
+          ) : (
+            <ul className="text-sm text-neutral-600 space-y-0.5">
+              {sociosConEmail.map(e => <li key={e}>• {e}</li>)}
+            </ul>
+          )}
+        </div>
+
+        {/* Botón probar */}
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <Button 
+            onClick={probarEmail} 
+            disabled={testStatus === 'enviando'}
+            className="w-full"
+            variant="secondary"
+          >
+            <Mail size={16} /> {testStatus === 'enviando' ? 'Enviando...' : 'Enviar email de prueba'}
+          </Button>
+          {testStatus && testStatus !== 'enviando' && (
+            <div className={`mt-2 p-2 rounded text-xs ${testStatus.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              {testStatus.success ? '✅ ' : '❌ '}{testStatus.message}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onSave(form)}>Guardar Configuración</Button>
         </div>
       </div>
     );
@@ -11601,10 +12049,71 @@ Firma repartidor: _________________
                           <h3 className={`font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Alertas</h3>
                           {alertasCriticas > 0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full font-bold">{alertasCriticas} críticas</span>}
                         </div>
-                        <button onClick={() => setShowAlertasPanel(false)} className={`p-2 rounded-lg ${darkMode ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-neutral-100 text-neutral-500'}`}>
-                          <X size={20} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => { setShowAlertasPanel(false); setShowModal('emailConfig'); }} 
+                            className={`p-2 rounded-lg ${darkMode ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-neutral-100 text-neutral-500'}`}
+                            title="Configurar emails"
+                          >
+                            <Settings size={18} />
+                          </button>
+                          <button onClick={() => setShowAlertasPanel(false)} className={`p-2 rounded-lg ${darkMode ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-neutral-100 text-neutral-500'}`}>
+                            <X size={20} />
+                          </button>
+                        </div>
                       </div>
+                      
+                      {/* Botón notificar a todos */}
+                      {alertas.length > 0 && (
+                        <div className={`p-3 border-b ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-blue-50'} flex-shrink-0`}>
+                          {!emailConfig.activo ? (
+                            <div className="flex items-center gap-2 text-xs">
+                              <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
+                              <span className={darkMode ? 'text-neutral-300' : 'text-neutral-700'}>
+                                Sistema email desactivado. 
+                                <button onClick={() => { setShowAlertasPanel(false); setShowModal('emailConfig'); }} className="text-orange-600 font-semibold ml-1 hover:underline">
+                                  Configurar
+                                </button>
+                              </span>
+                            </div>
+                          ) : (
+                            <Button 
+                              size="sm" 
+                              className="w-full"
+                              onClick={async () => {
+                                const emails = getEmailsSociosActivos();
+                                if (emails.length === 0) {
+                                  alert('⚠️ No hay socios con email configurado y notificaciones activas.');
+                                  return;
+                                }
+                                const alertasFiltradas = emailConfig.enviarSoloCriticas 
+                                  ? alertas.filter(a => a.prioridad === 'critica')
+                                  : alertas;
+                                if (alertasFiltradas.length === 0) {
+                                  alert('No hay alertas que enviar (filtro: solo críticas).');
+                                  return;
+                                }
+                                if (!confirm(`¿Enviar resumen de ${alertasFiltradas.length} alertas a ${emails.length} socio(s)?`)) return;
+                                
+                                const result = await enviarEmail({
+                                  to: emails,
+                                  subject: `🚨 Rootflow ERP - ${alertasFiltradas.length} alertas pendientes`,
+                                  html: generarHtmlResumen(alertasFiltradas),
+                                });
+                                
+                                if (result.success) {
+                                  alert(`✅ Email enviado a ${emails.length} socio(s)`);
+                                } else {
+                                  alert(`❌ Error: ${result.error}`);
+                                }
+                              }}
+                            >
+                              <Mail size={14} /> Notificar a socios por email
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      
                       <div className="flex-1 overflow-y-auto">
                         {alertas.length === 0 ? (
                           <div className="p-8 text-center">
@@ -11614,29 +12123,59 @@ Firma repartidor: _________________
                           </div>
                         ) : (
                           alertas.map(alerta => (
-                            <button
+                            <div
                               key={alerta.id}
-                              onClick={() => { alerta.accion(); setShowAlertasPanel(false); }}
                               className={`w-full p-3 flex items-start gap-3 border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} transition-colors text-left`}
                             >
-                              <div className={`p-2 rounded-lg ${alerta.color} text-white flex-shrink-0`}>
-                                <alerta.icono size={16} />
+                              <button onClick={() => { alerta.accion(); setShowAlertasPanel(false); }} className="flex items-start gap-3 flex-1 min-w-0 text-left">
+                                <div className={`p-2 rounded-lg ${alerta.color} text-white flex-shrink-0`}>
+                                  <alerta.icono size={16} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className={`font-semibold text-sm ${darkMode ? 'text-white' : 'text-neutral-900'} ${alerta.prioridad === 'critica' ? 'text-red-500' : ''}`}>
+                                    {alerta.titulo}
+                                  </p>
+                                  <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'} truncate`}>{alerta.mensaje}</p>
+                                </div>
+                              </button>
+                              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                                  alerta.prioridad === 'critica' ? 'bg-red-100 text-red-700' :
+                                  alerta.prioridad === 'alta' ? 'bg-amber-100 text-amber-700' :
+                                  alerta.prioridad === 'media' ? 'bg-blue-100 text-blue-700' :
+                                  'bg-neutral-100 text-neutral-600'
+                                }`}>
+                                  {alerta.prioridad}
+                                </span>
+                                {emailConfig.activo && (
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      const emails = getEmailsSociosActivos();
+                                      if (emails.length === 0) {
+                                        alert('⚠️ No hay socios con email configurado.');
+                                        return;
+                                      }
+                                      const result = await enviarEmail({
+                                        to: emails,
+                                        subject: `🌱 ${alerta.titulo}`,
+                                        html: generarHtmlAlerta(alerta),
+                                        alertaId: alerta.id,
+                                      });
+                                      if (result.success) {
+                                        alert(`✅ Enviado a ${emails.length} socio(s)`);
+                                      } else {
+                                        alert(`❌ ${result.error}`);
+                                      }
+                                    }}
+                                    className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                                    title="Enviar por email"
+                                  >
+                                    <Mail size={12} />
+                                  </button>
+                                )}
                               </div>
-                              <div className="flex-1 min-w-0">
-                                <p className={`font-semibold text-sm ${darkMode ? 'text-white' : 'text-neutral-900'} ${alerta.prioridad === 'critica' ? 'text-red-500' : ''}`}>
-                                  {alerta.titulo}
-                                </p>
-                                <p className={`text-xs ${darkMode ? 'text-neutral-400' : 'text-neutral-500'} truncate`}>{alerta.mensaje}</p>
-                              </div>
-                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
-                                alerta.prioridad === 'critica' ? 'bg-red-100 text-red-700' :
-                                alerta.prioridad === 'alta' ? 'bg-amber-100 text-amber-700' :
-                                alerta.prioridad === 'media' ? 'bg-blue-100 text-blue-700' :
-                                'bg-neutral-100 text-neutral-600'
-                              }`}>
-                                {alerta.prioridad}
-                              </span>
-                            </button>
+                            </div>
                           ))
                         )}
                       </div>
@@ -11793,6 +12332,15 @@ Firma repartidor: _________________
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido_recurrente' && <Modal title="Nuevo Pedido Recurrente" onClose={() => setShowModal(null)} size="max-w-2xl"><PedidoRecurrenteForm onSave={() => setShowModal(null)} onCancel={() => setShowModal(null)} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'emailConfig' && <Modal title="Configurar Sistema de Emails" onClose={() => setShowModal(null)} size="max-w-2xl">
+        <EmailConfigForm 
+          config={emailConfig} 
+          onSave={(c) => { guardarEmailConfig(c); setShowModal(null); }} 
+          onCancel={() => setShowModal(null)}
+          enviarEmailTest={enviarEmail}
+          getEmailsSociosActivos={getEmailsSociosActivos}
+        />
+      </Modal>}
     </div>
   );
 };
