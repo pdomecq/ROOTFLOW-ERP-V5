@@ -743,6 +743,7 @@ const MainApp = () => {
   
   // Calendario - mes actual
   const [mesCalendario, setMesCalendario] = useState(new Date());
+  const [calendarioTab, setCalendarioTab] = useState('eventos'); // 'eventos' | 'turnos'
   
   // Rutas - fecha seleccionada
   const [fechaRuta, setFechaRuta] = useState(new Date().toISOString().split('T')[0]);
@@ -1555,6 +1556,9 @@ const MainApp = () => {
   const { data: muestrasData, refetch: refetchMuestras } = useRealtime('muestras');
   const { data: muestraItemsData, refetch: refetchMuestraItems } = useRealtime('muestra_items');
   const { data: recetasData, refetch: refetchRecetas } = useRealtime('recetas_produccion');
+  // V17 - Sistema de turnos
+  const { data: sociosData, refetch: refetchSocios } = useRealtime('socios');
+  const { data: turnosData, refetch: refetchTurnos } = useRealtime('turnos');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1603,6 +1607,9 @@ const MainApp = () => {
   const muestras = muestrasData || [];
   const muestraItems = muestraItemsData || [];
   const recetas = recetasData || [];
+  // V17 - Turnos
+  const socios = sociosData || [];
+  const turnos = turnosData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2990,7 +2997,7 @@ const MainApp = () => {
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
-          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[{ value: 'picantes', label: 'Picantes' }, { value: 'dulces', label: 'Dulces' }, { value: 'coloridos', label: 'Coloridos' }, { value: 'nutritivos', label: 'Nutritivos' }, { value: 'aromaticos', label: 'Aromáticos' }, { value: 'mix', label: 'Mix' }]} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[{ value: 'picantes', label: 'Picantes' }, { value: 'dulces', label: 'Dulces' }, { value: 'coloridos', label: 'Coloridos' }, { value: 'nutritivos', label: 'Nutritivos' }, { value: 'aromaticos', label: 'Aromáticos' }, { value: 'ornamental', label: 'Ornamental' }, { value: 'mix', label: 'Mix' }]} />
           <Input label="Unidad" value={form.unidad} onChange={e => setForm({...form, unidad: e.target.value})} />
           <Input label="Precio (€)" type="number" step="0.5" value={form.precio} onChange={e => setForm({...form, precio: parseFloat(e.target.value) || 0})} />
           <Input label="Coste (€)" type="number" step="0.5" value={form.coste} onChange={e => setForm({...form, coste: parseFloat(e.target.value) || 0})} />
@@ -4042,6 +4049,261 @@ const MainApp = () => {
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}><Gift size={16} /> Programar Muestra</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== SOCIO FORM ====================
+  const SocioForm = ({ socio, onSave, onCancel }) => {
+    const coloresSocios = [
+      { value: '#F97316', label: '🟠 Naranja' },
+      { value: '#3B82F6', label: '🔵 Azul' },
+      { value: '#10B981', label: '🟢 Verde' },
+      { value: '#8B5CF6', label: '🟣 Morado' },
+      { value: '#EC4899', label: '🔴 Rosa' },
+      { value: '#F59E0B', label: '🟡 Ámbar' },
+    ];
+
+    const initialForm = {
+      nombre: socio?.nombre || '',
+      email: socio?.email || '',
+      telefono: socio?.telefono || '',
+      rol: socio?.rol || 'socio',
+      color: socio?.color || '#F97316',
+      activo: socio?.activo !== false,
+      notificaciones_email: socio?.notificaciones_email !== false,
+    };
+
+    const [form, setForm, clearFormStorage] = useFormPersistence(`socio_${socio?.id || 'new'}`, initialForm, !socio);
+
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre completo" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Ej: Pedro Domecq" />
+          <Select label="Rol" value={form.rol} onChange={e => setForm({...form, rol: e.target.value})} options={[
+            { value: 'socio', label: 'Socio fundador' },
+            { value: 'colaborador', label: 'Colaborador' },
+            { value: 'externo', label: 'Externo' },
+          ]} />
+          <Input label="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} placeholder="email@rootflow.es" />
+          <Input label="Teléfono" value={form.telefono} onChange={e => setForm({...form, telefono: e.target.value})} placeholder="+34 600 000 000" />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Color identificador</label>
+          <div className="flex gap-2 flex-wrap">
+            {coloresSocios.map(c => (
+              <button
+                key={c.value}
+                type="button"
+                onClick={() => setForm({...form, color: c.value})}
+                className={`w-10 h-10 rounded-full border-2 transition-all ${form.color === c.value ? 'border-neutral-900 scale-110' : 'border-neutral-200'}`}
+                style={{backgroundColor: c.value}}
+                title={c.label}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-2 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.activo} onChange={e => setForm({...form, activo: e.target.checked})} className="w-4 h-4 rounded" />
+            <span className="text-sm font-medium">Socio activo</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.notificaciones_email} onChange={e => setForm({...form, notificaciones_email: e.target.checked})} className="w-4 h-4 rounded" />
+            <span className="text-sm font-medium">Recibir notificaciones por email</span>
+          </label>
+          <p className="text-xs text-blue-700">📧 Las alertas de turnos se enviarán al email configurado</p>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{socio ? 'Guardar' : 'Crear Socio'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== TURNO FORM ====================
+  const TurnoForm = ({ turno, fechaInicial, onSave, onCancel }) => {
+    const tiposTurno = [
+      { value: 'riego', label: '💧 Riego' },
+      { value: 'cosecha', label: '🌱 Cosecha' },
+      { value: 'empaquetado', label: '📦 Empaquetado' },
+      { value: 'siembra', label: '🌰 Siembra' },
+      { value: 'reparto', label: '🚚 Reparto' },
+      { value: 'limpieza', label: '🧹 Limpieza' },
+      { value: 'otros', label: '📌 Otros' },
+    ];
+
+    const sociosActivos = socios.filter(s => s.activo !== false);
+
+    const initialForm = {
+      socio_id: turno?.socio_id || (sociosActivos.length > 0 ? sociosActivos[0].id : null),
+      tipo: turno?.tipo || 'riego',
+      fecha: turno?.fecha || fechaInicial || new Date().toISOString().split('T')[0],
+      hora: turno?.hora || '09:00',
+      duracion_minutos: turno?.duracion_minutos || 60,
+      notas: turno?.notas || '',
+      completado: turno?.completado || false,
+      enviar_alerta: turno?.enviar_alerta !== false,
+    };
+
+    const [form, setForm, clearFormStorage] = useFormPersistence(`turno_${turno?.id || 'new'}`, initialForm, !turno);
+    const [crearRecurrente, setCrearRecurrente] = useState(false);
+    const [recurrencia, setRecurrencia] = useState({
+      frecuencia: 'semanal', // semanal, diaria
+      diasSemana: [], // 0=lunes ... 6=domingo
+      hastaFecha: '',
+    });
+
+    const handleSaveWithClear = async (formData) => {
+      clearFormStorage();
+      
+      // Si es recurrente y nuevo, crear varios turnos
+      if (!turno && crearRecurrente && recurrencia.hastaFecha) {
+        const turnosACrear = [];
+        const fechaInicio = new Date(formData.fecha);
+        const fechaFin = new Date(recurrencia.hastaFecha);
+        let fechaActual = new Date(fechaInicio);
+        
+        while (fechaActual <= fechaFin) {
+          const diaSemana = fechaActual.getDay() === 0 ? 6 : fechaActual.getDay() - 1;
+          if (recurrencia.frecuencia === 'diaria' || recurrencia.diasSemana.includes(diaSemana)) {
+            turnosACrear.push({
+              ...formData,
+              fecha: fechaActual.toISOString().split('T')[0],
+            });
+          }
+          fechaActual.setDate(fechaActual.getDate() + 1);
+        }
+        
+        if (turnosACrear.length === 0) {
+          alert('⚠️ No se generaron turnos. Verifica los días de la semana seleccionados.');
+          return;
+        }
+        
+        if (!confirm(`Se crearán ${turnosACrear.length} turnos. ¿Continuar?`)) return;
+        
+        try {
+          await supabase.from('turnos').insert(turnosACrear);
+          refetchTurnos();
+          alert(`✅ ${turnosACrear.length} turnos creados`);
+          onSave(formData);
+        } catch (e) {
+          alert('❌ Error: ' + e.message);
+        }
+      } else {
+        onSave(formData);
+      }
+    };
+
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    const toggleDiaSemana = (dia) => {
+      const newDias = recurrencia.diasSemana.includes(dia)
+        ? recurrencia.diasSemana.filter(d => d !== dia)
+        : [...recurrencia.diasSemana, dia];
+      setRecurrencia({...recurrencia, diasSemana: newDias});
+    };
+
+    if (sociosActivos.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <Users size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay socios activos</h3>
+          <p className="text-neutral-500 mb-4">Crea al menos un socio antes de asignar turnos.</p>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Select label="Socio" value={form.socio_id} onChange={e => setForm({...form, socio_id: parseInt(e.target.value)})} options={sociosActivos.map(s => ({ value: s.id, label: s.nombre }))} />
+          <Select label="Tipo de tarea" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={tiposTurno} />
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Input label="Hora" type="time" value={form.hora} onChange={e => setForm({...form, hora: e.target.value})} />
+          <Input label="Duración (minutos)" type="number" value={form.duracion_minutos} onChange={e => setForm({...form, duracion_minutos: parseInt(e.target.value) || 60})} min="15" step="15" />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea 
+            value={form.notas} 
+            onChange={e => setForm({...form, notas: e.target.value})} 
+            className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
+            rows={2} 
+            placeholder="Detalles adicionales del turno..."
+          />
+        </div>
+
+        <div className="space-y-2 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.enviar_alerta} onChange={e => setForm({...form, enviar_alerta: e.target.checked})} className="w-4 h-4 rounded" />
+            <span className="text-sm font-medium">📧 Enviar alerta por email al socio asignado</span>
+          </label>
+          {turno && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.completado} onChange={e => setForm({...form, completado: e.target.checked})} className="w-4 h-4 rounded" />
+              <span className="text-sm font-medium">✅ Turno completado</span>
+            </label>
+          )}
+        </div>
+
+        {/* Crear recurrente (solo en nuevos turnos) */}
+        {!turno && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={crearRecurrente} onChange={e => setCrearRecurrente(e.target.checked)} className="w-4 h-4 rounded" />
+              <span className="text-sm font-medium text-amber-900">🔁 Crear turnos recurrentes (rotación semanal)</span>
+            </label>
+            
+            {crearRecurrente && (
+              <div className="space-y-3 pl-6">
+                <Select 
+                  label="Frecuencia" 
+                  value={recurrencia.frecuencia} 
+                  onChange={e => setRecurrencia({...recurrencia, frecuencia: e.target.value})} 
+                  options={[
+                    { value: 'semanal', label: 'Semanal (días específicos)' },
+                    { value: 'diaria', label: 'Diaria (todos los días)' },
+                  ]} 
+                />
+                
+                {recurrencia.frecuencia === 'semanal' && (
+                  <div>
+                    <label className="block text-sm font-semibold text-neutral-700 mb-2">Días de la semana</label>
+                    <div className="flex gap-1 flex-wrap">
+                      {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((d, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => toggleDiaSemana(i)}
+                          className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${recurrencia.diasSemana.includes(i) ? 'bg-orange-500 text-white' : 'bg-white border border-neutral-300 text-neutral-700'}`}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                <Input label="Hasta fecha" type="date" value={recurrencia.hastaFecha} onChange={e => setRecurrencia({...recurrencia, hastaFecha: e.target.value})} />
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{turno ? 'Guardar' : 'Asignar Turno'}</Button>
         </div>
       </div>
     );
@@ -6785,6 +7047,7 @@ const MainApp = () => {
     
     const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
     const cosechasDia = (dia) => lotes.filter(l => l.fecha_cosecha_prevista && l.fecha_cosecha_prevista === fechaStr(dia) && l.estado !== 'cosechado');
+    const turnosDia = (dia) => turnos.filter(t => t.fecha === fechaStr(dia));
     
     const cambiarMes = (delta) => setMesCalendario(new Date(mesActual.getFullYear(), mesActual.getMonth() + delta, 1));
     
@@ -6806,126 +7069,375 @@ const MainApp = () => {
       } catch { return false; }
     });
 
+    // Estadísticas de turnos por socio (mes actual)
+    const turnosMes = turnos.filter(t => {
+      if (!t.fecha) return false;
+      const fecha = new Date(t.fecha);
+      return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear();
+    });
+
+    const estadisticasSocios = socios.map(s => ({
+      ...s,
+      turnos: turnosMes.filter(t => t.socio_id === s.id).length,
+      completados: turnosMes.filter(t => t.socio_id === s.id && t.completado).length,
+    }));
+
+    // Tipos de turno disponibles
+    const tiposTurno = {
+      riego: { label: 'Riego', color: 'bg-blue-100 text-blue-700 border-blue-300', icon: '💧' },
+      cosecha: { label: 'Cosecha', color: 'bg-green-100 text-green-700 border-green-300', icon: '🌱' },
+      empaquetado: { label: 'Empaquetado', color: 'bg-amber-100 text-amber-700 border-amber-300', icon: '📦' },
+      siembra: { label: 'Siembra', color: 'bg-purple-100 text-purple-700 border-purple-300', icon: '🌰' },
+      reparto: { label: 'Reparto', color: 'bg-orange-100 text-orange-700 border-orange-300', icon: '🚚' },
+      limpieza: { label: 'Limpieza', color: 'bg-cyan-100 text-cyan-700 border-cyan-300', icon: '🧹' },
+      otros: { label: 'Otros', color: 'bg-neutral-100 text-neutral-700 border-neutral-300', icon: '📌' },
+    };
+
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-3xl font-black text-neutral-900">Calendario</h1>
-            <p className="text-neutral-500 font-medium">Entregas y cosechas programadas</p>
+            <p className="text-neutral-500 font-medium">
+              {calendarioTab === 'eventos' ? 'Entregas y cosechas programadas' : 'Turnos y reparto de tareas entre socios'}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            {calendarioTab === 'turnos' && (
+              <>
+                <Button variant="secondary" onClick={() => { setEditingItem(null); setShowModal('socio'); }}>
+                  <UserPlus size={16} /> Socio
+                </Button>
+                <Button onClick={() => { setEditingItem(null); setShowModal('turno'); }}>
+                  <Plus size={16} /> Asignar Turno
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard icon={Truck} label="Entregas este mes" value={entregasMes.length} color="bg-blue-100 text-blue-600" />
-          <StatCard icon={Leaf} label="Cosechas este mes" value={cosechasMes.length} color="bg-green-100 text-green-600" />
-          <StatCard icon={AlertCircle} label="Próximos 3 días" value={
-            pedidos.filter(p => {
-              const fecha = new Date(p.fecha_entrega);
-              const diff = (fecha - new Date()) / (1000*60*60*24);
-              return diff >= 0 && diff <= 3 && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
-            }).length
-          } color="bg-amber-100 text-amber-600" />
+        {/* Pestañas */}
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setCalendarioTab('eventos')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors ${calendarioTab === 'eventos' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Calendar size={18} className="inline mr-2" />Eventos
+          </button>
+          <button 
+            onClick={() => setCalendarioTab('turnos')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${calendarioTab === 'turnos' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Users size={18} />Turnos Socios
+            {turnosMes.filter(t => !t.completado && new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0))).length > 0 && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${calendarioTab === 'turnos' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
+                {turnosMes.filter(t => !t.completado && new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0))).length}
+              </span>
+            )}
+          </button>
         </div>
 
-        <Card className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
-            <h2 className="text-xl font-bold text-neutral-900">
-              {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
-            </h2>
-            <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowUpRight size={20} /></button>
-          </div>
-          
-          <div className="grid grid-cols-7 gap-1 mb-2">
-            {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
-              <div key={d} className="text-center text-sm font-bold text-neutral-500 py-2">{d}</div>
-            ))}
-          </div>
-          
-          <div className="grid grid-cols-7 gap-1">
-            {diasCalendario.map((dia, idx) => {
-              if (!dia) return <div key={idx} className="h-24 bg-neutral-50 rounded-lg" />;
+        {calendarioTab === 'eventos' ? (
+          /* === VISTA EVENTOS === */
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <StatCard icon={Truck} label="Entregas este mes" value={entregasMes.length} color="bg-blue-100 text-blue-600" />
+              <StatCard icon={Leaf} label="Cosechas este mes" value={cosechasMes.length} color="bg-green-100 text-green-600" />
+              <StatCard icon={AlertCircle} label="Próximos 3 días" value={
+                pedidos.filter(p => {
+                  const fecha = new Date(p.fecha_entrega);
+                  const diff = (fecha - new Date()) / (1000*60*60*24);
+                  return diff >= 0 && diff <= 3 && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+                }).length
+              } color="bg-amber-100 text-amber-600" />
+            </div>
+
+            <Card className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
+                <h2 className="text-xl font-bold text-neutral-900">
+                  {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                </h2>
+                <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowUpRight size={20} /></button>
+              </div>
               
-              const entregas = entregasDia(dia);
-              const cosechas = cosechasDia(dia);
-              const esHoy = fechaStr(dia) === hoy;
+              <div className="grid grid-cols-7 gap-1 mb-2">
+                {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+                  <div key={d} className="text-center text-sm font-bold text-neutral-500 py-2">{d}</div>
+                ))}
+              </div>
               
-              return (
-                <div key={idx} className={`h-24 p-2 rounded-lg border ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}>
-                  <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
-                  <div className="mt-1 space-y-1">
-                    {entregas.slice(0, 2).map(p => (
-                      <div key={p.id} className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded truncate">
-                        🚚 {clientes.find(c => c.id === p.cliente_id)?.nombre?.split(' ')[0]}
+              <div className="grid grid-cols-7 gap-1">
+                {diasCalendario.map((dia, idx) => {
+                  if (!dia) return <div key={idx} className="h-24 bg-neutral-50 rounded-lg" />;
+                  
+                  const entregas = entregasDia(dia);
+                  const cosechas = cosechasDia(dia);
+                  const esHoy = fechaStr(dia) === hoy;
+                  
+                  return (
+                    <div key={idx} className={`h-24 p-2 rounded-lg border ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}>
+                      <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
+                      <div className="mt-1 space-y-1">
+                        {entregas.slice(0, 2).map(p => (
+                          <div key={p.id} className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded truncate">
+                            🚚 {clientes.find(c => c.id === p.cliente_id)?.nombre?.split(' ')[0]}
+                          </div>
+                        ))}
+                        {cosechas.slice(0, 2).map(l => (
+                          <div key={l.id} className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded truncate">
+                            🌱 {productos.find(p => p.id === l.producto_id)?.nombre}
+                          </div>
+                        ))}
+                        {(entregas.length + cosechas.length > 2) && (
+                          <p className="text-[10px] text-neutral-400">+{entregas.length + cosechas.length - 2} más</p>
+                        )}
                       </div>
-                    ))}
-                    {cosechas.slice(0, 2).map(l => (
-                      <div key={l.id} className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded truncate">
-                        🌱 {productos.find(p => p.id === l.producto_id)?.nombre}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="p-5">
+                <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Truck size={20} className="text-blue-500" /> Próximas Entregas</h3>
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
+                    .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
+                    .slice(0, 8)
+                    .map(p => {
+                      const cliente = clientes.find(c => c.id === p.cliente_id);
+                      return (
+                        <div key={p.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                          <div>
+                            <p className="font-semibold text-neutral-900">{cliente?.nombre}</p>
+                            <p className="text-sm text-neutral-500">{formatDate(p.fecha_entrega)} • {formatCurrency(p.total)}</p>
+                          </div>
+                          <Badge className={estadoConfig[p.estado]?.color}>{estadoConfig[p.estado]?.label}</Badge>
+                        </div>
+                      );
+                    })}
+                  {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length === 0 && (
+                    <p className="text-neutral-400 text-center py-4">No hay entregas pendientes</p>
+                  )}
+                </div>
+              </Card>
+
+              <Card className="p-5">
+                <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Leaf size={20} className="text-green-500" /> Próximas Cosechas</h3>
+                <div className="space-y-3 max-h-64 overflow-y-auto">
+                  {lotes.filter(l => l.estado !== 'cosechado')
+                    .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
+                    .slice(0, 8)
+                    .map(l => {
+                      const producto = productos.find(p => p.id === l.producto_id);
+                      const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+                      return (
+                        <div key={l.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
+                          <div>
+                            <p className="font-semibold text-neutral-900">{producto?.nombre}</p>
+                            <p className="text-sm text-neutral-500">{formatDate(l.fecha_cosecha_prevista)} • {l.bandejas} bandejas</p>
+                          </div>
+                          <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : dias <= 2 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}>
+                            {dias <= 0 ? '¡Hoy!' : `En ${dias}d`}
+                          </Badge>
+                        </div>
+                      );
+                    })}
+                  {lotes.filter(l => l.estado !== 'cosechado').length === 0 && (
+                    <p className="text-neutral-400 text-center py-4">No hay lotes pendientes</p>
+                  )}
+                </div>
+              </Card>
+            </div>
+          </>
+        ) : (
+          /* === VISTA TURNOS === */
+          <>
+            {socios.length === 0 ? (
+              <Card className="p-8 text-center">
+                <Users size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay socios registrados</h3>
+                <p className="text-sm text-neutral-500 mb-4">Crea los socios primero para poder asignar turnos</p>
+                <Button onClick={() => setShowModal('socio')}><UserPlus size={18} />Añadir Socio</Button>
+              </Card>
+            ) : (
+              <>
+                {/* Stats por socio */}
+                <div className={`grid grid-cols-1 md:grid-cols-${Math.min(socios.length, 4)} gap-4`}>
+                  {estadisticasSocios.map(s => (
+                    <Card key={s.id} className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg" style={{backgroundColor: s.color || '#F97316'}}>
+                          {s.nombre.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-bold text-neutral-900">{s.nombre}</p>
+                          <p className="text-xs text-neutral-500">{s.email || 'Sin email'}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xs font-bold text-orange-600">{s.turnos} turnos</span>
+                            <span className="text-xs text-neutral-400">•</span>
+                            <span className="text-xs text-green-600">{s.completados} completados</span>
+                          </div>
+                        </div>
                       </div>
+                    </Card>
+                  ))}
+                </div>
+
+                {/* Calendario de turnos */}
+                <Card className="p-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
+                    <h2 className="text-xl font-bold text-neutral-900">
+                      {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                    </h2>
+                    <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowUpRight size={20} /></button>
+                  </div>
+                  
+                  <div className="grid grid-cols-7 gap-1 mb-2">
+                    {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+                      <div key={d} className="text-center text-sm font-bold text-neutral-500 py-2">{d}</div>
                     ))}
-                    {(entregas.length + cosechas.length > 2) && (
-                      <p className="text-[10px] text-neutral-400">+{entregas.length + cosechas.length - 2} más</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-7 gap-1">
+                    {diasCalendario.map((dia, idx) => {
+                      if (!dia) return <div key={idx} className="h-32 bg-neutral-50 rounded-lg" />;
+                      
+                      const turnosDelDia = turnosDia(dia);
+                      const esHoy = fechaStr(dia) === hoy;
+                      
+                      return (
+                        <div 
+                          key={idx} 
+                          onClick={() => { setEditingItem({ fecha: fechaStr(dia) }); setShowModal('turno'); }}
+                          className={`h-32 p-2 rounded-lg border cursor-pointer hover:border-orange-300 transition-colors ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}
+                        >
+                          <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
+                          <div className="mt-1 space-y-0.5">
+                            {turnosDelDia.slice(0, 3).map(t => {
+                              const socio = socios.find(s => s.id === t.socio_id);
+                              const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                              return (
+                                <div 
+                                  key={t.id} 
+                                  className={`text-[10px] px-1.5 py-0.5 rounded truncate flex items-center gap-1 border ${tipo.color} ${t.completado ? 'line-through opacity-60' : ''}`}
+                                  style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
+                                >
+                                  <span>{tipo.icon}</span>
+                                  <span className="truncate font-medium">{socio?.nombre?.split(' ')[0]}</span>
+                                </div>
+                              );
+                            })}
+                            {turnosDelDia.length > 3 && (
+                              <p className="text-[10px] text-neutral-400">+{turnosDelDia.length - 3} más</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+
+                {/* Lista próximos turnos */}
+                <Card className="p-5">
+                  <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><CalendarClock size={20} className="text-orange-500" /> Próximos Turnos</h3>
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {turnos
+                      .filter(t => new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && !t.completado)
+                      .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
+                      .slice(0, 15)
+                      .map(t => {
+                        const socio = socios.find(s => s.id === t.socio_id);
+                        const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                        const esHoyTurno = t.fecha === hoy;
+                        return (
+                          <div key={t.id} className={`flex items-center justify-between p-3 rounded-xl border ${esHoyTurno ? 'bg-orange-50 border-orange-300' : 'bg-neutral-50 border-neutral-200'}`}>
+                            <div className="flex items-center gap-3 flex-1">
+                              <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor: socio?.color || '#F97316'}}>
+                                {socio?.nombre?.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-semibold text-neutral-900">{socio?.nombre}</span>
+                                  <Badge className={tipo.color}>{tipo.icon} {tipo.label}</Badge>
+                                  {esHoyTurno && <Badge className="bg-red-500 text-white">¡HOY!</Badge>}
+                                </div>
+                                <p className="text-sm text-neutral-500">
+                                  {formatDate(t.fecha)}
+                                  {t.hora && ` • ${t.hora}`}
+                                  {t.notas && ` • ${t.notas}`}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex gap-1">
+                              <button 
+                                onClick={async () => {
+                                  await supabase.from('turnos').update({ completado: !t.completado }).eq('id', t.id);
+                                  refetchTurnos();
+                                }} 
+                                className="p-2 text-green-500 hover:bg-green-50 rounded-lg"
+                                title="Marcar completado"
+                              >
+                                <CheckCircle size={16} />
+                              </button>
+                              <button onClick={() => { setEditingItem(t); setShowModal('turno'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg">
+                                <Edit2 size={16} />
+                              </button>
+                              <button onClick={() => handleDelete('turnos', t.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {turnos.filter(t => new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && !t.completado).length === 0 && (
+                      <p className="text-neutral-400 text-center py-4">No hay turnos próximos asignados</p>
                     )}
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+                </Card>
+              </>
+            )}
+          </>
+        )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="p-5">
-            <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Truck size={20} className="text-blue-500" /> Próximas Entregas</h3>
-            <div className="space-y-3 max-h-64 overflow-y-auto">
-              {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
-                .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
-                .slice(0, 8)
-                .map(p => {
-                  const cliente = clientes.find(c => c.id === p.cliente_id);
-                  return (
-                    <div key={p.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
-                      <div>
-                        <p className="font-semibold text-neutral-900">{cliente?.nombre}</p>
-                        <p className="text-sm text-neutral-500">{formatDate(p.fecha_entrega)} • {formatCurrency(p.total)}</p>
-                      </div>
-                      <Badge className={estadoConfig[p.estado]?.color}>{estadoConfig[p.estado]?.label}</Badge>
-                    </div>
-                  );
-                })}
-              {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length === 0 && (
-                <p className="text-neutral-400 text-center py-4">No hay entregas pendientes</p>
-              )}
-            </div>
-          </Card>
+        {/* Modal Socio */}
+        {showModal === 'socio' && (
+          <Modal title={editingItem ? 'Editar Socio' : 'Nuevo Socio'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
+            <SocioForm socio={editingItem} onSave={async (form) => {
+              try {
+                if (editingItem?.id) {
+                  await supabase.from('socios').update(form).eq('id', editingItem.id);
+                } else {
+                  await supabase.from('socios').insert(form);
+                }
+                refetchSocios();
+                setShowModal(null);
+                setEditingItem(null);
+              } catch (e) { alert('❌ Error: ' + e.message); }
+            }} onCancel={() => { setShowModal(null); setEditingItem(null); }} />
+          </Modal>
+        )}
 
-          <Card className="p-5">
-            <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Leaf size={20} className="text-green-500" /> Próximas Cosechas</h3>
-            <div className="space-y-3 max-h-64 overflow-y-auto">
-              {lotes.filter(l => l.estado !== 'cosechado')
-                .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
-                .slice(0, 8)
-                .map(l => {
-                  const producto = productos.find(p => p.id === l.producto_id);
-                  const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
-                  return (
-                    <div key={l.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-xl">
-                      <div>
-                        <p className="font-semibold text-neutral-900">{producto?.nombre}</p>
-                        <p className="text-sm text-neutral-500">{formatDate(l.fecha_cosecha_prevista)} • {l.bandejas} bandejas</p>
-                      </div>
-                      <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : dias <= 2 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}>
-                        {dias <= 0 ? '¡Hoy!' : `En ${dias}d`}
-                      </Badge>
-                    </div>
-                  );
-                })}
-              {lotes.filter(l => l.estado !== 'cosechado').length === 0 && (
-                <p className="text-neutral-400 text-center py-4">No hay lotes pendientes</p>
-              )}
-            </div>
-          </Card>
-        </div>
+        {/* Modal Turno */}
+        {showModal === 'turno' && (
+          <Modal title={editingItem?.id ? 'Editar Turno' : 'Asignar Turno'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
+            <TurnoForm turno={editingItem?.id ? editingItem : null} fechaInicial={editingItem?.fecha} onSave={async (form) => {
+              try {
+                if (editingItem?.id) {
+                  await supabase.from('turnos').update(form).eq('id', editingItem.id);
+                } else {
+                  await supabase.from('turnos').insert(form);
+                }
+                refetchTurnos();
+                setShowModal(null);
+                setEditingItem(null);
+              } catch (e) { alert('❌ Error: ' + e.message); }
+            }} onCancel={() => { setShowModal(null); setEditingItem(null); }} />
+          </Modal>
+        )}
       </div>
     );
   };
