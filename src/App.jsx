@@ -2813,6 +2813,84 @@ const MainApp = () => {
   };
 
   const handleDelete = async (table, id) => {
+    // Manejo especial para clientes: verificar relaciones
+    if (table === 'clientes') {
+      // Contar relaciones
+      const pedidosCliente = pedidos.filter(p => p.cliente_id === id).length;
+      const facturasCliente = facturas.filter(f => f.cliente_id === id).length;
+      const presupuestosCliente = presupuestos.filter(p => p.cliente_id === id).length;
+      const tarifasCliente = (tarifasClienteData || []).filter(t => t.cliente_id === id).length;
+      const contactosCliente = (clienteContactosData || []).filter(c => c.cliente_id === id).length;
+      
+      const totalRelaciones = pedidosCliente + facturasCliente + presupuestosCliente + tarifasCliente + contactosCliente;
+      
+      if (totalRelaciones > 0) {
+        const detalles = [];
+        if (pedidosCliente > 0) detalles.push(`${pedidosCliente} pedido(s)`);
+        if (facturasCliente > 0) detalles.push(`${facturasCliente} factura(s)`);
+        if (presupuestosCliente > 0) detalles.push(`${presupuestosCliente} presupuesto(s)`);
+        if (tarifasCliente > 0) detalles.push(`${tarifasCliente} tarifa(s) personalizada(s)`);
+        if (contactosCliente > 0) detalles.push(`${contactosCliente} contacto(s) adicional(es)`);
+        
+        const confirmar = window.confirm(
+          `⚠️ Este cliente tiene asociado:\n\n• ${detalles.join('\n• ')}\n\n¿Eliminar el cliente Y TODOS estos elementos relacionados? Esta acción NO se puede deshacer.`
+        );
+        
+        if (!confirmar) return;
+        
+        try {
+          // Borrar relaciones primero
+          if (contactosCliente > 0) await supabase.from('cliente_contactos').delete().eq('cliente_id', id);
+          if (tarifasCliente > 0) await supabase.from('tarifas_cliente').delete().eq('cliente_id', id);
+          
+          // Para presupuestos, borrar items primero
+          if (presupuestosCliente > 0) {
+            const idsPresupuestos = presupuestos.filter(p => p.cliente_id === id).map(p => p.id);
+            if (idsPresupuestos.length > 0) {
+              await supabase.from('presupuesto_items').delete().in('presupuesto_id', idsPresupuestos);
+              await supabase.from('presupuestos').delete().eq('cliente_id', id);
+            }
+          }
+          
+          // Para pedidos, borrar items primero
+          if (pedidosCliente > 0) {
+            const idsPedidos = pedidos.filter(p => p.cliente_id === id).map(p => p.id);
+            if (idsPedidos.length > 0) {
+              await supabase.from('pedido_items').delete().in('pedido_id', idsPedidos);
+              await supabase.from('pedidos').delete().eq('cliente_id', id);
+            }
+          }
+          
+          // Facturas
+          if (facturasCliente > 0) await supabase.from('facturas').delete().eq('cliente_id', id);
+          
+          // Finalmente borrar el cliente
+          const { data: datosAnteriores } = await supabase.from('clientes').select('*').eq('id', id).single();
+          const { error } = await supabase.from('clientes').delete().eq('id', id);
+          
+          if (error) {
+            alert('❌ Error al eliminar cliente: ' + error.message);
+            return;
+          }
+          
+          await registrarAuditoria('ELIMINAR', 'clientes', id, datosAnteriores, null, `Cliente eliminado con ${totalRelaciones} relaciones`);
+          
+          refetchClientes();
+          refetchPedidos();
+          refetchFacturas();
+          if (refetchPresupuestos) refetchPresupuestos();
+          if (refetchTarifasCliente) refetchTarifasCliente();
+          if (refetchClienteContactos) refetchClienteContactos();
+          
+          alert(`✅ Cliente eliminado junto con ${totalRelaciones} elementos relacionados`);
+        } catch (e) {
+          alert('❌ Error: ' + (e.message || String(e)));
+        }
+        return;
+      }
+      // Si no tiene relaciones, sigue con el flujo normal
+    }
+    
     if (window.confirm('¿Eliminar este elemento?')) {
       // Guardar datos antes de eliminar para auditoría
       const { data: datosAnteriores } = await supabase.from(table).select('*').eq('id', id).single();
@@ -2840,6 +2918,8 @@ const MainApp = () => {
       else if (table === 'muestras') { refetchMuestras(); refetchMuestraItems(); }
       else if (table === 'pagos_proveedor') refetchPagosProveedor();
       else if (table === 'recetas_produccion') refetchRecetas();
+      else if (table === 'turnos') refetchTurnos();
+      else if (table === 'socios') refetchSocios();
     }
   };
 
@@ -4758,15 +4838,35 @@ const MainApp = () => {
   };
 
   // ==================== PEDIDO RECURRENTE FORM ====================
-  const PedidoRecurrenteForm = ({ onSave, onCancel }) => {
-    const [form, setForm] = useState({
-      nombre: '',
-      cliente_id: clientes.length > 0 ? clientes[0].id : '',
-      frecuencia: 'semanal',
-      dia_semana: 1,
-      notas: ''
-    });
-    const [items, setItems] = useState([{ producto_id: productos.length > 0 ? productos[0].id : '', cantidad: 1 }]);
+  const PedidoRecurrenteForm = ({ pedidoRecurrente, onSave, onCancel }) => {
+    const esEdicion = !!pedidoRecurrente;
+    
+    // Cargar items existentes si estamos editando
+    const itemsExistentes = pedidoRecurrente
+      ? (pedidosRecurrentesItemsData || [])
+          .filter(i => i.pedido_recurrente_id === pedidoRecurrente.id)
+          .map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }))
+      : [];
+    
+    const initialForm = {
+      nombre: pedidoRecurrente?.nombre || '',
+      cliente_id: pedidoRecurrente?.cliente_id || (clientes.length > 0 ? clientes[0].id : ''),
+      frecuencia: pedidoRecurrente?.frecuencia || 'semanal',
+      dia_semana: pedidoRecurrente?.dia_semana ?? 1,
+      notas: pedidoRecurrente?.notas || '',
+      items: itemsExistentes.length > 0 
+        ? itemsExistentes 
+        : [{ producto_id: productos.length > 0 ? productos[0].id : '', cantidad: 1 }],
+    };
+
+    const [form, setForm, clearFormStorage] = useFormPersistence(
+      `pedido_recurrente_${pedidoRecurrente?.id || 'new'}`,
+      initialForm,
+      !esEdicion
+    );
+
+    const handleSaveWithClear = (formData) => { clearFormStorage(); /* el onSave llamará a la función externa */ };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
 
     const diasSemana = [
       { value: 1, label: 'Lunes' },
@@ -4784,26 +4884,38 @@ const MainApp = () => {
       { value: 'mensual', label: 'Mensual (cada mes)' }
     ];
 
+    // Funciones tipo PedidoForm: addItem, removeItem, updateItem
     const addItem = () => {
-      setItems([...items, { producto_id: productos.length > 0 ? productos[0].id : '', cantidad: 1 }]);
+      setForm({...form, items: [...form.items, { producto_id: productos[0]?.id || '', cantidad: 1 }]});
     };
-
-    const removeItem = (index) => {
-      if (items.length > 1) {
-        setItems(items.filter((_, i) => i !== index));
+    const removeItem = (idx) => {
+      if (form.items.length > 1) {
+        setForm({...form, items: form.items.filter((_, i) => i !== idx)});
       }
     };
-
-    const updateItem = (index, field, value) => {
-      const newItems = [...items];
-      newItems[index][field] = value;
-      setItems(newItems);
+    const updateItem = (idx, field, value) => {
+      const newItems = [...form.items];
+      newItems[idx] = {...newItems[idx], [field]: value};
+      setForm({...form, items: newItems});
     };
 
-    const totalEstimado = items.reduce((sum, item) => {
-      const prod = productos.find(p => p.id === parseInt(item.producto_id));
-      return sum + ((prod?.precio || 0) * item.cantidad);
+    // Cliente seleccionado para mostrar info
+    const clienteSel = clientes.find(c => c.id === parseInt(form.cliente_id) || c.id === form.cliente_id);
+
+    // Calcular totales (igual que PedidoForm)
+    const subtotal = form.items.reduce((sum, item) => {
+      const prod = productos.find(p => p.id === parseInt(item.producto_id) || p.id === item.producto_id);
+      const precio = clienteSel ? getPrecioCliente(item.producto_id, clienteSel.id) : (prod?.precio || 0);
+      return sum + (precio * item.cantidad);
     }, 0);
+    
+    const descuentoCliente = clienteSel?.descuento || 0;
+    const descuentoAplicado = subtotal * (descuentoCliente / 100);
+    const baseImponible = subtotal - descuentoAplicado;
+    const ivaImporte = baseImponible * (IVA_VENTAS / 100);
+    const aplicaRE = clienteSel?.recargo_equivalencia || false;
+    const reImporte = aplicaRE ? baseImponible * (RE_VENTAS / 100) : 0;
+    const total = baseImponible + ivaImporte + reImporte;
 
     const handleSubmit = async () => {
       if (!form.nombre.trim()) {
@@ -4814,42 +4926,66 @@ const MainApp = () => {
         alert('Por favor selecciona un cliente');
         return;
       }
-      if (items.length === 0 || items.some(i => !i.producto_id)) {
-        alert('Por favor añade al menos un producto');
+      const itemsValidos = form.items.filter(i => i.producto_id);
+      if (itemsValidos.length === 0) {
+        alert('Por favor añade al menos un producto válido');
         return;
       }
 
-      // Crear pedido recurrente
-      const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
-        ...form,
-        dia_semana: parseInt(form.dia_semana),
-        activo: true
-      }).select().single();
+      try {
+        const dataPR = {
+          nombre: form.nombre,
+          cliente_id: parseInt(form.cliente_id) || form.cliente_id,
+          frecuencia: form.frecuencia,
+          dia_semana: parseInt(form.dia_semana),
+          notas: form.notas || '',
+        };
 
-      if (error) {
-        alert('Error al crear: ' + error.message);
-        return;
+        let prId = pedidoRecurrente?.id;
+
+        if (esEdicion) {
+          // Actualizar
+          const { error } = await supabase.from('pedidos_recurrentes').update(dataPR).eq('id', prId);
+          if (error) throw error;
+          // Eliminar items anteriores
+          await supabase.from('pedidos_recurrentes_items').delete().eq('pedido_recurrente_id', prId);
+        } else {
+          // Insertar nuevo
+          const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
+            ...dataPR,
+            activo: true,
+          }).select().single();
+          if (error) throw error;
+          prId = pr.id;
+        }
+
+        // Insertar items (uno a uno con manejo de errores)
+        for (const item of itemsValidos) {
+          const { error } = await supabase.from('pedidos_recurrentes_items').insert({
+            pedido_recurrente_id: prId,
+            producto_id: parseInt(item.producto_id) || item.producto_id,
+            cantidad: parseInt(item.cantidad) || 1,
+          });
+          if (error) console.error('Error item:', error);
+        }
+
+        clearFormStorage();
+        refetchPedidosRecurrentes();
+        refetchPedidosRecurrentesItems();
+        alert(`✅ Pedido recurrente ${esEdicion ? 'actualizado' : 'creado'} correctamente`);
+        onSave();
+      } catch (error) {
+        console.error('Error:', error);
+        alert('❌ Error: ' + error.message);
       }
-
-      // Insertar items
-      for (const item of items) {
-        await supabase.from('pedidos_recurrentes_items').insert({
-          pedido_recurrente_id: pr.id,
-          producto_id: parseInt(item.producto_id),
-          cantidad: item.cantidad
-        });
-      }
-
-      refetchPedidosRecurrentes();
-      refetchPedidosRecurrentesItems();
-      onSave();
     };
 
     return (
       <div className="space-y-4">
+        {/* Datos del recurrente */}
         <div className="grid grid-cols-2 gap-4">
           <Input 
-            label="Nombre del pedido" 
+            label="Nombre del pedido recurrente" 
             className="col-span-2" 
             value={form.nombre} 
             onChange={e => setForm({...form, nombre: e.target.value})} 
@@ -4876,54 +5012,79 @@ const MainApp = () => {
           />
         </div>
 
-        <div className="border-t pt-4">
-          <div className="flex items-center justify-between mb-3">
+        {/* Productos - misma UI que PedidoForm */}
+        <div>
+          <div className="flex justify-between mb-2">
             <label className="text-sm font-semibold text-neutral-700">Productos</label>
-            <button onClick={addItem} className="text-sm text-orange-500 hover:text-orange-600 font-semibold flex items-center gap-1">
-              <Plus size={16} /> Añadir producto
+            <button type="button" onClick={addItem} className="text-sm text-orange-600 font-semibold flex items-center gap-1">
+              <Plus size={16} /> Añadir
             </button>
           </div>
-          
-          <div className="space-y-2 max-h-48 overflow-y-auto">
-            {items.map((item, index) => (
-              <div key={index} className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg">
-                <select 
-                  value={item.producto_id} 
-                  onChange={e => updateItem(index, 'producto_id', e.target.value)}
-                  className="flex-1 px-3 py-2 rounded-lg border text-sm"
-                >
-                  {productos.map(p => (
-                    <option key={p.id} value={p.id}>{p.nombre} - {formatCurrency(p.precio)}</option>
-                  ))}
-                </select>
-                <input 
-                  type="number" 
-                  min="1" 
-                  value={item.cantidad} 
-                  onChange={e => updateItem(index, 'cantidad', parseInt(e.target.value) || 1)}
-                  className="w-20 px-3 py-2 rounded-lg border text-sm text-center"
-                />
-                <button 
-                  onClick={() => removeItem(index)}
-                  className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
+          <div className="space-y-2 bg-neutral-50 rounded-xl p-3 border">
+            {form.items.map((item, idx) => {
+              const prod = productos.find(p => p.id === parseInt(item.producto_id) || p.id === item.producto_id);
+              const precio = clienteSel ? getPrecioCliente(item.producto_id, clienteSel.id) : (prod?.precio || 0);
+              const itemSubtotal = precio * item.cantidad;
+              return (
+                <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                  <select 
+                    value={item.producto_id} 
+                    onChange={e => updateItem(idx, 'producto_id', e.target.value)} 
+                    className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                  >
+                    {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
+                  </select>
+                  <input 
+                    type="number" 
+                    value={item.cantidad} 
+                    onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 1)} 
+                    className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
+                    min="1" 
+                  />
+                  <span className="text-xs text-neutral-500 w-24 text-right">
+                    {formatCurrency(precio)} = <strong>{formatCurrency(itemSubtotal)}</strong>
+                  </span>
+                  {form.items.length > 1 && (
+                    <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="p-4 bg-orange-50 rounded-xl border border-orange-200">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-neutral-700">Total estimado por pedido:</span>
-            <span className="text-2xl font-black text-orange-600">{formatCurrency(totalEstimado)}</span>
-          </div>
+        {/* Notas */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea 
+            value={form.notas} 
+            onChange={e => setForm({...form, notas: e.target.value})} 
+            className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
+            rows={2} 
+            placeholder="Observaciones, condiciones especiales..."
+          />
         </div>
+
+        {/* Resumen totales (igual que PedidoForm) */}
+        <Card className="p-4 bg-orange-50 border-orange-200 space-y-1">
+          <div className="flex justify-between text-sm"><span className="text-neutral-600">Subtotal:</span><span className="font-semibold">{formatCurrency(subtotal)}</span></div>
+          {descuentoCliente > 0 && <div className="flex justify-between text-sm text-green-700"><span>Descuento ({descuentoCliente}%):</span><span>-{formatCurrency(descuentoAplicado)}</span></div>}
+          <div className="flex justify-between text-sm"><span className="text-neutral-600">Base imponible:</span><span className="font-semibold">{formatCurrency(baseImponible)}</span></div>
+          <div className="flex justify-between text-sm"><span className="text-neutral-600">IVA ({IVA_VENTAS}%):</span><span>{formatCurrency(ivaImporte)}</span></div>
+          {aplicaRE && <div className="flex justify-between text-sm text-amber-700"><span>Recargo equivalencia ({RE_VENTAS}%):</span><span>{formatCurrency(reImporte)}</span></div>}
+          <div className="flex justify-between text-lg pt-2 border-t border-orange-200">
+            <span className="font-bold">Total estimado por pedido:</span>
+            <span className="font-black text-orange-600">{formatCurrency(total)}</span>
+          </div>
+        </Card>
 
         <div className="flex justify-end gap-3 pt-4 border-t">
-          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
-          <Button onClick={handleSubmit}><Repeat size={18} /> Crear Recurrente</Button>
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={handleSubmit}>
+            <Repeat size={18} /> {esEdicion ? 'Guardar cambios' : 'Crear Recurrente'}
+          </Button>
         </div>
       </div>
     );
@@ -5677,6 +5838,13 @@ const MainApp = () => {
                               title="Ejecutar ahora"
                             >
                               <Zap size={18} />
+                            </button>
+                            <button 
+                              onClick={() => { setEditingItem(pr); setShowModal('pedido_recurrente'); }} 
+                              className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg"
+                              title="Editar"
+                            >
+                              <Edit2 size={18} />
                             </button>
                             <button 
                               onClick={() => eliminarPedidoRecurrente(pr.id)} 
@@ -7493,7 +7661,7 @@ const MainApp = () => {
     
     const fechaStr = (dia) => `${mesActual.getFullYear()}-${String(mesActual.getMonth() + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
     
-    const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+    const entregasDia = (dia) => pedidos.filter(p => p.fecha_entrega && p.fecha_entrega === fechaStr(dia) && ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado));
     const cosechasDia = (dia) => lotes.filter(l => l.fecha_cosecha_prevista && l.fecha_cosecha_prevista === fechaStr(dia) && l.estado !== 'cosechado');
     const turnosDia = (dia) => turnos.filter(t => t.fecha === fechaStr(dia));
     
@@ -7501,12 +7669,15 @@ const MainApp = () => {
     
     const hoy = new Date().toISOString().split('T')[0];
 
+    // Estados activos (no cancelados ni entregados)
+    const estadosActivos = ['pendiente', 'confirmado', 'preparando', 'enviado'];
+    
     // Resumen del mes (con verificación de fechas válidas)
     const entregasMes = pedidos.filter(p => {
       if (!p.fecha_entrega) return false;
       try {
         const fecha = new Date(p.fecha_entrega);
-        return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+        return fecha.getMonth() === mesActual.getMonth() && fecha.getFullYear() === mesActual.getFullYear() && estadosActivos.includes(p.estado);
       } catch { return false; }
     });
     const cosechasMes = lotes.filter(l => {
@@ -7595,7 +7766,7 @@ const MainApp = () => {
                 pedidos.filter(p => {
                   const fecha = new Date(p.fecha_entrega);
                   const diff = (fecha - new Date()) / (1000*60*60*24);
-                  return diff >= 0 && diff <= 3 && ['pendiente', 'confirmado', 'preparando'].includes(p.estado);
+                  return diff >= 0 && diff <= 3 && estadosActivos.includes(p.estado);
                 }).length
               } color="bg-amber-100 text-amber-600" />
             </div>
@@ -7651,7 +7822,7 @@ const MainApp = () => {
               <Card className="p-5">
                 <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Truck size={20} className="text-blue-500" /> Próximas Entregas</h3>
                 <div className="space-y-3 max-h-64 overflow-y-auto">
-                  {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
+                  {pedidos.filter(p => p.fecha_entrega && new Date(p.fecha_entrega) >= new Date(new Date().setHours(0,0,0,0)) && estadosActivos.includes(p.estado))
                     .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
                     .slice(0, 8)
                     .map(p => {
@@ -7666,7 +7837,7 @@ const MainApp = () => {
                         </div>
                       );
                     })}
-                  {pedidos.filter(p => new Date(p.fecha_entrega) >= new Date() && ['pendiente', 'confirmado', 'preparando'].includes(p.estado)).length === 0 && (
+                  {pedidos.filter(p => p.fecha_entrega && new Date(p.fecha_entrega) >= new Date(new Date().setHours(0,0,0,0)) && estadosActivos.includes(p.estado)).length === 0 && (
                     <p className="text-neutral-400 text-center py-4">No hay entregas pendientes</p>
                   )}
                 </div>
@@ -11663,29 +11834,73 @@ Firma repartidor: _________________
 
     const crearMuestra = async (form) => {
       try {
-        const { data: nuevaMuestra, error } = await supabase.from('muestras').insert({
+        // Validaciones previas
+        if (!form.nombre_contacto || !form.nombre_contacto.trim()) {
+          alert('❌ El nombre del contacto es obligatorio');
+          return;
+        }
+        if (!form.fecha_entrega) {
+          alert('❌ La fecha de entrega es obligatoria');
+          return;
+        }
+        if (!form.items || form.items.length === 0) {
+          alert('❌ Debes añadir al menos un producto');
+          return;
+        }
+        // Filtrar items inválidos (sin producto_id)
+        const itemsValidos = form.items.filter(i => i.producto_id);
+        if (itemsValidos.length === 0) {
+          alert('❌ Debes seleccionar productos válidos');
+          return;
+        }
+
+        const muestraData = {
           lead_id: form.lead_id || null,
-          nombre_contacto: form.nombre_contacto,
-          empresa: form.empresa,
-          telefono: form.telefono,
-          email: form.email,
-          direccion: form.direccion,
+          nombre_contacto: form.nombre_contacto.trim(),
+          empresa: form.empresa || '',
+          telefono: form.telefono || '',
+          email: form.email || '',
+          direccion: form.direccion || '',
           fecha_entrega: form.fecha_entrega,
           fecha_siguiente: form.fecha_siguiente || null,
           estado: 'pendiente',
           notas: form.notas || '',
           tipo_negocio: form.tipo_negocio || 'restaurante',
-        }).select().single();
+        };
 
-        if (error) throw error;
+        const { data: nuevaMuestra, error } = await supabase
+          .from('muestras')
+          .insert(muestraData)
+          .select()
+          .single();
+
+        if (error) {
+          // Detectar errores comunes y dar mensajes claros
+          if (error.message?.includes('does not exist') || error.code === '42P01') {
+            alert('❌ La tabla "muestras" no existe en la base de datos.\n\nEjecuta el SQL ROOTFLOW-SQL-V17.sql en Supabase.');
+          } else if (error.message?.includes('column')) {
+            alert('❌ Error de columna en BD: ' + error.message + '\n\nProbablemente falta ejecutar SQL.');
+          } else {
+            alert('❌ Error al crear muestra: ' + error.message);
+          }
+          console.error('Error muestra:', error);
+          return;
+        }
 
         // Insertar items de muestra
-        for (const item of form.items) {
-          await supabase.from('muestra_items').insert({
-            muestra_id: nuevaMuestra.id,
-            producto_id: item.producto_id,
-            cantidad: item.cantidad,
-          });
+        const itemsInsert = itemsValidos.map(item => ({
+          muestra_id: nuevaMuestra.id,
+          producto_id: item.producto_id,
+          cantidad: item.cantidad || 1,
+        }));
+
+        const { error: itemsError } = await supabase
+          .from('muestra_items')
+          .insert(itemsInsert);
+
+        if (itemsError) {
+          alert('⚠️ Muestra creada pero error en items: ' + itemsError.message);
+          console.error('Error items:', itemsError);
         }
 
         refetchMuestras();
@@ -11693,8 +11908,8 @@ Firma repartidor: _________________
         setShowModal(null);
         alert('✅ Muestra programada correctamente');
       } catch (error) {
-        console.error('Error:', error);
-        alert('❌ Error: ' + error.message);
+        console.error('Error general:', error);
+        alert('❌ Error: ' + (error.message || String(error)));
       }
     };
 
@@ -12330,7 +12545,7 @@ Firma repartidor: _________________
       {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}><TareaForm tarea={editingItem} onSave={form => handleSave('tareas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
-      {showModal === 'pedido_recurrente' && <Modal title="Nuevo Pedido Recurrente" onClose={() => setShowModal(null)} size="max-w-2xl"><PedidoRecurrenteForm onSave={() => setShowModal(null)} onCancel={() => setShowModal(null)} /></Modal>}
+      {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'emailConfig' && <Modal title="Configurar Sistema de Emails" onClose={() => setShowModal(null)} size="max-w-2xl">
         <EmailConfigForm 
