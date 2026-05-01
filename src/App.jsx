@@ -744,6 +744,9 @@ const MainApp = () => {
   // Calendario - mes actual
   const [mesCalendario, setMesCalendario] = useState(new Date());
   const [calendarioTab, setCalendarioTab] = useState('eventos'); // 'eventos' | 'turnos'
+  // V22 - Productos por variedad
+  const [productosViewMode, setProductosViewMode] = useState('variedades'); // 'variedades' | 'tabla'
+  const [variedadesExpandidas, setVariedadesExpandidas] = useState([]);
   
   // Rutas - fecha seleccionada
   const [fechaRuta, setFechaRuta] = useState(new Date().toISOString().split('T')[0]);
@@ -1561,6 +1564,8 @@ const MainApp = () => {
   const { data: turnosData, refetch: refetchTurnos } = useRealtime('turnos');
   // V18 - Múltiples contactos por cliente
   const { data: clienteContactosData, refetch: refetchClienteContactos } = useRealtime('cliente_contactos');
+  // V22 - Variedades de productos
+  const { data: variedadesData, refetch: refetchVariedades } = useRealtime('variedades');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1614,6 +1619,8 @@ const MainApp = () => {
   const turnos = turnosData || [];
   // V18 - Contactos múltiples
   const clienteContactos = clienteContactosData || [];
+  // V22 - Variedades
+  const variedades = variedadesData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -3336,24 +3343,170 @@ const MainApp = () => {
   };
 
   const ProductoForm = ({ producto, onSave, onCancel }) => {
-    const initialForm = producto || { nombre: '', categoria: 'nutritivos', precio: 0, coste: 0, stock: 0, stock_minimo: 20, unidad: 'bandeja 100g', dias_crecimiento: 7 };
+    const initialForm = producto || { 
+      nombre: '', 
+      categoria: 'nutritivos', 
+      precio: 0, 
+      coste: 0, 
+      stock: 0, 
+      stock_minimo: 20, 
+      unidad: 'bandeja', 
+      dias_crecimiento: 7,
+      variedad_id: variedades.length > 0 ? variedades[0].id : null,
+      formato_gramos: 100,
+      estado_inventario: 'empaquetado',
+    };
     const [form, setForm, clearFormStorage] = useFormPersistence(`producto_${producto?.id || 'new'}`, initialForm, !producto);
+    const handleSaveWithClear = (formData) => { 
+      // Auto-generar nombre si tenemos variedad y formato
+      if (!formData.nombre && formData.variedad_id) {
+        const v = variedades.find(x => x.id === formData.variedad_id);
+        if (v) {
+          formData = { ...formData, nombre: formData.formato_gramos ? `${v.nombre} ${formData.formato_gramos}g` : v.nombre };
+        }
+      }
+      clearFormStorage(); 
+      onSave(formData); 
+    };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    // Calcular €/kg
+    const precioKg = (form.precio && form.formato_gramos) 
+      ? (form.precio / form.formato_gramos) * 1000 
+      : null;
+
+    return (
+      <div className="space-y-4">
+        {/* Variedad y estado */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Variedad</label>
+            <div className="flex gap-2">
+              <select 
+                value={form.variedad_id || ''} 
+                onChange={e => setForm({...form, variedad_id: parseInt(e.target.value) || null})}
+                className="flex-1 px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+              >
+                <option value="">— Selecciona variedad —</option>
+                {variedades.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(v => (
+                  <option key={v.id} value={v.id}>{v.nombre} ({v.categoria})</option>
+                ))}
+              </select>
+              <button 
+                type="button"
+                onClick={() => { setShowModal('variedad'); setEditingItem(null); }}
+                className="px-3 py-2 bg-green-100 text-green-700 rounded-xl hover:bg-green-200 text-sm font-medium"
+                title="Crear nueva variedad"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {variedades.length === 0 && (
+              <p className="text-xs text-amber-600 mt-1">⚠️ Aún no hay variedades. Crea una primero.</p>
+            )}
+          </div>
+
+          <Select 
+            label="Estado del inventario" 
+            value={form.estado_inventario || 'empaquetado'} 
+            onChange={e => setForm({...form, estado_inventario: e.target.value})} 
+            options={[
+              { value: 'empaquetado', label: '📦 Empaquetado (producto terminado)' },
+              { value: 'listo_sin_empaquetar', label: '🌾 Listo sin empaquetar (granel)' },
+              { value: 'creciendo', label: '🌱 Creciendo (en bandeja)' },
+            ]}
+          />
+
+          {form.estado_inventario === 'empaquetado' && (
+            <Input 
+              label="Formato (gramos)" 
+              type="number" 
+              value={form.formato_gramos || ''} 
+              onChange={e => setForm({...form, formato_gramos: parseInt(e.target.value) || null})} 
+              placeholder="15, 30, 100..."
+            />
+          )}
+        </div>
+
+        {/* Datos generales */}
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre (opcional, se autogenera)" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder={form.variedad_id && form.formato_gramos ? `Auto: ${variedades.find(v=>v.id===form.variedad_id)?.nombre} ${form.formato_gramos}g` : 'Nombre del producto'} />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[{ value: 'picantes', label: 'Picantes' }, { value: 'dulces', label: 'Dulces' }, { value: 'coloridos', label: 'Coloridos' }, { value: 'nutritivos', label: 'Nutritivos' }, { value: 'aromaticos', label: 'Aromáticos' }, { value: 'ornamental', label: 'Ornamental' }, { value: 'mix', label: 'Mix' }]} />
+          <Input label="Unidad" value={form.unidad} onChange={e => setForm({...form, unidad: e.target.value})} placeholder="bandeja, kg, ud..." />
+          <Input label="Precio venta (€)" type="number" step="0.5" value={form.precio} onChange={e => setForm({...form, precio: parseFloat(e.target.value) || 0})} />
+          <Input label="Coste (€)" type="number" step="0.5" value={form.coste} onChange={e => setForm({...form, coste: parseFloat(e.target.value) || 0})} />
+          <Input label="Stock actual" type="number" value={form.stock} onChange={e => setForm({...form, stock: parseInt(e.target.value) || 0})} />
+          <Input label="Stock mínimo" type="number" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: parseInt(e.target.value) || 20})} />
+          <Input label="Días crecimiento" type="number" value={form.dias_crecimiento || 7} onChange={e => setForm({...form, dias_crecimiento: parseInt(e.target.value) || 7})} />
+        </div>
+
+        {/* Cálculo €/kg */}
+        {precioKg && (
+          <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-blue-800">💰 Equivalencia precio/kg:</span>
+              <span className="font-bold text-blue-700">{formatCurrency(precioKg)}/kg</span>
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-neutral-500">💡 Si la variedad tiene configurado g/bandeja, podrás calcular automáticamente las bandejas necesarias en producción.</p>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{producto ? 'Guardar' : 'Crear'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== VARIEDAD FORM ====================
+  const VariedadForm = ({ variedad, onSave, onCancel }) => {
+    const initialForm = variedad || {
+      nombre: '',
+      categoria: 'nutritivos',
+      dias_crecimiento: 10,
+      gramos_por_bandeja: 100,
+      precio_kg_referencia: 0,
+      descripcion: '',
+      notas: '',
+    };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`variedad_${variedad?.id || 'new'}`, initialForm, !variedad);
     const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
-          <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
-          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[{ value: 'picantes', label: 'Picantes' }, { value: 'dulces', label: 'Dulces' }, { value: 'coloridos', label: 'Coloridos' }, { value: 'nutritivos', label: 'Nutritivos' }, { value: 'aromaticos', label: 'Aromáticos' }, { value: 'ornamental', label: 'Ornamental' }, { value: 'mix', label: 'Mix' }]} />
-          <Input label="Unidad" value={form.unidad} onChange={e => setForm({...form, unidad: e.target.value})} />
-          <Input label="Precio (€)" type="number" step="0.5" value={form.precio} onChange={e => setForm({...form, precio: parseFloat(e.target.value) || 0})} />
-          <Input label="Coste (€)" type="number" step="0.5" value={form.coste} onChange={e => setForm({...form, coste: parseFloat(e.target.value) || 0})} />
-          <Input label="Stock" type="number" value={form.stock} onChange={e => setForm({...form, stock: parseInt(e.target.value) || 0})} />
-          <Input label="Stock Mínimo" type="number" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: parseInt(e.target.value) || 20})} />
-          <Input label="Días Crecimiento" type="number" value={form.dias_crecimiento || 7} onChange={e => setForm({...form, dias_crecimiento: parseInt(e.target.value) || 7})} />
+          <Input label="Nombre de la variedad" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Rábano, Mostaza, Guisante, Albahaca..." />
+          <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={[
+            { value: 'picantes', label: '🌶️ Picantes' }, 
+            { value: 'dulces', label: '🍯 Dulces' }, 
+            { value: 'coloridos', label: '🌈 Coloridos' }, 
+            { value: 'nutritivos', label: '💪 Nutritivos' }, 
+            { value: 'aromaticos', label: '🌿 Aromáticos' }, 
+            { value: 'ornamental', label: '🌸 Ornamental' }, 
+            { value: 'mix', label: '🎨 Mix' }
+          ]} />
+          <Input label="Días de crecimiento (ciclo)" type="number" value={form.dias_crecimiento} onChange={e => setForm({...form, dias_crecimiento: parseInt(e.target.value) || 10})} />
+          <Input label="Gramos por bandeja (cosechables)" type="number" value={form.gramos_por_bandeja} onChange={e => setForm({...form, gramos_por_bandeja: parseInt(e.target.value) || 100})} />
+          <Input label="Precio €/kg de referencia" type="number" step="0.01" value={form.precio_kg_referencia} onChange={e => setForm({...form, precio_kg_referencia: parseFloat(e.target.value) || 0})} />
         </div>
-        <p className="text-xs text-neutral-500">💡 Los días de crecimiento se usan para calcular la planificación de siembras</p>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{producto ? 'Guardar' : 'Crear'}</Button></div>
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Descripción</label>
+          <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} placeholder="Características, sabor, uso recomendado..." />
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas internas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} placeholder="Tips de cultivo, semillas usadas, etc." />
+        </div>
+        <p className="text-xs text-neutral-500 p-3 bg-blue-50 rounded-lg">
+          <strong>💡 Gramos por bandeja:</strong> Es lo que se cosecha de UNA bandeja completa de esta variedad. Se usa para calcular cuántas bandejas necesitas plantar para cubrir un pedido (Sesión 3).
+        </p>
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{variedad ? 'Guardar' : 'Crear Variedad'}</Button>
+        </div>
       </div>
     );
   };
@@ -5868,82 +6021,328 @@ const MainApp = () => {
   };
 
   const renderProductos = () => {
-    const categoriaOptions = [...new Set(productos.map(p => p.categoria).filter(Boolean))].map(c => ({ value: c, label: c }));
-    
-    const productosFiltrados = aplicarFiltros(productos, filtrosProductos, {
-      nombre: p => p.nombre,
-      categoria: p => p.categoria,
-      precio: p => p.precio,
-      stock: p => p.stock,
+    // Helper: calcular €/kg desde un producto
+    const calcPrecioKg = (producto) => {
+      if (!producto.precio || !producto.formato_gramos || producto.formato_gramos === 0) return null;
+      return (producto.precio / producto.formato_gramos) * 1000;
+    };
+
+    // Helper: estimar días para volver a stock
+    const estimarDiasStock = (producto) => {
+      if (!producto.variedad_id) return null;
+      
+      // Buscar lotes activos de esa variedad (no cosechados)
+      const lotesActivos = lotes.filter(l => 
+        l.variedad_id === producto.variedad_id && 
+        l.estado !== 'cosechado' && 
+        l.fecha_cosecha_prevista
+      );
+      
+      if (lotesActivos.length === 0) return null;
+      
+      // Encontrar el lote con cosecha más cercana
+      const proximoLote = lotesActivos.sort((a, b) => 
+        new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista)
+      )[0];
+      
+      const dias = Math.ceil((new Date(proximoLote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+      return { dias, fecha: proximoLote.fecha_cosecha_prevista };
+    };
+
+    // Agrupar productos por variedad
+    const productosPorVariedad = {};
+    productos.forEach(p => {
+      const variedadId = p.variedad_id || 'sin_clasificar';
+      if (!productosPorVariedad[variedadId]) {
+        productosPorVariedad[variedadId] = {
+          variedad: p.variedad_id ? variedades.find(v => v.id === p.variedad_id) : null,
+          empaquetado: [],
+          listo_sin_empaquetar: [],
+          creciendo: [],
+        };
+      }
+      const estado = p.estado_inventario || 'empaquetado';
+      if (productosPorVariedad[variedadId][estado]) {
+        productosPorVariedad[variedadId][estado].push(p);
+      } else {
+        productosPorVariedad[variedadId].empaquetado.push(p);
+      }
     });
-    
-    const hayFiltrosActivos = Object.values(filtrosProductos).some(v => v && v !== '');
-    const limpiarFiltros = () => setFiltrosProductos({});
-    
-    const exportColumns = [{ header: 'Nombre', accessor: p => p.nombre },{ header: 'Categoría', accessor: p => p.categoria },{ header: 'Precio', accessor: p => p.precio },{ header: 'Coste', accessor: p => p.coste },{ header: 'Stock', accessor: p => p.stock },{ header: 'Stock Mínimo', accessor: p => p.stock_minimo }];
+
+    // Estadísticas globales
+    const totalVariedades = Object.keys(productosPorVariedad).length;
+    const totalEmpaquetado = productos.filter(p => (p.estado_inventario || 'empaquetado') === 'empaquetado').reduce((s, p) => s + (p.stock || 0), 0);
+    const stockBajo = productos.filter(p => p.stock < (p.stock_minimo || 20)).length;
+
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div><h1 className="text-2xl md:text-3xl font-black text-neutral-900">Productos</h1><p className="text-neutral-500 font-medium text-sm">{productosFiltrados.length} de {productos.length} registros</p></div>
+          <div>
+            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">Productos por Variedad</h1>
+            <p className="text-neutral-500 font-medium text-sm">{totalVariedades} variedades • {productos.length} formatos totales</p>
+          </div>
           <div className="flex items-center gap-2 md:gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(productosFiltrados, 'productos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
-            <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo</span></Button>
+            <Button variant="secondary" size="sm" onClick={() => setProductosViewMode(productosViewMode === 'variedades' ? 'tabla' : 'variedades')}>
+              {productosViewMode === 'variedades' ? <><Table size={16} /><span className="hidden sm:inline">Vista Tabla</span></> : <><LayoutGrid size={16} /><span className="hidden sm:inline">Por Variedad</span></>}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => { setEditingItem(null); setShowModal('variedad'); }}>
+              <Leaf size={16} /><span className="hidden sm:inline">Nueva Variedad</span>
+            </Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}>
+              <Plus size={18} /><span className="hidden sm:inline">Nuevo Formato</span>
+            </Button>
           </div>
         </div>
-        <Card className="overflow-hidden">
-          {hayFiltrosActivos && (
-            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
-              <span className="text-sm text-orange-700">🔍 Filtros activos - {productosFiltrados.length} resultados</span>
-              <button onClick={limpiarFiltros} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
-            </div>
-          )}
-          {selectedProductos.length > 0 && (
-            <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
-              <span className="font-semibold text-blue-700">{selectedProductos.length} producto(s) seleccionado(s)</span>
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setSelectedProductos([])}>Deseleccionar</Button>
-                <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('productos', selectedProductos, refetchProductos, setSelectedProductos)}>
-                  <Trash2 size={14} /> Eliminar
-                </Button>
-              </div>
-            </div>
-          )}
-          <div className="overflow-x-auto">
-          <table className="w-full min-w-[500px]">
-            <thead className="bg-neutral-900 text-white"><tr>
-              <th className="px-3 py-3 text-left w-10">
-                <input type="checkbox" checked={productosFiltrados.length > 0 && selectedProductos.length === productosFiltrados.length} onChange={e => setSelectedProductos(e.target.checked ? productosFiltrados.map(p => p.id) : [])} className="w-4 h-4 rounded" />
-              </th>
-              <FilterableHeader label="Producto" field="nombre" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="text" />
-              <FilterableHeader label="Categoría" field="categoria" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="select" options={categoriaOptions} />
-              <FilterableHeader label="Precio" field="precio" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="number" />
-              <FilterableHeader label="Stock" field="stock" filters={filtrosProductos} onFilter={updateFilter(setFiltrosProductos)} type="number" />
-              <th className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold hidden md:table-cell">Margen</th>
-              <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
-            </tr></thead>
-            <tbody>
-              {productosFiltrados.map(producto => {
-                const margen = producto.precio > 0 && producto.coste > 0 ? ((producto.precio - producto.coste) / producto.precio * 100).toFixed(0) : '-';
-                const stockBajoFlag = producto.stock < (producto.stock_minimo || 20);
-                const isSelected = selectedProductos.includes(producto.id);
+
+        {/* Stats cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard icon={Leaf} label="Variedades" value={totalVariedades} color="bg-green-100 text-green-600" />
+          <StatCard icon={Package} label="Stock empaquetado" value={totalEmpaquetado} color="bg-blue-100 text-blue-600" />
+          <StatCard icon={AlertTriangle} label="Stock bajo" value={stockBajo} color="bg-amber-100 text-amber-600" />
+          <StatCard icon={Tag} label="Formatos" value={productos.length} color="bg-purple-100 text-purple-600" />
+        </div>
+
+        {productosViewMode === 'variedades' ? (
+          /* === VISTA POR VARIEDADES === */
+          <div className="space-y-4">
+            {Object.entries(productosPorVariedad).length === 0 ? (
+              <Card className="p-8 text-center">
+                <Leaf size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
+                <p className="text-sm text-neutral-500 mb-4">Crea tu primera variedad y formato de producto</p>
+                <Button onClick={() => { setEditingItem(null); setShowModal('producto'); }}><Plus size={18} />Nuevo Producto</Button>
+              </Card>
+            ) : (
+              Object.entries(productosPorVariedad).map(([variedadId, grupo]) => {
+                const isExpanded = variedadesExpandidas.includes(variedadId);
+                const variedad = grupo.variedad;
+                const totalStock = [...grupo.empaquetado, ...grupo.listo_sin_empaquetar].reduce((s, p) => s + (p.stock || 0), 0);
+                const tieneStockBajo = [...grupo.empaquetado, ...grupo.listo_sin_empaquetar].some(p => p.stock < (p.stock_minimo || 20));
+                const lotesVariedad = variedad ? lotes.filter(l => l.variedad_id === variedad.id && l.estado !== 'cosechado') : [];
+                
                 return (
-                  <tr key={producto.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-blue-50' : ''}`}>
-                    <td className="px-3 py-3">
-                      <input type="checkbox" checked={isSelected} onChange={e => setSelectedProductos(e.target.checked ? [...selectedProductos, producto.id] : selectedProductos.filter(id => id !== producto.id))} className="w-4 h-4 rounded" />
-                    </td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2 md:gap-3"><div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-green-500 flex items-center justify-center text-white"><Leaf size={16} /></div><div><p className="font-semibold text-sm">{producto.nombre}</p><p className="text-xs text-neutral-400 hidden sm:block">{producto.unidad}</p></div></div></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><Badge>{producto.categoria}</Badge></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><p className="font-bold text-sm">{formatCurrency(producto.precio)}</p><p className="text-xs text-neutral-400 hidden md:block">Coste: {formatCurrency(producto.coste)}</p></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex items-center gap-2"><div className={`w-2 h-2 md:w-2.5 md:h-2.5 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} /><span className={`text-sm ${stockBajoFlag ? 'text-red-600 font-bold' : 'font-medium'}`}>{producto.stock}</span></div></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4 hidden md:table-cell"><Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge></td>
-                    <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(producto); setShowModal('producto'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('productos', producto.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
-                  </tr>
+                  <Card key={variedadId} className="overflow-hidden">
+                    {/* Cabecera de la variedad */}
+                    <div 
+                      className="p-4 cursor-pointer hover:bg-neutral-50 flex items-center justify-between"
+                      onClick={() => setVariedadesExpandidas(isExpanded ? variedadesExpandidas.filter(v => v !== variedadId) : [...variedadesExpandidas, variedadId])}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white">
+                          <Leaf size={24} />
+                        </div>
+                        <div>
+                          <h3 className="text-lg font-bold text-neutral-900">{variedad?.nombre || 'Sin clasificar'}</h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {variedad?.categoria && <Badge>{variedad.categoria}</Badge>}
+                            <span className="text-xs text-neutral-500">
+                              {grupo.empaquetado.length + grupo.listo_sin_empaquetar.length + grupo.creciendo.length} items
+                            </span>
+                            {tieneStockBajo && <Badge className="bg-red-100 text-red-700">⚠️ Stock bajo</Badge>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right hidden md:block">
+                          <p className="text-xs text-neutral-500">Stock total</p>
+                          <p className="font-bold text-neutral-900">{totalStock}</p>
+                        </div>
+                        {lotesVariedad.length > 0 && (
+                          <div className="text-right hidden md:block">
+                            <p className="text-xs text-neutral-500">En cultivo</p>
+                            <p className="font-bold text-green-600">{lotesVariedad.length} lotes</p>
+                          </div>
+                        )}
+                        <ChevronDown size={20} className={`text-neutral-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </div>
+                    </div>
+
+                    {/* Contenido expandido */}
+                    {isExpanded && (
+                      <div className="border-t border-neutral-200 bg-neutral-50 p-4 space-y-4">
+                        {/* Empaquetado */}
+                        {grupo.empaquetado.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-bold text-neutral-700 mb-2 flex items-center gap-2">
+                              <Package size={16} className="text-blue-500" /> Empaquetado (producto terminado)
+                            </h4>
+                            <div className="space-y-2">
+                              {grupo.empaquetado.sort((a, b) => (a.formato_gramos || 0) - (b.formato_gramos || 0)).map(p => {
+                                const stockBajoFlag = p.stock < (p.stock_minimo || 20);
+                                const margen = p.precio > 0 && p.coste > 0 ? ((p.precio - p.coste) / p.precio * 100).toFixed(0) : '-';
+                                const precioKg = calcPrecioKg(p);
+                                const estimacion = stockBajoFlag ? estimarDiasStock(p) : null;
+                                
+                                return (
+                                  <div key={p.id} className="bg-white p-3 rounded-lg border border-neutral-200 flex items-center gap-3 flex-wrap">
+                                    <div className="flex-1 min-w-[140px]">
+                                      <p className="font-semibold text-sm">
+                                        {p.formato_gramos ? `${p.formato_gramos}g` : p.nombre}
+                                      </p>
+                                      <p className="text-xs text-neutral-500">{p.unidad || 'bandeja'}</p>
+                                    </div>
+                                    <div className="text-right min-w-[110px]">
+                                      <p className="font-bold text-sm">{formatCurrency(p.precio)}/ud</p>
+                                      {precioKg && <p className="text-xs text-blue-600 font-medium">{formatCurrency(precioKg)}/kg</p>}
+                                    </div>
+                                    <div className="text-right min-w-[80px]">
+                                      <div className="flex items-center justify-end gap-2">
+                                        <div className={`w-2 h-2 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                                        <span className={`text-sm font-bold ${stockBajoFlag ? 'text-red-600' : ''}`}>{p.stock}</span>
+                                      </div>
+                                      <p className="text-xs text-neutral-400">stock</p>
+                                    </div>
+                                    {margen !== '-' && (
+                                      <Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge>
+                                    )}
+                                    {estimacion && (
+                                      <div className="bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 text-xs">
+                                        <span className="text-amber-700 font-medium">📅 Stock en {estimacion.dias}d</span>
+                                      </div>
+                                    )}
+                                    <div className="flex gap-1">
+                                      <button onClick={() => { setEditingItem(p); setShowModal('producto'); }} className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded">
+                                        <Edit2 size={14} />
+                                      </button>
+                                      <button onClick={() => handleDelete('productos', p.id)} className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded">
+                                        <Trash2 size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Listo sin empaquetar */}
+                        {grupo.listo_sin_empaquetar.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-bold text-neutral-700 mb-2 flex items-center gap-2">
+                              <PackageCheck size={16} className="text-amber-500" /> Listo sin empaquetar (a granel)
+                            </h4>
+                            <div className="space-y-2">
+                              {grupo.listo_sin_empaquetar.map(p => (
+                                <div key={p.id} className="bg-white p-3 rounded-lg border border-amber-200 flex items-center gap-3 flex-wrap">
+                                  <div className="flex-1">
+                                    <p className="font-semibold text-sm">{p.nombre}</p>
+                                  </div>
+                                  <div className="text-right min-w-[110px]">
+                                    <p className="font-bold text-sm">{formatCurrency(p.precio)}/{p.unidad || 'kg'}</p>
+                                  </div>
+                                  <div className="text-right min-w-[80px]">
+                                    <span className="text-sm font-bold">{p.stock}</span>
+                                    <p className="text-xs text-neutral-400">stock</p>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <button onClick={() => { setEditingItem(p); setShowModal('producto'); }} className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded">
+                                      <Edit2 size={14} />
+                                    </button>
+                                    <button onClick={() => handleDelete('productos', p.id)} className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded">
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Creciendo (lotes activos) */}
+                        {lotesVariedad.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-bold text-neutral-700 mb-2 flex items-center gap-2">
+                              <Leaf size={16} className="text-green-500" /> Creciendo en bandeja ({lotesVariedad.length} lotes activos)
+                            </h4>
+                            <div className="space-y-2">
+                              {lotesVariedad.sort((a,b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista)).map(l => {
+                                const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
+                                return (
+                                  <div key={l.id} className="bg-white p-3 rounded-lg border border-green-200 flex items-center gap-3 flex-wrap">
+                                    <div className="flex-1">
+                                      <p className="font-semibold text-sm">Lote #{l.id}</p>
+                                      <p className="text-xs text-neutral-500">{l.bandejas} bandejas • Sembrado {formatDate(l.fecha_siembra)}</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : dias <= 2 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}>
+                                        {dias <= 0 ? '¡Hoy!' : `Cosecha en ${dias}d`}
+                                      </Badge>
+                                      <p className="text-xs text-neutral-400 mt-1">{formatDate(l.fecha_cosecha_prevista)}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Editar variedad */}
+                        {variedad && (
+                          <div className="pt-2 border-t border-neutral-200 flex justify-end">
+                            <button 
+                              onClick={() => { setEditingItem(variedad); setShowModal('variedad'); }} 
+                              className="text-xs text-orange-600 font-medium hover:text-orange-800 flex items-center gap-1"
+                            >
+                              <Edit2 size={12} /> Editar variedad ({variedad.dias_crecimiento}d ciclo, {variedad.gramos_por_bandeja}g/bandeja)
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </Card>
                 );
-              })}
-            </tbody>
-          </table>
+              })
+            )}
           </div>
-        </Card>
+        ) : (
+          /* === VISTA TABLA TRADICIONAL === */
+          <Card className="overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px]">
+                <thead className="bg-neutral-900 text-white">
+                  <tr>
+                    <th className="text-left px-4 py-3 text-sm font-bold">Variedad</th>
+                    <th className="text-left px-4 py-3 text-sm font-bold">Formato</th>
+                    <th className="text-left px-4 py-3 text-sm font-bold">Estado</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">€/ud</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">€/kg</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Stock</th>
+                    <th className="text-right px-4 py-3 text-sm font-bold">Acc.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productos.map(p => {
+                    const v = variedades.find(x => x.id === p.variedad_id);
+                    const stockBajoFlag = p.stock < (p.stock_minimo || 20);
+                    const precioKg = calcPrecioKg(p);
+                    const estado = p.estado_inventario || 'empaquetado';
+                    const estadoColor = estado === 'empaquetado' ? 'bg-blue-100 text-blue-700' : estado === 'listo_sin_empaquetar' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700';
+                    const estadoLabel = estado === 'empaquetado' ? '📦 Empaquetado' : estado === 'listo_sin_empaquetar' ? '🌾 Listo (granel)' : '🌱 Creciendo';
+                    
+                    return (
+                      <tr key={p.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                        <td className="px-4 py-3 font-semibold">{v?.nombre || p.nombre}</td>
+                        <td className="px-4 py-3 text-sm">{p.formato_gramos ? `${p.formato_gramos}g` : (p.unidad || '-')}</td>
+                        <td className="px-4 py-3"><Badge className={estadoColor}>{estadoLabel}</Badge></td>
+                        <td className="px-4 py-3 text-right font-bold">{formatCurrency(p.precio)}</td>
+                        <td className="px-4 py-3 text-right text-blue-600 font-medium">{precioKg ? formatCurrency(precioKg) : '-'}</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className={`font-bold ${stockBajoFlag ? 'text-red-600' : ''}`}>{p.stock}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-1">
+                            <button onClick={() => { setEditingItem(p); setShowModal('producto'); }} className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded"><Edit2 size={14} /></button>
+                            <button onClick={() => handleDelete('productos', p.id)} className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
       </div>
     );
   };
@@ -12547,6 +12946,25 @@ Firma repartidor: _________________
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'variedad' && <Modal title={editingItem ? 'Editar Variedad' : 'Nueva Variedad'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <VariedadForm variedad={editingItem} onSave={async (form) => {
+          try {
+            if (editingItem?.id) {
+              const { error } = await supabase.from('variedades').update(form).eq('id', editingItem.id);
+              if (error) throw error;
+            } else {
+              const { error } = await supabase.from('variedades').insert(form);
+              if (error) throw error;
+            }
+            refetchVariedades();
+            setShowModal(null);
+            setEditingItem(null);
+            alert('✅ Variedad guardada');
+          } catch (e) {
+            alert('❌ Error: ' + e.message);
+          }
+        }} onCancel={() => { setShowModal(null); setEditingItem(null); }} />
+      </Modal>}
       {showModal === 'emailConfig' && <Modal title="Configurar Sistema de Emails" onClose={() => setShowModal(null)} size="max-w-2xl">
         <EmailConfigForm 
           config={emailConfig} 
