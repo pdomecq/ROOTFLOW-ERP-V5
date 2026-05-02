@@ -1566,6 +1566,8 @@ const MainApp = () => {
   const { data: clienteContactosData, refetch: refetchClienteContactos } = useRealtime('cliente_contactos');
   // V22 - Variedades de productos
   const { data: variedadesData, refetch: refetchVariedades } = useRealtime('variedades');
+  // V23 - Ausencias de socios
+  const { data: ausenciasSociosData, refetch: refetchAusenciasSocios } = useRealtime('ausencias_socios');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1621,6 +1623,8 @@ const MainApp = () => {
   const clienteContactos = clienteContactosData || [];
   // V22 - Variedades
   const variedades = variedadesData || [];
+  // V23 - Ausencias
+  const ausenciasSocios = ausenciasSociosData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2927,6 +2931,8 @@ const MainApp = () => {
       else if (table === 'recetas_produccion') refetchRecetas();
       else if (table === 'turnos') refetchTurnos();
       else if (table === 'socios') refetchSocios();
+      else if (table === 'ausencias_socios') refetchAusenciasSocios();
+      else if (table === 'variedades') refetchVariedades();
     }
   };
 
@@ -3903,49 +3909,199 @@ const MainApp = () => {
 
   const LoteForm = ({ lote, onSave, onCancel }) => {
     const initialForm = { 
-      producto_id: lote?.producto_id || (productos.length > 0 ? productos[0].id : null), 
+      variedad_id: lote?.variedad_id || (variedades.length > 0 ? variedades[0].id : null),
+      producto_id: lote?.producto_id || null,
       fecha_siembra: lote?.fecha_siembra || new Date().toISOString().split('T')[0], 
       fecha_cosecha_prevista: lote?.fecha_cosecha_prevista || '', 
-      bandejas: lote?.bandejas || 20, 
-      estado: lote?.estado || 'sembrado' 
+      bandejas: lote?.bandejas || 1,
+      gramos_objetivo: 0, // gramos que necesitas (input para cálculo inverso)
+      pedido_id: lote?.pedido_id || null,
+      estado: lote?.estado || 'sembrado',
+      notas: lote?.notas || '',
     };
     const [form, setForm, clearFormStorage] = useFormPersistence(`lote_${lote?.id || 'new'}`, initialForm, !lote);
+    const [modoCalculo, setModoCalculo] = useState('bandejas'); // 'bandejas' | 'gramos'
+    
     const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
     
+    // Buscar variedad y datos
+    const variedadSel = variedades.find(v => v.id === form.variedad_id);
+    const gPorBandeja = variedadSel?.gramos_por_bandeja || 100;
+    const diasCiclo = variedadSel?.dias_crecimiento || 10;
+    
+    // Cálculos
+    const gramosCosechables = (form.bandejas || 0) * gPorBandeja;
+    const bandejasNecesarias = form.gramos_objetivo > 0 ? Math.ceil(form.gramos_objetivo / gPorBandeja) : 0;
+    const sobrante = bandejasNecesarias > 0 ? (bandejasNecesarias * gPorBandeja) - form.gramos_objetivo : 0;
+    
+    // Auto-calcular fecha de cosecha cuando cambia variedad o siembra
     useEffect(() => {
-      if (form.producto_id && form.fecha_siembra && productos.length > 0) {
-        const prod = productos.find(p => p.id === form.producto_id);
-        if (prod) { 
-          const fecha = new Date(form.fecha_siembra); 
-          fecha.setDate(fecha.getDate() + (prod.dias_crecimiento || 7)); 
-          setForm(f => ({...f, fecha_cosecha_prevista: fecha.toISOString().split('T')[0]})); 
-        }
+      if (form.variedad_id && form.fecha_siembra && variedadSel) {
+        const fecha = new Date(form.fecha_siembra); 
+        fecha.setDate(fecha.getDate() + diasCiclo); 
+        setForm(f => ({...f, fecha_cosecha_prevista: fecha.toISOString().split('T')[0]})); 
       }
-    }, [form.producto_id, form.fecha_siembra]);
+    }, [form.variedad_id, form.fecha_siembra]);
 
-    // Verificar que hay productos
-    if (productos.length === 0) {
+    // Si modo gramos: actualizar bandejas
+    useEffect(() => {
+      if (modoCalculo === 'gramos' && form.gramos_objetivo > 0 && bandejasNecesarias > 0) {
+        setForm(f => ({...f, bandejas: bandejasNecesarias}));
+      }
+    }, [form.gramos_objetivo, modoCalculo]);
+
+    if (variedades.length === 0) {
       return (
         <div className="text-center py-8">
           <AlertTriangle size={48} className="mx-auto text-amber-500 mb-4" />
-          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay productos</h3>
-          <p className="text-neutral-500 mb-4">Primero debes crear al menos un producto para crear lotes de producción.</p>
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay variedades</h3>
+          <p className="text-neutral-500 mb-4">Primero debes crear variedades en Productos para poder sembrar lotes.</p>
           <Button onClick={handleCancelWithClear}>Cerrar</Button>
         </div>
       );
     }
 
+    // Pedidos pendientes para asociar
+    const pedidosPendientes = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
+      .sort((a,b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega));
+
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <Select label="Producto" className="col-span-2" value={form.producto_id} onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} options={productos.map(p => ({ value: p.id, label: `${p.nombre} (${p.dias_crecimiento || 7}d)` }))} />
-          <Input label="Siembra" type="date" value={form.fecha_siembra} onChange={e => setForm({...form, fecha_siembra: e.target.value})} />
-          <Input label="Cosecha Prevista" type="date" value={form.fecha_cosecha_prevista} readOnly className="bg-neutral-100" />
-          <Input label="Bandejas" type="number" value={form.bandejas} onChange={e => setForm({...form, bandejas: parseInt(e.target.value) || 1})} />
-          <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+        {/* Variedad */}
+        <Select 
+          label="Variedad a sembrar" 
+          value={form.variedad_id || ''} 
+          onChange={e => setForm({...form, variedad_id: parseInt(e.target.value)})} 
+          options={variedades.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(v => ({ 
+            value: v.id, 
+            label: `${v.nombre} (${v.dias_crecimiento}d ciclo, ${v.gramos_por_bandeja}g/bandeja)` 
+          }))} 
+        />
+
+        {/* Modo de cálculo: bandejas o gramos */}
+        <div className="flex gap-2 p-1 bg-neutral-100 rounded-xl">
+          <button 
+            onClick={() => setModoCalculo('bandejas')} 
+            className={`flex-1 px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${modoCalculo === 'bandejas' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+          >
+            🌱 Por bandejas
+          </button>
+          <button 
+            onClick={() => setModoCalculo('gramos')} 
+            className={`flex-1 px-4 py-2 rounded-lg font-semibold text-sm transition-colors ${modoCalculo === 'gramos' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+          >
+            ⚖️ Por gramos necesarios
+          </button>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{lote ? 'Guardar' : 'Crear Lote'}</Button></div>
+
+        {modoCalculo === 'gramos' ? (
+          /* MODO: Calcular bandejas desde gramos */
+          <div className="space-y-3">
+            <Input 
+              label="Gramos necesarios (para pedido o reserva)" 
+              type="number" 
+              value={form.gramos_objetivo} 
+              onChange={e => setForm({...form, gramos_objetivo: parseInt(e.target.value) || 0})} 
+              placeholder="Ej: 500"
+            />
+            {form.gramos_objetivo > 0 && variedadSel && (
+              <Card className="p-4 bg-blue-50 border-blue-200">
+                <h4 className="font-bold text-blue-900 mb-2">📊 Cálculo automático</h4>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-blue-700">Necesitas:</span>
+                    <span className="font-bold">{form.gramos_objetivo}g de {variedadSel.nombre}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-blue-700">Cada bandeja produce:</span>
+                    <span className="font-bold">{gPorBandeja}g</span>
+                  </div>
+                  <div className="flex justify-between border-t border-blue-300 pt-1 mt-1">
+                    <span className="text-blue-700 font-semibold">Bandejas a sembrar:</span>
+                    <span className="font-black text-2xl text-blue-700">{bandejasNecesarias}</span>
+                  </div>
+                  {sobrante > 0 && (
+                    <div className="flex justify-between text-green-700">
+                      <span>Sobrante a stock:</span>
+                      <span className="font-bold">+{sobrante}g</span>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+          </div>
+        ) : (
+          /* MODO: Bandejas directas */
+          <div className="space-y-3">
+            <Input 
+              label="Bandejas a sembrar" 
+              type="number" 
+              value={form.bandejas} 
+              onChange={e => setForm({...form, bandejas: parseInt(e.target.value) || 1})} 
+              min="1"
+            />
+            {variedadSel && (
+              <Card className="p-3 bg-green-50 border-green-200 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-green-700">🌾 Cosecha estimada:</span>
+                  <span className="font-bold text-green-800">{gramosCosechables}g ({(gramosCosechables/1000).toFixed(2)}kg)</span>
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Asociar a pedido (opcional) */}
+        {pedidosPendientes.length > 0 && (
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1">Asociar a pedido (opcional)</label>
+            <select 
+              value={form.pedido_id || ''} 
+              onChange={e => setForm({...form, pedido_id: parseInt(e.target.value) || null})}
+              className="w-full px-4 py-2 rounded-xl border border-neutral-300"
+            >
+              <option value="">— Sin pedido específico (stock general) —</option>
+              {pedidosPendientes.map(p => {
+                const cli = clientes.find(c => c.id === p.cliente_id);
+                return <option key={p.id} value={p.id}>#{p.id} - {cli?.nombre} - Entrega {formatDate(p.fecha_entrega)}</option>;
+              })}
+            </select>
+          </div>
+        )}
+
+        {/* Fechas */}
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Fecha siembra" type="date" value={form.fecha_siembra} onChange={e => setForm({...form, fecha_siembra: e.target.value})} />
+          <Input label="Cosecha prevista" type="date" value={form.fecha_cosecha_prevista} readOnly className="bg-neutral-100" />
+        </div>
+
+        <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} placeholder="Observaciones del cultivo..." />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => {
+            // Si hay variedad pero no producto, intentar buscar el producto principal
+            const dataToSave = { 
+              ...form,
+              gramos_estimados: gramosCosechables,
+              gramos_para_pedido: form.gramos_objetivo > 0 ? form.gramos_objetivo : null,
+            };
+            // Si la BD aún tiene producto_id NOT NULL, asignar uno por defecto de esa variedad
+            if (!dataToSave.producto_id && form.variedad_id) {
+              const prodVariedad = productos.find(p => p.variedad_id === form.variedad_id);
+              if (prodVariedad) dataToSave.producto_id = prodVariedad.id;
+            }
+            // limpiar campos que no van a BD
+            delete dataToSave.gramos_objetivo;
+            handleSaveWithClear(dataToSave);
+          }}>{lote ? 'Guardar' : 'Sembrar Lote'}</Button>
+        </div>
       </div>
     );
   };
@@ -4733,6 +4889,35 @@ const MainApp = () => {
           <Input label="Duración (minutos)" type="number" value={form.duracion_minutos} onChange={e => setForm({...form, duracion_minutos: parseInt(e.target.value) || 60})} min="15" step="15" />
         </div>
 
+        {/* AVISO DE AUSENCIA */}
+        {(() => {
+          const ausenciaConflicto = ausenciasSocios.find(a => 
+            a.socio_id === form.socio_id &&
+            form.fecha >= a.fecha_inicio &&
+            form.fecha <= a.fecha_fin
+          );
+          if (ausenciaConflicto) {
+            const tipoLabels = { vacaciones: 'Vacaciones', evento: 'Evento personal', baja: 'Baja', viaje: 'Viaje', personal: 'Personal', otro: 'Otro' };
+            return (
+              <div className="p-4 bg-red-50 border-2 border-red-300 rounded-xl">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="text-red-500 flex-shrink-0" size={24} />
+                  <div className="flex-1">
+                    <p className="font-bold text-red-800">⚠️ Conflicto: socio ausente este día</p>
+                    <p className="text-sm text-red-700 mt-1">
+                      <strong>{tipoLabels[ausenciaConflicto.tipo] || ausenciaConflicto.tipo}</strong>
+                      {' '}del {formatDate(ausenciaConflicto.fecha_inicio)} al {formatDate(ausenciaConflicto.fecha_fin)}
+                    </p>
+                    {ausenciaConflicto.motivo && <p className="text-sm text-red-600 italic">"{ausenciaConflicto.motivo}"</p>}
+                    <p className="text-xs text-red-600 mt-1">Considera asignar el turno a otro socio.</p>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         <div>
           <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
           <textarea 
@@ -4804,6 +4989,144 @@ const MainApp = () => {
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{turno ? 'Guardar' : 'Asignar Turno'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== AUSENCIA FORM ====================
+  const AusenciaForm = ({ ausencia, socioInicial, onSave, onCancel }) => {
+    const tiposAusencia = [
+      { value: 'vacaciones', label: '🏖️ Vacaciones' },
+      { value: 'evento', label: '🎉 Evento (boda, cumple, etc.)' },
+      { value: 'viaje', label: '✈️ Viaje' },
+      { value: 'baja', label: '🏥 Baja médica' },
+      { value: 'personal', label: '👤 Asunto personal' },
+      { value: 'otro', label: '📌 Otro' },
+    ];
+
+    const sociosActivos = socios.filter(s => s.activo !== false);
+
+    const initialForm = {
+      socio_id: ausencia?.socio_id || socioInicial || (sociosActivos.length > 0 ? sociosActivos[0].id : null),
+      fecha_inicio: ausencia?.fecha_inicio || new Date().toISOString().split('T')[0],
+      fecha_fin: ausencia?.fecha_fin || new Date().toISOString().split('T')[0],
+      tipo: ausencia?.tipo || 'personal',
+      motivo: ausencia?.motivo || '',
+      todo_el_dia: ausencia?.todo_el_dia !== false,
+      hora_inicio: ausencia?.hora_inicio || '',
+      hora_fin: ausencia?.hora_fin || '',
+    };
+
+    const [form, setForm, clearFormStorage] = useFormPersistence(`ausencia_${ausencia?.id || 'new'}`, initialForm, !ausencia);
+
+    const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
+    const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+
+    // Verificar conflictos con turnos ya asignados
+    const turnosConflicto = turnos.filter(t => 
+      t.socio_id === form.socio_id &&
+      t.fecha >= form.fecha_inicio &&
+      t.fecha <= form.fecha_fin &&
+      !t.completado
+    );
+
+    if (sociosActivos.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <Users size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay socios activos</h3>
+          <p className="text-neutral-500 mb-4">Crea al menos un socio antes de marcar ausencias.</p>
+          <Button onClick={handleCancelWithClear}>Cerrar</Button>
+        </div>
+      );
+    }
+
+    // Calcular días de la ausencia
+    const diasAusencia = form.fecha_inicio && form.fecha_fin 
+      ? Math.ceil((new Date(form.fecha_fin) - new Date(form.fecha_inicio)) / (1000*60*60*24)) + 1
+      : 1;
+
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Select 
+            label="Socio" 
+            value={form.socio_id} 
+            onChange={e => setForm({...form, socio_id: parseInt(e.target.value)})} 
+            options={sociosActivos.map(s => ({ value: s.id, label: s.nombre }))} 
+          />
+          <Select 
+            label="Tipo de ausencia" 
+            value={form.tipo} 
+            onChange={e => setForm({...form, tipo: e.target.value})} 
+            options={tiposAusencia} 
+          />
+          <Input label="Desde" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value, fecha_fin: e.target.value > form.fecha_fin ? e.target.value : form.fecha_fin})} />
+          <Input label="Hasta" type="date" value={form.fecha_fin} onChange={e => setForm({...form, fecha_fin: e.target.value})} min={form.fecha_inicio} />
+        </div>
+
+        {/* Indicador de días */}
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
+          <span className="text-sm text-blue-700">📆 Duración:</span>
+          <span className="font-bold text-blue-800">{diasAusencia} día{diasAusencia !== 1 ? 's' : ''}</span>
+        </div>
+
+        {/* Aviso conflictos turnos */}
+        {turnosConflicto.length > 0 && (
+          <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-xl">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
+              <div className="flex-1">
+                <p className="font-bold text-amber-800">⚠️ Hay {turnosConflicto.length} turno(s) asignado(s) en estos días</p>
+                <p className="text-sm text-amber-700 mt-1">
+                  Considera reasignar estos turnos a otro socio:
+                </p>
+                <ul className="text-xs text-amber-700 mt-2 space-y-1 max-h-32 overflow-y-auto">
+                  {turnosConflicto.slice(0, 8).map(t => (
+                    <li key={t.id}>• {formatDate(t.fecha)} - {t.tipo} ({t.hora || 'sin hora'})</li>
+                  ))}
+                  {turnosConflicto.length > 8 && <li className="italic">... y {turnosConflicto.length - 8} más</li>}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Todo el día / hora específica */}
+        <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={form.todo_el_dia} 
+              onChange={e => setForm({...form, todo_el_dia: e.target.checked})} 
+              className="w-4 h-4 rounded" 
+            />
+            <span className="text-sm font-medium">Todo el día</span>
+          </label>
+          {!form.todo_el_dia && (
+            <div className="grid grid-cols-2 gap-2 pl-6">
+              <Input label="Desde" type="time" value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio: e.target.value})} />
+              <Input label="Hasta" type="time" value={form.hora_fin} onChange={e => setForm({...form, hora_fin: e.target.value})} />
+            </div>
+          )}
+        </div>
+
+        {/* Motivo */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Motivo (opcional)</label>
+          <textarea 
+            value={form.motivo} 
+            onChange={e => setForm({...form, motivo: e.target.value})} 
+            className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
+            rows={2} 
+            placeholder="Boda de Pedro, viaje a Italia, etc."
+          />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{ausencia ? 'Guardar' : 'Marcar Ausencia'}</Button>
         </div>
       </div>
     );
@@ -8120,14 +8443,17 @@ const MainApp = () => {
               {calendarioTab === 'eventos' ? 'Entregas y cosechas programadas' : 'Turnos y reparto de tareas entre socios'}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             {calendarioTab === 'turnos' && (
               <>
-                <Button variant="secondary" onClick={() => { setEditingItem(null); setShowModal('socio'); }}>
-                  <UserPlus size={16} /> Socio
+                <Button variant="secondary" size="sm" onClick={() => { setEditingItem(null); setShowModal('socio'); }}>
+                  <UserPlus size={16} /> <span className="hidden sm:inline">Socio</span>
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => { setEditingItem(null); setShowModal('ausencia'); }} className="text-amber-700 border-amber-300 bg-amber-50">
+                  <Calendar size={16} /> <span className="hidden sm:inline">Ausencia</span>
                 </Button>
                 <Button onClick={() => { setEditingItem(null); setShowModal('turno'); }}>
-                  <Plus size={16} /> Asignar Turno
+                  <Plus size={16} /> <span className="hidden sm:inline">Asignar Turno</span>
                 </Button>
               </>
             )}
@@ -8325,32 +8651,68 @@ const MainApp = () => {
                       if (!dia) return <div key={idx} className="h-32 bg-neutral-50 rounded-lg" />;
                       
                       const turnosDelDia = turnosDia(dia);
-                      const esHoy = fechaStr(dia) === hoy;
+                      const fechaDelDia = fechaStr(dia);
+                      const esHoy = fechaDelDia === hoy;
+                      
+                      // Ausencias activas en este día
+                      const ausenciasDia = ausenciasSocios.filter(a => 
+                        fechaDelDia >= a.fecha_inicio && fechaDelDia <= a.fecha_fin
+                      );
                       
                       return (
                         <div 
                           key={idx} 
-                          onClick={() => { setEditingItem({ fecha: fechaStr(dia) }); setShowModal('turno'); }}
+                          onClick={() => { setEditingItem({ fecha: fechaDelDia }); setShowModal('turno'); }}
                           className={`h-32 p-2 rounded-lg border cursor-pointer hover:border-orange-300 transition-colors ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}
                         >
                           <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
+                          
+                          {/* Ausencias del día */}
+                          {ausenciasDia.length > 0 && (
+                            <div className="mt-0.5 space-y-0.5">
+                              {ausenciasDia.slice(0, 2).map(a => {
+                                const socio = socios.find(s => s.id === a.socio_id);
+                                const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                                return (
+                                  <div 
+                                    key={a.id}
+                                    onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
+                                    className="text-[10px] px-1.5 py-0.5 rounded truncate bg-red-100 text-red-700 border border-red-200 flex items-center gap-1"
+                                    style={{borderLeft: `3px solid ${socio?.color || '#DC2626'}`}}
+                                    title={`${socio?.nombre} - ${a.tipo}${a.motivo ? ': ' + a.motivo : ''}`}
+                                  >
+                                    <span>{tipoIcon}</span>
+                                    <span className="truncate font-medium line-through">{socio?.nombre?.split(' ')[0]}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          
                           <div className="mt-1 space-y-0.5">
-                            {turnosDelDia.slice(0, 3).map(t => {
+                            {turnosDelDia.slice(0, ausenciasDia.length > 0 ? 2 : 3).map(t => {
                               const socio = socios.find(s => s.id === t.socio_id);
                               const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                              const enAusencia = ausenciasSocios.some(a => 
+                                a.socio_id === t.socio_id && 
+                                fechaDelDia >= a.fecha_inicio && 
+                                fechaDelDia <= a.fecha_fin
+                              );
                               return (
                                 <div 
                                   key={t.id} 
-                                  className={`text-[10px] px-1.5 py-0.5 rounded truncate flex items-center gap-1 border ${tipo.color} ${t.completado ? 'line-through opacity-60' : ''}`}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded truncate flex items-center gap-1 border ${tipo.color} ${t.completado ? 'line-through opacity-60' : ''} ${enAusencia ? 'ring-1 ring-red-400' : ''}`}
                                   style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
+                                  title={enAusencia ? '⚠️ Conflicto: socio ausente' : ''}
                                 >
                                   <span>{tipo.icon}</span>
                                   <span className="truncate font-medium">{socio?.nombre?.split(' ')[0]}</span>
+                                  {enAusencia && <AlertTriangle size={8} className="text-red-500 flex-shrink-0" />}
                                 </div>
                               );
                             })}
-                            {turnosDelDia.length > 3 && (
-                              <p className="text-[10px] text-neutral-400">+{turnosDelDia.length - 3} más</p>
+                            {turnosDelDia.length > (ausenciasDia.length > 0 ? 2 : 3) && (
+                              <p className="text-[10px] text-neutral-400">+{turnosDelDia.length - (ausenciasDia.length > 0 ? 2 : 3)} más</p>
                             )}
                           </div>
                         </div>
@@ -8358,6 +8720,51 @@ const MainApp = () => {
                     })}
                   </div>
                 </Card>
+
+                {/* Lista de ausencias actuales/futuras */}
+                {ausenciasSocios.filter(a => new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0))).length > 0 && (
+                  <Card className="p-5">
+                    <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Calendar size={20} className="text-amber-500" /> Ausencias Programadas</h3>
+                    <div className="space-y-2 max-h-72 overflow-y-auto">
+                      {ausenciasSocios
+                        .filter(a => new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0)))
+                        .sort((a, b) => new Date(a.fecha_inicio) - new Date(b.fecha_inicio))
+                        .map(a => {
+                          const socio = socios.find(s => s.id === a.socio_id);
+                          const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                          const tipoLabel = a.tipo === 'vacaciones' ? 'Vacaciones' : a.tipo === 'evento' ? 'Evento' : a.tipo === 'viaje' ? 'Viaje' : a.tipo === 'baja' ? 'Baja' : a.tipo === 'personal' ? 'Personal' : 'Otro';
+                          const dias = Math.ceil((new Date(a.fecha_fin) - new Date(a.fecha_inicio)) / (1000*60*60*24)) + 1;
+                          return (
+                            <div key={a.id} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                              <div className="flex items-center gap-3 flex-1">
+                                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor: socio?.color || '#F97316'}}>
+                                  {socio?.nombre?.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold text-neutral-900">{socio?.nombre}</span>
+                                    <Badge className="bg-amber-100 text-amber-700">{tipoIcon} {tipoLabel}</Badge>
+                                  </div>
+                                  <p className="text-sm text-neutral-500">
+                                    {formatDate(a.fecha_inicio)} → {formatDate(a.fecha_fin)} ({dias} día{dias !== 1 ? 's' : ''})
+                                  </p>
+                                  {a.motivo && <p className="text-xs text-amber-700 italic">"{a.motivo}"</p>}
+                                </div>
+                              </div>
+                              <div className="flex gap-1">
+                                <button onClick={() => { setEditingItem(a); setShowModal('ausencia'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg">
+                                  <Edit2 size={16} />
+                                </button>
+                                <button onClick={() => handleDelete('ausencias_socios', a.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </Card>
+                )}
 
                 {/* Lista próximos turnos */}
                 <Card className="p-5">
@@ -8454,6 +8861,30 @@ const MainApp = () => {
                 setEditingItem(null);
               } catch (e) { alert('❌ Error: ' + e.message); }
             }} onCancel={() => { setShowModal(null); setEditingItem(null); }} />
+          </Modal>
+        )}
+
+        {/* Modal Ausencia */}
+        {showModal === 'ausencia' && (
+          <Modal title={editingItem?.id ? 'Editar Ausencia' : 'Marcar Ausencia / Día Libre'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
+            <AusenciaForm 
+              ausencia={editingItem?.id ? editingItem : null} 
+              socioInicial={editingItem?.socio_id}
+              onSave={async (form) => {
+                try {
+                  if (editingItem?.id) {
+                    await supabase.from('ausencias_socios').update(form).eq('id', editingItem.id);
+                  } else {
+                    await supabase.from('ausencias_socios').insert(form);
+                  }
+                  refetchAusenciasSocios();
+                  setShowModal(null);
+                  setEditingItem(null);
+                  alert('✅ Ausencia registrada');
+                } catch (e) { alert('❌ Error: ' + e.message); }
+              }} 
+              onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+            />
           </Modal>
         )}
       </div>
