@@ -2626,6 +2626,176 @@ const MainApp = () => {
     };
   });
 
+  // ==================== SISTEMA DE SLACK ====================
+  const [slackConfig, setSlackConfig] = useState(() => {
+    const saved = localStorage.getItem('rootflow_slack_config');
+    return saved ? JSON.parse(saved) : {
+      activo: false,
+      webhookUrl: '', // se guarda solo si NO se usa Edge Function
+      usarEdgeFunction: true, // recomendado: el webhook se guarda como secret en Supabase
+      canalDefault: '#rootflow-alertas',
+      enviarSoloCriticas: false,
+      mencionarEnCriticas: true, // @channel para críticas
+    };
+  });
+
+  const guardarSlackConfig = (config) => {
+    setSlackConfig(config);
+    localStorage.setItem('rootflow_slack_config', JSON.stringify(config));
+  };
+
+  // Función para enviar mensaje a Slack
+  const enviarSlack = async ({ titulo, mensaje, prioridad = 'media', alertaId = null, blocks = null }) => {
+    if (!slackConfig.activo) {
+      return { success: false, error: 'Sistema de Slack desactivado en configuración' };
+    }
+
+    // Construir mensaje Slack en Block Kit
+    const colorPrioridad = prioridad === 'critica' ? '#DC2626' : 
+                           prioridad === 'alta' ? '#F59E0B' : 
+                           prioridad === 'media' ? '#3B82F6' : '#6B7280';
+    
+    const emojiPrioridad = prioridad === 'critica' ? '🚨' : 
+                           prioridad === 'alta' ? '⚠️' : 
+                           prioridad === 'media' ? '🔔' : 'ℹ️';
+
+    const mencion = (prioridad === 'critica' && slackConfig.mencionarEnCriticas) ? '<!channel> ' : '';
+
+    const slackPayload = blocks ? { blocks } : {
+      text: `${emojiPrioridad} ${titulo}`, // fallback para notificaciones
+      attachments: [{
+        color: colorPrioridad,
+        blocks: [
+          {
+            type: 'header',
+            text: { type: 'plain_text', text: `${emojiPrioridad} ${titulo}` }
+          },
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: `${mencion}${mensaje}` }
+          },
+          {
+            type: 'context',
+            elements: [
+              { type: 'mrkdwn', text: `*Prioridad:* ${prioridad.toUpperCase()} | *Origen:* Rootflow ERP | ${new Date().toLocaleString('es-ES')}` }
+            ]
+          },
+          {
+            type: 'actions',
+            elements: [{
+              type: 'button',
+              text: { type: 'plain_text', text: '🔗 Ir al ERP' },
+              url: 'https://rootflow.es',
+              style: 'primary'
+            }]
+          }
+        ]
+      }]
+    };
+
+    try {
+      let result;
+      
+      if (slackConfig.usarEdgeFunction) {
+        // Usar Edge Function (más seguro: webhook URL como secret)
+        const { data, error } = await supabase.functions.invoke('send-slack', {
+          body: { payload: slackPayload }
+        });
+        if (error) throw error;
+        result = data;
+      } else {
+        // Llamada directa al webhook (URL guardada en localStorage - menos seguro)
+        if (!slackConfig.webhookUrl) {
+          throw new Error('Webhook URL no configurada');
+        }
+        const res = await fetch(slackConfig.webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(slackPayload),
+        });
+        if (!res.ok) throw new Error(`Slack respondió: ${res.status} ${res.statusText}`);
+        result = await res.text();
+      }
+
+      // Registrar en log (reutilizamos email_log con campo destinatarios = "Slack")
+      await supabase.from('email_log').insert({
+        destinatarios: 'Slack: ' + (slackConfig.canalDefault || '#default'),
+        asunto: titulo,
+        alerta_id: alertaId,
+        estado: 'enviado',
+        respuesta: JSON.stringify(result).substring(0, 500),
+      });
+
+      return { success: true, data: result };
+    } catch (e) {
+      console.error('Error Slack:', e);
+      await supabase.from('email_log').insert({
+        destinatarios: 'Slack: ' + (slackConfig.canalDefault || '#default'),
+        asunto: titulo,
+        alerta_id: alertaId,
+        estado: 'error',
+        respuesta: e.message || String(e),
+      });
+      return { success: false, error: e.message || String(e) };
+    }
+  };
+
+  // Generar mensaje Slack con Block Kit para resumen de alertas
+  const generarSlackResumen = (alertasList) => {
+    const blocks = [
+      {
+        type: 'header',
+        text: { type: 'plain_text', text: '🌱 Rootflow ERP - Resumen de Alertas' }
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `Hay *${alertasList.length} alertas pendientes* que requieren atención.` }
+      },
+      { type: 'divider' }
+    ];
+
+    // Agrupar por prioridad
+    const criticas = alertasList.filter(a => a.prioridad === 'critica');
+    const altas = alertasList.filter(a => a.prioridad === 'alta');
+    const otras = alertasList.filter(a => !['critica', 'alta'].includes(a.prioridad));
+
+    if (criticas.length > 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `🚨 *CRÍTICAS (${criticas.length})*\n` + 
+          criticas.slice(0, 5).map(a => `• *${a.titulo}*\n   _${a.mensaje}_`).join('\n') }
+      });
+    }
+
+    if (altas.length > 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `⚠️ *ALTAS (${altas.length})*\n` + 
+          altas.slice(0, 5).map(a => `• *${a.titulo}*\n   _${a.mensaje}_`).join('\n') }
+      });
+    }
+
+    if (otras.length > 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `🔔 *OTRAS (${otras.length})*\n` + 
+          otras.slice(0, 5).map(a => `• ${a.titulo}`).join('\n') }
+      });
+    }
+
+    blocks.push({
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '🔗 Ir al ERP' },
+        url: 'https://rootflow.es',
+        style: 'primary'
+      }]
+    });
+
+    return blocks;
+  };
+
   const guardarEmailConfig = (config) => {
     setEmailConfig(config);
     localStorage.setItem('rootflow_email_config', JSON.stringify(config));
@@ -2986,13 +3156,70 @@ const MainApp = () => {
   };
 
   const handleCosecharLote = async (lote) => {
+    // Buscar variedad para saber cuántos gramos cosecha cada bandeja
+    const variedad = (variedadesData || []).find(v => v.id === lote.variedad_id);
+    const gramosPorBandeja = variedad?.gramos_por_bandeja || 100;
+    const gramosTotales = (lote.bandejas || 0) * gramosPorBandeja;
+    
     // Actualizar estado del lote
     await supabase.from('lotes').update({ 
       estado: 'cosechado', 
-      fecha_cosecha_real: new Date().toISOString().split('T')[0] 
+      fecha_cosecha_real: new Date().toISOString().split('T')[0],
+      gramos_estimados: gramosTotales,
     }).eq('id', lote.id);
     
-    // REPONER STOCK: Añadir bandejas cosechadas al stock del producto
+    // REPONER STOCK: Lógica nueva basada en variedad
+    if (lote.variedad_id) {
+      // Buscar productos de esta variedad ordenados por formato_gramos (menor a mayor)
+      const productosVariedad = productos
+        .filter(p => p.variedad_id === lote.variedad_id && p.estado_inventario === 'empaquetado' && p.formato_gramos)
+        .sort((a, b) => (a.formato_gramos || 0) - (b.formato_gramos || 0));
+      
+      if (productosVariedad.length > 0) {
+        // Estrategia: distribuir gramos de forma equilibrada entre los formatos
+        // Por simplicidad, repartir proporcionalmente al stock_minimo de cada formato
+        // (puedes asignar manualmente luego desde Producción)
+        const totalMinimos = productosVariedad.reduce((s, p) => s + (p.stock_minimo || 20), 0);
+        
+        let gramosRestantes = gramosTotales;
+        const distribucion = [];
+        
+        for (let i = 0; i < productosVariedad.length; i++) {
+          const prod = productosVariedad[i];
+          const proporcion = (prod.stock_minimo || 20) / totalMinimos;
+          let gramosParaEste;
+          
+          if (i === productosVariedad.length - 1) {
+            // El último coge el resto para no perder gramos
+            gramosParaEste = gramosRestantes;
+          } else {
+            gramosParaEste = Math.floor(gramosTotales * proporcion);
+          }
+          
+          const unidades = Math.floor(gramosParaEste / prod.formato_gramos);
+          const sobranteGramos = gramosParaEste - (unidades * prod.formato_gramos);
+          
+          if (unidades > 0) {
+            const nuevoStock = (prod.stock || 0) + unidades;
+            await supabase.from('productos').update({ stock: nuevoStock }).eq('id', prod.id);
+            distribucion.push(`+${unidades} × ${prod.nombre} (${prod.formato_gramos}g)`);
+          }
+          
+          gramosRestantes -= (unidades * prod.formato_gramos);
+        }
+        
+        refetchProductos();
+        refetchLotes();
+        
+        const msg = distribucion.length > 0
+          ? `✅ Cosechados ${gramosTotales}g de ${variedad?.nombre}\n\nDistribución automática:\n${distribucion.join('\n')}\n\nPuedes ajustar manualmente desde Producción si lo necesitas.`
+          : `✅ Cosechados ${gramosTotales}g de ${variedad?.nombre}\n\n⚠️ No se pudo distribuir automáticamente (no hay formatos suficientemente pequeños).\nAjusta el stock manualmente.`;
+        alert(msg);
+        return;
+      }
+    }
+    
+    // FALLBACK: lógica antigua si no hay variedad
     const producto = productos.find(p => p.id === lote.producto_id);
     if (producto) {
       const nuevoStock = (producto.stock || 0) + (lote.bandejas || 0);
@@ -3001,14 +3228,13 @@ const MainApp = () => {
     }
     
     refetchLotes();
-    alert(`✅ Lote cosechado. Se añadieron ${lote.bandejas} unidades al stock de ${producto?.nombre}`);
+    alert(`✅ Lote cosechado. Se añadieron ${lote.bandejas} unidades al stock de ${producto?.nombre || 'producto'}\n\n💡 Para distribución automática por gramos, asigna una variedad al lote.`);
   };
 
   const handleCreatePedido = async (form) => {
     try {
       const cliente = clientes.find(c => c.id === form.cliente_id);
-      const descuento = cliente?.descuento || 0;
-      let subtotal = 0;
+      const descuento = cliente?.descuento || 0;let subtotal = 0;
       const itemsData = form.items.map(item => {
         const prod = productos.find(p => p.id === item.producto_id);
         const itemSubtotal = (prod?.precio || 0) * item.cantidad;
@@ -3055,15 +3281,79 @@ const MainApp = () => {
         });
       }
 
-      // STOCK AUTOMÁTICO: Descontar stock de productos (solo para pedidos nuevos)
+      // STOCK AUTOMÁTICO basado en ESTADO del pedido
+      // Lógica:
+      // - 'pendiente'/'confirmado'/'preparando' → RESERVA stock (informativo, no descuenta físico)
+      // - 'enviado' → DESCUENTA stock físico
+      // - 'entregado' → ya estaba descontado al "enviar"
+      // - 'cancelado' → REVIERTE stock si estaba descontado
+      const estadoDescuentaStock = (estado) => ['enviado', 'entregado'].includes(estado);
+      
       if (!editingItem) {
-        for (const item of itemsData) {
-          const prod = productos.find(p => p.id === item.producto_id);
-          if (prod) {
-            const nuevoStock = Math.max(0, (prod.stock || 0) - item.cantidad);
-            await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id);
+        // Pedido NUEVO
+        if (estadoDescuentaStock(form.estado)) {
+          // Si se crea ya como enviado/entregado, descontar stock
+          for (const item of itemsData) {
+            const prod = productos.find(p => p.id === item.producto_id);
+            if (prod) {
+              const nuevoStock = Math.max(0, (prod.stock || 0) - item.cantidad);
+              await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id);
+            }
+          }
+          refetchProductos();
+        }
+        // Si es pendiente/confirmado/preparando, NO descontar (es solo reserva)
+      } else {
+        // Pedido EDITADO: comparar estado anterior vs nuevo
+        const estadoAnterior = editingItem.estado;
+        const estadoNuevo = form.estado;
+        const descuentaAntes = estadoDescuentaStock(estadoAnterior);
+        const descuentaAhora = estadoDescuentaStock(estadoNuevo);
+        
+        // Obtener items anteriores para revertir si es necesario
+        const { data: itemsAnteriores } = await supabase
+          .from('pedido_items')
+          .select('*')
+          .eq('pedido_id', editingItem.id);
+        
+        if (descuentaAntes && !descuentaAhora) {
+          // Revertir descuento (volvió a pendiente o cancelado)
+          for (const itemAnt of (itemsAnteriores || [])) {
+            const prod = productos.find(p => p.id === itemAnt.producto_id);
+            if (prod) {
+              const nuevoStock = (prod.stock || 0) + itemAnt.cantidad;
+              await supabase.from('productos').update({ stock: nuevoStock }).eq('id', itemAnt.producto_id);
+            }
+          }
+        } else if (!descuentaAntes && descuentaAhora) {
+          // Aplicar descuento (pasó a enviado/entregado)
+          for (const item of itemsData) {
+            const prod = productos.find(p => p.id === item.producto_id);
+            if (prod) {
+              const nuevoStock = Math.max(0, (prod.stock || 0) - item.cantidad);
+              await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id);
+            }
+          }
+        } else if (descuentaAntes && descuentaAhora) {
+          // Ambos descuentan, ajustar diferencias
+          // Revertir items anteriores
+          for (const itemAnt of (itemsAnteriores || [])) {
+            const prod = productos.find(p => p.id === itemAnt.producto_id);
+            if (prod) {
+              const nuevoStock = (prod.stock || 0) + itemAnt.cantidad;
+              await supabase.from('productos').update({ stock: nuevoStock }).eq('id', itemAnt.producto_id);
+            }
+          }
+          // Aplicar items nuevos
+          for (const item of itemsData) {
+            const prod = productos.find(p => p.id === item.producto_id);
+            if (prod) {
+              const nuevoStock = Math.max(0, (prod.stock || 0) - item.cantidad);
+              await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id);
+            }
           }
         }
+        // Si ninguno descuenta, no hacer nada con stock
         refetchProductos();
       }
 
@@ -3688,6 +3978,89 @@ const MainApp = () => {
             <div className="flex justify-between text-lg font-black pt-2 border-t border-orange-200"><span>Total:</span><span className="text-orange-600">{formatCurrency(total)}</span></div>
           </div>
         </Card>
+        
+        {/* Validación de stock */}
+        {(() => {
+          const problemasStock = [];
+          form.items.forEach(item => {
+            if (!item.producto_id) return;
+            const prod = productos.find(p => p.id === item.producto_id);
+            if (!prod) return;
+            
+            // Stock ya reservado en otros pedidos pendientes
+            const reservadoOtros = pedidos
+              .filter(p => 
+                ['pendiente', 'confirmado', 'preparando'].includes(p.estado) &&
+                (!pedido || p.id !== pedido.id) // excluir el pedido actual si estamos editando
+              )
+              .reduce((sum, p) => {
+                const items = pedidoItems.filter(i => i.pedido_id === p.id && i.producto_id === item.producto_id);
+                return sum + items.reduce((s, i) => s + (i.cantidad || 0), 0);
+              }, 0);
+            
+            const stockDisponible = (prod.stock || 0) - reservadoOtros;
+            const necesita = item.cantidad || 0;
+            
+            if (necesita > stockDisponible) {
+              problemasStock.push({
+                producto: prod.nombre,
+                stock: prod.stock || 0,
+                reservado: reservadoOtros,
+                disponible: stockDisponible,
+                necesita,
+                falta: necesita - stockDisponible,
+                variedad_id: prod.variedad_id,
+              });
+            }
+          });
+          
+          if (problemasStock.length === 0) return null;
+          
+          return (
+            <Card className="p-4 bg-amber-50 border-amber-300">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
+                <div className="flex-1">
+                  <p className="font-bold text-amber-800">⚠️ Stock insuficiente</p>
+                  <div className="text-sm text-amber-700 mt-2 space-y-2">
+                    {problemasStock.map((p, idx) => {
+                      // Buscar lotes próximos a cosechar de la misma variedad
+                      const lotesProximos = p.variedad_id 
+                        ? lotes
+                            .filter(l => l.variedad_id === p.variedad_id && l.estado !== 'cosechado' && l.fecha_cosecha_prevista)
+                            .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
+                        : [];
+                      const proxima = lotesProximos[0];
+                      const dias = proxima ? Math.ceil((new Date(proxima.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24)) : null;
+                      
+                      return (
+                        <div key={idx} className="bg-white p-2 rounded border border-amber-200">
+                          <p className="font-semibold">{p.producto}</p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs mt-1">
+                            <span>📦 Stock: <strong>{p.stock}</strong></span>
+                            {p.reservado > 0 && <span>🔒 Reservado: <strong>{p.reservado}</strong></span>}
+                            <span>✅ Disponible: <strong>{p.disponible}</strong></span>
+                            <span>🛒 Pides: <strong>{p.necesita}</strong></span>
+                            <span className="text-red-700">❌ Faltan: <strong>{p.falta}</strong></span>
+                          </div>
+                          {dias !== null && (
+                            <p className="text-xs text-green-700 mt-1">
+                              🌱 Próxima cosecha en {dias <= 0 ? 'menos de 1 día' : `${dias} días`} ({formatDate(proxima.fecha_cosecha_prevista)})
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-amber-600 mt-2 italic">
+                    Puedes guardar el pedido igualmente — sale aviso, no bloquea. Considera ajustar fecha de entrega o sembrar más bandejas.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          );
+        })()}
+        
         <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{pedido ? 'Guardar' : 'Crear Pedido'}</Button></div>
       </div>
     );
@@ -5132,6 +5505,192 @@ const MainApp = () => {
     );
   };
 
+  // ==================== SLACK CONFIG FORM ====================
+  const SlackConfigForm = ({ config, onSave, onCancel, onAbrirEmail, enviarSlackTest }) => {
+    const [form, setForm] = useState({
+      activo: config.activo || false,
+      webhookUrl: config.webhookUrl || '',
+      usarEdgeFunction: config.usarEdgeFunction !== false,
+      canalDefault: config.canalDefault || '#rootflow-alertas',
+      enviarSoloCriticas: config.enviarSoloCriticas || false,
+      mencionarEnCriticas: config.mencionarEnCriticas !== false,
+    });
+    const [testStatus, setTestStatus] = useState(null);
+
+    const probarSlack = async () => {
+      setTestStatus('enviando');
+      
+      // Guardar config temporal para que enviarSlack lo use
+      const configTemporal = { ...form, activo: true };
+      localStorage.setItem('rootflow_slack_config', JSON.stringify(configTemporal));
+
+      const result = await enviarSlackTest({
+        titulo: 'Mensaje de prueba',
+        mensaje: '✅ Si ves esto, el sistema de notificaciones Slack está funcionando correctamente. A partir de ahora recibirás las alertas del ERP en este canal.',
+        prioridad: 'media',
+      });
+
+      if (result.success) {
+        setTestStatus({ success: true, message: 'Mensaje enviado a Slack. Revisa el canal.' });
+      } else {
+        setTestStatus({ success: false, message: result.error });
+      }
+    };
+
+    return (
+      <div className="space-y-4">
+        {/* Estado del sistema */}
+        <div className={`p-4 rounded-xl border ${form.activo ? 'bg-purple-50 border-purple-200' : 'bg-amber-50 border-amber-200'}`}>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={form.activo} 
+              onChange={e => setForm({...form, activo: e.target.checked})} 
+              className="w-5 h-5 rounded" 
+            />
+            <div>
+              <span className={`font-bold ${form.activo ? 'text-purple-800' : 'text-amber-800'}`}>
+                {form.activo ? '✅ Notificaciones Slack ACTIVAS' : '⚠️ Notificaciones Slack DESACTIVADAS'}
+              </span>
+              <p className={`text-xs ${form.activo ? 'text-purple-700' : 'text-amber-700'}`}>
+                Activa esta opción cuando hayas creado el webhook de Slack
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {/* Instrucciones de configuración */}
+        <details className="border border-purple-200 rounded-xl bg-purple-50">
+          <summary className="p-3 cursor-pointer font-semibold text-purple-900">
+            📋 Pasos para configurar Slack (clic para expandir)
+          </summary>
+          <div className="p-4 pt-0 text-sm text-purple-900 space-y-3">
+            <div>
+              <strong>1. Ir al espacio Slack de Rootflow</strong>
+              <p className="text-purple-700">Asegúrate de tener un canal donde quieres recibir las alertas (ej: #rootflow-alertas)</p>
+            </div>
+            <div>
+              <strong>2. Crear una App de Slack con webhook</strong>
+              <p className="text-purple-700">Ve a <a href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener noreferrer" className="underline">api.slack.com/apps</a> → "Create New App" → "From scratch"</p>
+              <p className="text-purple-700">Nombre: "Rootflow ERP" → Selecciona tu workspace</p>
+            </div>
+            <div>
+              <strong>3. Activar Incoming Webhooks</strong>
+              <p className="text-purple-700">En el menú lateral → "Incoming Webhooks" → activar el toggle</p>
+            </div>
+            <div>
+              <strong>4. Añadir webhook al canal</strong>
+              <p className="text-purple-700">Pulsar "Add New Webhook to Workspace" → seleccionar el canal → "Allow"</p>
+              <p className="text-purple-700">Copiar la URL que empieza por <code className="bg-white px-1 rounded">https://hooks.slack.com/services/...</code></p>
+            </div>
+            <div>
+              <strong>5. Configurar en Supabase (Opción A - recomendada)</strong>
+              <p className="text-purple-700">Supabase → Project Settings → Edge Functions → Add Secret:</p>
+              <code className="bg-white px-2 py-1 rounded text-xs block mt-1">SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...</code>
+              <p className="text-purple-700 mt-1">Luego desplegar: <code className="bg-white px-1 rounded">supabase functions deploy send-slack</code></p>
+              <p className="text-purple-700">Sigue las instrucciones detalladas en el archivo <code className="bg-white px-1 rounded">SUPABASE-EDGE-FUNCTION-SLACK.md</code></p>
+            </div>
+            <div>
+              <strong>6. (Opción B - rápida) Pegar URL aquí</strong>
+              <p className="text-purple-700">Si no quieres usar Edge Function, desactiva la opción de abajo y pega la URL del webhook directamente. <strong>Aviso:</strong> la URL queda visible en el navegador.</p>
+            </div>
+          </div>
+        </details>
+
+        {/* Configuración */}
+        <div className="space-y-3">
+          <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={form.usarEdgeFunction} 
+                onChange={e => setForm({...form, usarEdgeFunction: e.target.checked})} 
+                className="w-4 h-4 rounded" 
+              />
+              <div>
+                <span className="text-sm font-medium">🔒 Usar Edge Function (recomendado)</span>
+                <p className="text-xs text-neutral-500">El webhook URL se guarda como secret en Supabase, no es visible</p>
+              </div>
+            </label>
+          </div>
+
+          {!form.usarEdgeFunction && (
+            <Input 
+              label="Webhook URL de Slack" 
+              value={form.webhookUrl} 
+              onChange={e => setForm({...form, webhookUrl: e.target.value})} 
+              placeholder="https://hooks.slack.com/services/T.../B.../..."
+            />
+          )}
+          
+          <Input 
+            label="Canal por defecto (informativo)" 
+            value={form.canalDefault} 
+            onChange={e => setForm({...form, canalDefault: e.target.value})} 
+            placeholder="#rootflow-alertas"
+          />
+          <p className="text-xs text-neutral-500 -mt-2">El canal real lo determina el webhook al crearlo. Este campo es solo para identificar.</p>
+          
+          <div className="space-y-2 p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={form.enviarSoloCriticas} 
+                onChange={e => setForm({...form, enviarSoloCriticas: e.target.checked})} 
+                className="w-4 h-4 rounded" 
+              />
+              <span className="text-sm font-medium">Enviar solo alertas críticas</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={form.mencionarEnCriticas} 
+                onChange={e => setForm({...form, mencionarEnCriticas: e.target.checked})} 
+                className="w-4 h-4 rounded" 
+              />
+              <div>
+                <span className="text-sm font-medium">Mencionar @channel en alertas críticas</span>
+                <p className="text-xs text-neutral-500">Notifica a todo el canal cuando hay algo crítico</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        {/* Botón probar */}
+        <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
+          <Button 
+            onClick={probarSlack} 
+            disabled={testStatus === 'enviando' || (!form.usarEdgeFunction && !form.webhookUrl)}
+            className="w-full bg-purple-600 hover:bg-purple-700"
+          >
+            💬 {testStatus === 'enviando' ? 'Enviando...' : 'Enviar mensaje de prueba a Slack'}
+          </Button>
+          {testStatus && testStatus !== 'enviando' && (
+            <div className={`mt-2 p-2 rounded text-xs ${testStatus.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              {testStatus.success ? '✅ ' : '❌ '}{testStatus.message}
+            </div>
+          )}
+        </div>
+
+        {/* Link al sistema email */}
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm">
+          <p className="text-blue-800">
+            <Mail size={14} className="inline mr-1" />
+            ¿También quieres recibir notificaciones por email? 
+            <button onClick={onAbrirEmail} className="text-blue-600 font-semibold ml-1 hover:underline">
+              Configurar email →
+            </button>
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onSave(form)} className="bg-purple-600 hover:bg-purple-700">Guardar Configuración</Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== EMAIL CONFIG FORM ====================
   const EmailConfigForm = ({ config, onSave, onCancel, enviarEmailTest, getEmailsSociosActivos }) => {
     const [form, setForm] = useState({
@@ -6369,7 +6928,17 @@ const MainApp = () => {
       )[0];
       
       const dias = Math.ceil((new Date(proximoLote.fecha_cosecha_prevista) - new Date()) / (1000*60*60*24));
-      return { dias, fecha: proximoLote.fecha_cosecha_prevista };
+      return { dias, fecha: proximoLote.fecha_cosecha_prevista, lotes: lotesActivos.length };
+    };
+
+    // Calcular stock reservado en pedidos pendientes
+    const calcularReservado = (productoId) => {
+      return pedidos
+        .filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado))
+        .reduce((sum, p) => {
+          const items = pedidoItems.filter(i => i.pedido_id === p.id && i.producto_id === productoId);
+          return sum + items.reduce((s, i) => s + (i.cantidad || 0), 0);
+        }, 0);
     };
 
     // Agrupar productos por variedad
@@ -6494,7 +7063,10 @@ const MainApp = () => {
                                 const stockBajoFlag = p.stock < (p.stock_minimo || 20);
                                 const margen = p.precio > 0 && p.coste > 0 ? ((p.precio - p.coste) / p.precio * 100).toFixed(0) : '-';
                                 const precioKg = calcPrecioKg(p);
-                                const estimacion = stockBajoFlag ? estimarDiasStock(p) : null;
+                                const reservado = calcularReservado(p.id);
+                                const disponible = (p.stock || 0) - reservado;
+                                const stockBajoDispFlag = disponible < (p.stock_minimo || 20);
+                                const estimacion = (stockBajoFlag || stockBajoDispFlag) ? estimarDiasStock(p) : null;
                                 
                                 return (
                                   <div key={p.id} className="bg-white p-3 rounded-lg border border-neutral-200 flex items-center gap-3 flex-wrap">
@@ -6508,19 +7080,25 @@ const MainApp = () => {
                                       <p className="font-bold text-sm">{formatCurrency(p.precio)}/ud</p>
                                       {precioKg && <p className="text-xs text-blue-600 font-medium">{formatCurrency(precioKg)}/kg</p>}
                                     </div>
-                                    <div className="text-right min-w-[80px]">
+                                    <div className="text-right min-w-[120px]">
                                       <div className="flex items-center justify-end gap-2">
-                                        <div className={`w-2 h-2 rounded-full ${stockBajoFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
-                                        <span className={`text-sm font-bold ${stockBajoFlag ? 'text-red-600' : ''}`}>{p.stock}</span>
+                                        <div className={`w-2 h-2 rounded-full ${stockBajoDispFlag ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                                        <span className={`text-sm font-bold ${stockBajoDispFlag ? 'text-red-600' : ''}`}>{disponible}</span>
+                                        <span className="text-xs text-neutral-400">disp.</span>
                                       </div>
-                                      <p className="text-xs text-neutral-400">stock</p>
+                                      {reservado > 0 && (
+                                        <p className="text-xs text-blue-500">📦 {p.stock} − 🔒 {reservado}</p>
+                                      )}
+                                      {reservado === 0 && (
+                                        <p className="text-xs text-neutral-400">stock</p>
+                                      )}
                                     </div>
                                     {margen !== '-' && (
                                       <Badge variant={margen > 50 ? 'success' : margen > 30 ? 'warning' : 'danger'}>{margen}%</Badge>
                                     )}
                                     {estimacion && (
                                       <div className="bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 text-xs">
-                                        <span className="text-amber-700 font-medium">📅 Stock en {estimacion.dias}d</span>
+                                        <span className="text-amber-700 font-medium">📅 Cosecha en {estimacion.dias}d</span>
                                       </div>
                                     )}
                                     <div className="flex gap-1">
@@ -8851,6 +9429,7 @@ const MainApp = () => {
           <Modal title={editingItem?.id ? 'Editar Turno' : 'Asignar Turno'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
             <TurnoForm turno={editingItem?.id ? editingItem : null} fechaInicial={editingItem?.fecha} onSave={async (form) => {
               try {
+                const esNuevo = !editingItem?.id;
                 if (editingItem?.id) {
                   await supabase.from('turnos').update(form).eq('id', editingItem.id);
                 } else {
@@ -8859,6 +9438,19 @@ const MainApp = () => {
                 refetchTurnos();
                 setShowModal(null);
                 setEditingItem(null);
+                
+                // Enviar alerta Slack si está activado y es nuevo
+                if (esNuevo && form.enviar_alerta && slackConfig.activo) {
+                  const socio = socios.find(s => s.id === form.socio_id);
+                  if (socio) {
+                    const tiposEmoji = { riego: '💧', cosecha: '🌱', empaquetado: '📦', siembra: '🌰', reparto: '🚚', limpieza: '🧹', otros: '📌' };
+                    enviarSlack({
+                      titulo: `Nuevo turno asignado a ${socio.nombre}`,
+                      mensaje: `${tiposEmoji[form.tipo] || ''} *${form.tipo}* el ${form.fecha} a las ${form.hora || '09:00'}\n_${form.notas || 'Sin notas'}_`,
+                      prioridad: 'media',
+                    });
+                  }
+                }
               } catch (e) { alert('❌ Error: ' + e.message); }
             }} onCancel={() => { setShowModal(null); setEditingItem(null); }} />
           </Modal>
@@ -12677,7 +13269,6 @@ Firma repartidor: _________________
           alert('❌ Debes añadir al menos un producto');
           return;
         }
-        // Filtrar items inválidos (sin producto_id)
         const itemsValidos = form.items.filter(i => i.producto_id);
         if (itemsValidos.length === 0) {
           alert('❌ Debes seleccionar productos válidos');
@@ -12685,7 +13276,7 @@ Firma repartidor: _________________
         }
 
         const muestraData = {
-          lead_id: form.lead_id || null,
+          lead_id: form.lead_id ? parseInt(form.lead_id) : null,
           nombre_contacto: form.nombre_contacto.trim(),
           empresa: form.empresa || '',
           telefono: form.telefono || '',
@@ -12698,6 +13289,8 @@ Firma repartidor: _________________
           tipo_negocio: form.tipo_negocio || 'restaurante',
         };
 
+        console.log('📤 Enviando datos a muestras:', muestraData);
+
         const { data: nuevaMuestra, error } = await supabase
           .from('muestras')
           .insert(muestraData)
@@ -12705,32 +13298,64 @@ Firma repartidor: _________________
           .single();
 
         if (error) {
-          // Detectar errores comunes y dar mensajes claros
-          if (error.message?.includes('does not exist') || error.code === '42P01') {
-            alert('❌ La tabla "muestras" no existe en la base de datos.\n\nEjecuta el SQL ROOTFLOW-SQL-V17.sql en Supabase.');
-          } else if (error.message?.includes('column')) {
-            alert('❌ Error de columna en BD: ' + error.message + '\n\nProbablemente falta ejecutar SQL.');
+          console.error('❌ Error completo Supabase:', error);
+          
+          // Diagnóstico detallado y específico
+          let mensaje = `❌ Error al crear muestra\n\n`;
+          mensaje += `📋 Mensaje: ${error.message || 'Sin mensaje'}\n`;
+          if (error.code) mensaje += `🔢 Código: ${error.code}\n`;
+          if (error.details) mensaje += `🔍 Detalles: ${error.details}\n`;
+          if (error.hint) mensaje += `💡 Pista: ${error.hint}\n`;
+          mensaje += `\n`;
+          
+          // Sugerencias específicas según el código de error
+          if (error.code === '42P01' || error.message?.includes('does not exist')) {
+            mensaje += `🛠️ SOLUCIÓN: La tabla "muestras" no existe.\n`;
+            mensaje += `Ve a Supabase → SQL Editor y ejecuta:\n`;
+            mensaje += `• ROOTFLOW-SQL-V21-FIXES.sql\n`;
+            mensaje += `(Este SQL crea la tabla muestras si no existe)`;
+          } else if (error.code === '42703' || error.message?.includes('column')) {
+            mensaje += `🛠️ SOLUCIÓN: Falta una columna en la tabla "muestras".\n`;
+            mensaje += `Ejecuta ROOTFLOW-SQL-V21-FIXES.sql en Supabase.\n`;
+            mensaje += `Columnas necesarias: lead_id, nombre_contacto, empresa, telefono, email,\n`;
+            mensaje += `direccion, tipo_negocio, fecha_entrega, fecha_siguiente, estado, notas`;
+          } else if (error.code === '42501' || error.message?.includes('policy') || error.message?.includes('permission')) {
+            mensaje += `🛠️ SOLUCIÓN: Sin permisos (RLS).\n`;
+            mensaje += `En Supabase → Authentication → Policies, asegúrate de que "muestras" tiene política activa.\n`;
+            mensaje += `O ejecuta ROOTFLOW-SQL-V21-FIXES.sql que crea las políticas.`;
+          } else if (error.code === '23502') {
+            mensaje += `🛠️ SOLUCIÓN: Falta un valor obligatorio.\n`;
+            mensaje += `Revisa qué campo falta según el mensaje arriba.`;
+          } else if (error.code === '23503') {
+            mensaje += `🛠️ SOLUCIÓN: Hay una referencia inválida (lead_id o producto_id).\n`;
+            mensaje += `Probablemente el lead seleccionado no existe.`;
           } else {
-            alert('❌ Error al crear muestra: ' + error.message);
+            mensaje += `🛠️ SOLUCIÓN: Copia este mensaje completo y compártelo.\n`;
+            mensaje += `También revisa la consola del navegador (F12 → Console) para más detalles.`;
           }
-          console.error('Error muestra:', error);
+          
+          alert(mensaje);
           return;
         }
+
+        console.log('✅ Muestra creada:', nuevaMuestra);
 
         // Insertar items de muestra
         const itemsInsert = itemsValidos.map(item => ({
           muestra_id: nuevaMuestra.id,
-          producto_id: item.producto_id,
-          cantidad: item.cantidad || 1,
+          producto_id: parseInt(item.producto_id),
+          cantidad: parseInt(item.cantidad) || 1,
         }));
+
+        console.log('📤 Enviando items:', itemsInsert);
 
         const { error: itemsError } = await supabase
           .from('muestra_items')
           .insert(itemsInsert);
 
         if (itemsError) {
-          alert('⚠️ Muestra creada pero error en items: ' + itemsError.message);
-          console.error('Error items:', itemsError);
+          console.error('❌ Error items:', itemsError);
+          alert(`⚠️ Muestra creada pero hubo error en los productos:\n\n${itemsError.message}\n\nCódigo: ${itemsError.code || 'N/A'}\n\nLa muestra existe pero sin productos. Edítala para añadirlos.`);
         }
 
         refetchMuestras();
@@ -12738,8 +13363,8 @@ Firma repartidor: _________________
         setShowModal(null);
         alert('✅ Muestra programada correctamente');
       } catch (error) {
-        console.error('Error general:', error);
-        alert('❌ Error: ' + (error.message || String(error)));
+        console.error('❌ Error general:', error);
+        alert(`❌ Error inesperado:\n\n${error.message || String(error)}\n\nAbre la consola del navegador (F12) para más detalles.`);
       }
     };
 
@@ -13096,9 +13721,9 @@ Firma repartidor: _________________
                         </div>
                         <div className="flex items-center gap-1">
                           <button 
-                            onClick={() => { setShowAlertasPanel(false); setShowModal('emailConfig'); }} 
+                            onClick={() => { setShowAlertasPanel(false); setShowModal('slackConfig'); }} 
                             className={`p-2 rounded-lg ${darkMode ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-neutral-100 text-neutral-500'}`}
-                            title="Configurar emails"
+                            title="Configurar notificaciones (Slack/Email)"
                           >
                             <Settings size={18} />
                           </button>
@@ -13108,53 +13733,89 @@ Firma repartidor: _________________
                         </div>
                       </div>
                       
-                      {/* Botón notificar a todos */}
+                      {/* Botón notificar a todos por SLACK */}
                       {alertas.length > 0 && (
-                        <div className={`p-3 border-b ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-blue-50'} flex-shrink-0`}>
-                          {!emailConfig.activo ? (
+                        <div className={`p-3 border-b ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-purple-50'} flex-shrink-0 space-y-2`}>
+                          {!slackConfig.activo && !emailConfig.activo ? (
                             <div className="flex items-center gap-2 text-xs">
                               <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
                               <span className={darkMode ? 'text-neutral-300' : 'text-neutral-700'}>
-                                Sistema email desactivado. 
-                                <button onClick={() => { setShowAlertasPanel(false); setShowModal('emailConfig'); }} className="text-orange-600 font-semibold ml-1 hover:underline">
-                                  Configurar
+                                No hay notificaciones configuradas. 
+                                <button onClick={() => { setShowAlertasPanel(false); setShowModal('slackConfig'); }} className="text-purple-600 font-semibold ml-1 hover:underline">
+                                  Configurar Slack
                                 </button>
                               </span>
                             </div>
                           ) : (
-                            <Button 
-                              size="sm" 
-                              className="w-full"
-                              onClick={async () => {
-                                const emails = getEmailsSociosActivos();
-                                if (emails.length === 0) {
-                                  alert('⚠️ No hay socios con email configurado y notificaciones activas.');
-                                  return;
-                                }
-                                const alertasFiltradas = emailConfig.enviarSoloCriticas 
-                                  ? alertas.filter(a => a.prioridad === 'critica')
-                                  : alertas;
-                                if (alertasFiltradas.length === 0) {
-                                  alert('No hay alertas que enviar (filtro: solo críticas).');
-                                  return;
-                                }
-                                if (!confirm(`¿Enviar resumen de ${alertasFiltradas.length} alertas a ${emails.length} socio(s)?`)) return;
-                                
-                                const result = await enviarEmail({
-                                  to: emails,
-                                  subject: `🚨 Rootflow ERP - ${alertasFiltradas.length} alertas pendientes`,
-                                  html: generarHtmlResumen(alertasFiltradas),
-                                });
-                                
-                                if (result.success) {
-                                  alert(`✅ Email enviado a ${emails.length} socio(s)`);
-                                } else {
-                                  alert(`❌ Error: ${result.error}`);
-                                }
-                              }}
-                            >
-                              <Mail size={14} /> Notificar a socios por email
-                            </Button>
+                            <>
+                              {slackConfig.activo && (
+                                <Button 
+                                  size="sm" 
+                                  className="w-full bg-purple-600 hover:bg-purple-700"
+                                  onClick={async () => {
+                                    const alertasFiltradas = slackConfig.enviarSoloCriticas 
+                                      ? alertas.filter(a => a.prioridad === 'critica')
+                                      : alertas;
+                                    if (alertasFiltradas.length === 0) {
+                                      alert('No hay alertas que enviar (filtro: solo críticas).');
+                                      return;
+                                    }
+                                    if (!confirm(`¿Enviar resumen de ${alertasFiltradas.length} alertas a Slack?`)) return;
+                                    
+                                    const result = await enviarSlack({
+                                      titulo: `${alertasFiltradas.length} alertas pendientes`,
+                                      mensaje: 'Resumen de alertas del ERP',
+                                      prioridad: alertasFiltradas.some(a => a.prioridad === 'critica') ? 'critica' : 'alta',
+                                      blocks: generarSlackResumen(alertasFiltradas),
+                                    });
+                                    
+                                    if (result.success) {
+                                      alert(`✅ Enviado a Slack`);
+                                    } else {
+                                      alert(`❌ Error: ${result.error}`);
+                                    }
+                                  }}
+                                >
+                                  💬 Enviar a Slack
+                                </Button>
+                              )}
+                              {emailConfig.activo && (
+                                <Button 
+                                  size="sm" 
+                                  variant="secondary"
+                                  className="w-full"
+                                  onClick={async () => {
+                                    const emails = getEmailsSociosActivos();
+                                    if (emails.length === 0) {
+                                      alert('⚠️ No hay socios con email configurado.');
+                                      return;
+                                    }
+                                    const alertasFiltradas = emailConfig.enviarSoloCriticas 
+                                      ? alertas.filter(a => a.prioridad === 'critica')
+                                      : alertas;
+                                    if (alertasFiltradas.length === 0) {
+                                      alert('No hay alertas que enviar (filtro: solo críticas).');
+                                      return;
+                                    }
+                                    if (!confirm(`¿Enviar resumen de ${alertasFiltradas.length} alertas a ${emails.length} socio(s) por email?`)) return;
+                                    
+                                    const result = await enviarEmail({
+                                      to: emails,
+                                      subject: `🚨 Rootflow ERP - ${alertasFiltradas.length} alertas pendientes`,
+                                      html: generarHtmlResumen(alertasFiltradas),
+                                    });
+                                    
+                                    if (result.success) {
+                                      alert(`✅ Email enviado`);
+                                    } else {
+                                      alert(`❌ Error: ${result.error}`);
+                                    }
+                                  }}
+                                >
+                                  <Mail size={14} /> También por email
+                                </Button>
+                              )}
+                            </>
                           )}
                         </div>
                       )}
@@ -13192,33 +13853,51 @@ Firma repartidor: _________________
                                 }`}>
                                   {alerta.prioridad}
                                 </span>
-                                {emailConfig.activo && (
-                                  <button
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      const emails = getEmailsSociosActivos();
-                                      if (emails.length === 0) {
-                                        alert('⚠️ No hay socios con email configurado.');
-                                        return;
-                                      }
-                                      const result = await enviarEmail({
-                                        to: emails,
-                                        subject: `🌱 ${alerta.titulo}`,
-                                        html: generarHtmlAlerta(alerta),
-                                        alertaId: alerta.id,
-                                      });
-                                      if (result.success) {
-                                        alert(`✅ Enviado a ${emails.length} socio(s)`);
-                                      } else {
-                                        alert(`❌ ${result.error}`);
-                                      }
-                                    }}
-                                    className="p-1 text-blue-500 hover:bg-blue-50 rounded"
-                                    title="Enviar por email"
-                                  >
-                                    <Mail size={12} />
-                                  </button>
-                                )}
+                                <div className="flex gap-1">
+                                  {slackConfig.activo && (
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const result = await enviarSlack({
+                                          titulo: alerta.titulo,
+                                          mensaje: alerta.mensaje,
+                                          prioridad: alerta.prioridad,
+                                          alertaId: alerta.id,
+                                        });
+                                        if (result.success) alert(`✅ Enviado a Slack`);
+                                        else alert(`❌ ${result.error}`);
+                                      }}
+                                      className="p-1 text-purple-600 hover:bg-purple-50 rounded"
+                                      title="Enviar a Slack"
+                                    >
+                                      💬
+                                    </button>
+                                  )}
+                                  {emailConfig.activo && (
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const emails = getEmailsSociosActivos();
+                                        if (emails.length === 0) {
+                                          alert('⚠️ No hay socios con email configurado.');
+                                          return;
+                                        }
+                                        const result = await enviarEmail({
+                                          to: emails,
+                                          subject: `🌱 ${alerta.titulo}`,
+                                          html: generarHtmlAlerta(alerta),
+                                          alertaId: alerta.id,
+                                        });
+                                        if (result.success) alert(`✅ Enviado a ${emails.length} socio(s)`);
+                                        else alert(`❌ ${result.error}`);
+                                      }}
+                                      className="p-1 text-blue-500 hover:bg-blue-50 rounded"
+                                      title="Enviar por email"
+                                    >
+                                      <Mail size={12} />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           ))
@@ -13403,6 +14082,15 @@ Firma repartidor: _________________
           onCancel={() => setShowModal(null)}
           enviarEmailTest={enviarEmail}
           getEmailsSociosActivos={getEmailsSociosActivos}
+        />
+      </Modal>}
+      {showModal === 'slackConfig' && <Modal title="Configurar Notificaciones (Slack)" onClose={() => setShowModal(null)} size="max-w-2xl">
+        <SlackConfigForm 
+          config={slackConfig} 
+          onSave={(c) => { guardarSlackConfig(c); setShowModal(null); }} 
+          onCancel={() => setShowModal(null)}
+          onAbrirEmail={() => { setShowModal('emailConfig'); }}
+          enviarSlackTest={enviarSlack}
         />
       </Modal>}
     </div>
