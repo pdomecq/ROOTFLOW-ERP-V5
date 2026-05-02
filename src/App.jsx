@@ -1568,6 +1568,8 @@ const MainApp = () => {
   const { data: variedadesData, refetch: refetchVariedades } = useRealtime('variedades');
   // V23 - Ausencias de socios
   const { data: ausenciasSociosData, refetch: refetchAusenciasSocios } = useRealtime('ausencias_socios');
+  // V25 - Movimientos de stock (auditoría)
+  const { data: movimientosStockData, refetch: refetchMovimientosStock } = useRealtime('movimientos_stock');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1625,6 +1627,8 @@ const MainApp = () => {
   const variedades = variedadesData || [];
   // V23 - Ausencias
   const ausenciasSocios = ausenciasSociosData || [];
+  // V25 - Movimientos stock
+  const movimientosStock = movimientosStockData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -3155,6 +3159,69 @@ const MainApp = () => {
     refetchLotes();
   };
 
+  // ==================== HELPER: REGISTRAR MOVIMIENTO DE STOCK ====================
+  const registrarMovimientoStock = async ({
+    producto_id = null,
+    variedad_id = null,
+    tipo, // 'entrada_cosecha', 'salida_pedido', 'devolucion_pedido', 'empaquetado_in', 'empaquetado_out', 'merma', 'ajuste_manual'
+    cantidad,
+    gramos = null,
+    pedido_id = null,
+    lote_id = null,
+    stock_anterior = null,
+    stock_nuevo = null,
+    notas = '',
+  }) => {
+    try {
+      await supabase.from('movimientos_stock').insert({
+        producto_id,
+        variedad_id,
+        tipo,
+        cantidad,
+        gramos,
+        pedido_id,
+        lote_id,
+        stock_anterior,
+        stock_nuevo,
+        notas,
+        usuario: 'sistema', // se podría sustituir por el usuario logueado si lo hay
+      });
+      // No hacemos refetch aquí para no penalizar el flujo principal
+    } catch (e) {
+      console.error('Error registrando movimiento stock:', e);
+    }
+  };
+
+  // ==================== HELPER: ACTUALIZAR STOCK CON LOG ====================
+  const actualizarStockConLog = async ({
+    producto_id,
+    delta, // positivo o negativo
+    tipo,
+    pedido_id = null,
+    lote_id = null,
+    notas = '',
+  }) => {
+    const prod = productos.find(p => p.id === producto_id);
+    if (!prod) return;
+    
+    const stockAnterior = prod.stock || 0;
+    const stockNuevo = Math.max(0, stockAnterior + delta);
+    
+    await supabase.from('productos').update({ stock: stockNuevo }).eq('id', producto_id);
+    
+    await registrarMovimientoStock({
+      producto_id,
+      variedad_id: prod.variedad_id,
+      tipo,
+      cantidad: delta,
+      pedido_id,
+      lote_id,
+      stock_anterior: stockAnterior,
+      stock_nuevo: stockNuevo,
+      notas,
+    });
+  };
+
   const handleCosecharLote = async (lote) => {
     // Buscar variedad para saber cuántos gramos cosecha cada bandeja
     const variedad = (variedadesData || []).find(v => v.id === lote.variedad_id);
@@ -3168,52 +3235,73 @@ const MainApp = () => {
       gramos_estimados: gramosTotales,
     }).eq('id', lote.id);
     
-    // REPONER STOCK: Lógica nueva basada en variedad
-    if (lote.variedad_id) {
-      // Buscar productos de esta variedad ordenados por formato_gramos (menor a mayor)
-      const productosVariedad = productos
-        .filter(p => p.variedad_id === lote.variedad_id && p.estado_inventario === 'empaquetado' && p.formato_gramos)
-        .sort((a, b) => (a.formato_gramos || 0) - (b.formato_gramos || 0));
+    if (lote.variedad_id && variedad) {
+      // Buscar o crear producto "granel" de esta variedad
+      let granelProd = productos.find(p => 
+        p.variedad_id === lote.variedad_id && 
+        p.estado_inventario === 'listo_sin_empaquetar'
+      );
       
-      if (productosVariedad.length > 0) {
-        // Estrategia: distribuir gramos de forma equilibrada entre los formatos
-        // Por simplicidad, repartir proporcionalmente al stock_minimo de cada formato
-        // (puedes asignar manualmente luego desde Producción)
-        const totalMinimos = productosVariedad.reduce((s, p) => s + (p.stock_minimo || 20), 0);
-        
-        let gramosRestantes = gramosTotales;
-        const distribucion = [];
-        
-        for (let i = 0; i < productosVariedad.length; i++) {
-          const prod = productosVariedad[i];
-          const proporcion = (prod.stock_minimo || 20) / totalMinimos;
-          let gramosParaEste;
-          
-          if (i === productosVariedad.length - 1) {
-            // El último coge el resto para no perder gramos
-            gramosParaEste = gramosRestantes;
-          } else {
-            gramosParaEste = Math.floor(gramosTotales * proporcion);
-          }
-          
-          const unidades = Math.floor(gramosParaEste / prod.formato_gramos);
-          const sobranteGramos = gramosParaEste - (unidades * prod.formato_gramos);
-          
-          if (unidades > 0) {
-            const nuevoStock = (prod.stock || 0) + unidades;
-            await supabase.from('productos').update({ stock: nuevoStock }).eq('id', prod.id);
-            distribucion.push(`+${unidades} × ${prod.nombre} (${prod.formato_gramos}g)`);
-          }
-          
-          gramosRestantes -= (unidades * prod.formato_gramos);
+      if (!granelProd) {
+        // Crear producto granel automáticamente
+        const { data: nuevoProd, error } = await supabase.from('productos').insert({
+          nombre: `${variedad.nombre} (granel cosechado)`,
+          categoria: variedad.categoria || 'nutritivos',
+          variedad_id: lote.variedad_id,
+          formato_gramos: null,
+          estado_inventario: 'listo_sin_empaquetar',
+          unidad: 'g',
+          precio: variedad.precio_kg_referencia ? variedad.precio_kg_referencia / 1000 : 0.10,
+          coste: 0,
+          stock: 0,
+          gramos_disponibles: 0,
+          stock_minimo: 0,
+          dias_crecimiento: variedad.dias_crecimiento || 10,
+        }).select().single();
+        if (error) {
+          console.error('Error creando producto granel:', error);
+        } else {
+          granelProd = nuevoProd;
         }
+      }
+      
+      if (granelProd) {
+        // Sumar gramos al granel
+        const gramosAnteriores = granelProd.gramos_disponibles || 0;
+        const gramosNuevos = gramosAnteriores + gramosTotales;
+        
+        await supabase.from('productos').update({ 
+          gramos_disponibles: gramosNuevos,
+          stock: gramosNuevos, // mantener stock sincronizado para los a granel
+        }).eq('id', granelProd.id);
+        
+        // Registrar movimiento
+        await registrarMovimientoStock({
+          producto_id: granelProd.id,
+          variedad_id: lote.variedad_id,
+          tipo: 'entrada_cosecha',
+          cantidad: gramosTotales,
+          gramos: gramosTotales,
+          lote_id: lote.id,
+          stock_anterior: gramosAnteriores,
+          stock_nuevo: gramosNuevos,
+          notas: `Cosecha de ${lote.bandejas} bandejas × ${gramosPorBandeja}g/bandeja`,
+        });
         
         refetchProductos();
         refetchLotes();
+        refetchMovimientosStock();
         
-        const msg = distribucion.length > 0
-          ? `✅ Cosechados ${gramosTotales}g de ${variedad?.nombre}\n\nDistribución automática:\n${distribucion.join('\n')}\n\nPuedes ajustar manualmente desde Producción si lo necesitas.`
-          : `✅ Cosechados ${gramosTotales}g de ${variedad?.nombre}\n\n⚠️ No se pudo distribuir automáticamente (no hay formatos suficientemente pequeños).\nAjusta el stock manualmente.`;
+        // Sugerir empaquetado si hay formatos de esa variedad
+        const formatosEmpaquetados = productos.filter(p => 
+          p.variedad_id === lote.variedad_id && 
+          p.estado_inventario === 'empaquetado' &&
+          p.formato_gramos
+        );
+        
+        const msg = formatosEmpaquetados.length > 0
+          ? `✅ Cosechados ${gramosTotales}g de ${variedad.nombre}\n\n📦 Total a granel: ${gramosNuevos}g\n\n💡 Ve a Producción → Empaquetado para convertir el granel en formatos empaquetados (${formatosEmpaquetados.length} formatos disponibles).`
+          : `✅ Cosechados ${gramosTotales}g de ${variedad.nombre}\n\n📦 Total a granel: ${gramosNuevos}g\n\n💡 Crea formatos empaquetados (15g, 30g, etc.) en Productos para poder empaquetar.`;
         alert(msg);
         return;
       }
@@ -3222,19 +3310,91 @@ const MainApp = () => {
     // FALLBACK: lógica antigua si no hay variedad
     const producto = productos.find(p => p.id === lote.producto_id);
     if (producto) {
-      const nuevoStock = (producto.stock || 0) + (lote.bandejas || 0);
-      await supabase.from('productos').update({ stock: nuevoStock }).eq('id', lote.producto_id);
+      const stockAnterior = producto.stock || 0;
+      const stockNuevo = stockAnterior + (lote.bandejas || 0);
+      await supabase.from('productos').update({ stock: stockNuevo }).eq('id', lote.producto_id);
+      await registrarMovimientoStock({
+        producto_id: lote.producto_id,
+        variedad_id: producto.variedad_id,
+        tipo: 'entrada_cosecha',
+        cantidad: lote.bandejas || 0,
+        lote_id: lote.id,
+        stock_anterior: stockAnterior,
+        stock_nuevo: stockNuevo,
+        notas: 'Cosecha (sin variedad)',
+      });
       refetchProductos();
     }
     
     refetchLotes();
+    refetchMovimientosStock();
     alert(`✅ Lote cosechado. Se añadieron ${lote.bandejas} unidades al stock de ${producto?.nombre || 'producto'}\n\n💡 Para distribución automática por gramos, asigna una variedad al lote.`);
+  };
+
+  // ==================== EMPAQUETAR (granel → empaquetado) ====================
+  const handleEmpaquetar = async ({ granelProd, formatoProd, unidades }) => {
+    if (!granelProd || !formatoProd || !unidades || unidades <= 0) {
+      alert('❌ Datos incompletos para empaquetar');
+      return;
+    }
+    
+    const gramosNecesarios = unidades * (formatoProd.formato_gramos || 0);
+    const gramosDisponibles = granelProd.gramos_disponibles || granelProd.stock || 0;
+    
+    if (gramosNecesarios > gramosDisponibles) {
+      alert(`❌ No hay suficiente granel\n\nNecesitas: ${gramosNecesarios}g\nDisponible: ${gramosDisponibles}g\nFaltan: ${gramosNecesarios - gramosDisponibles}g`);
+      return;
+    }
+    
+    try {
+      // Restar gramos del granel
+      const granelAnterior = gramosDisponibles;
+      const granelNuevo = gramosDisponibles - gramosNecesarios;
+      await supabase.from('productos').update({ 
+        gramos_disponibles: granelNuevo,
+        stock: granelNuevo,
+      }).eq('id', granelProd.id);
+      
+      await registrarMovimientoStock({
+        producto_id: granelProd.id,
+        variedad_id: granelProd.variedad_id,
+        tipo: 'empaquetado_out',
+        cantidad: -gramosNecesarios,
+        gramos: -gramosNecesarios,
+        stock_anterior: granelAnterior,
+        stock_nuevo: granelNuevo,
+        notas: `Empaquetado: ${unidades} × ${formatoProd.nombre}`,
+      });
+      
+      // Sumar unidades al formato empaquetado
+      const formatoAnterior = formatoProd.stock || 0;
+      const formatoNuevo = formatoAnterior + unidades;
+      await supabase.from('productos').update({ stock: formatoNuevo }).eq('id', formatoProd.id);
+      
+      await registrarMovimientoStock({
+        producto_id: formatoProd.id,
+        variedad_id: formatoProd.variedad_id,
+        tipo: 'empaquetado_in',
+        cantidad: unidades,
+        stock_anterior: formatoAnterior,
+        stock_nuevo: formatoNuevo,
+        notas: `Empaquetado desde granel: ${gramosNecesarios}g`,
+      });
+      
+      refetchProductos();
+      refetchMovimientosStock();
+      alert(`✅ Empaquetado correctamente\n\n+${unidades} × ${formatoProd.nombre}\n−${gramosNecesarios}g del granel (quedan ${granelNuevo}g)`);
+    } catch (e) {
+      console.error('Error empaquetando:', e);
+      alert('❌ Error al empaquetar: ' + e.message);
+    }
   };
 
   const handleCreatePedido = async (form) => {
     try {
       const cliente = clientes.find(c => c.id === form.cliente_id);
-      const descuento = cliente?.descuento || 0;let subtotal = 0;
+      const descuento = cliente?.descuento || 0;
+      let subtotal = 0;
       const itemsData = form.items.map(item => {
         const prod = productos.find(p => p.id === item.producto_id);
         const itemSubtotal = (prod?.precio || 0) * item.cantidad;
@@ -3752,6 +3912,52 @@ const MainApp = () => {
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{producto ? 'Guardar' : 'Crear'}</Button>
         </div>
+      </div>
+    );
+  };
+
+  // ==================== FORMATO EMPAQUETAR (componente auxiliar) ====================
+  const FormatoEmpaquetar = ({ granelProd, formatoProd, maxUnidades, handleEmpaquetar }) => {
+    const [unidades, setUnidades] = useState(maxUnidades > 0 ? Math.min(10, maxUnidades) : 0);
+    const gramosNec = unidades * (formatoProd.formato_gramos || 0);
+    const stockActual = formatoProd.stock || 0;
+    
+    if (maxUnidades === 0) {
+      return (
+        <div className="p-2 bg-neutral-50 rounded-lg flex items-center justify-between text-sm text-neutral-400">
+          <span>{formatoProd.formato_gramos}g (stock: {stockActual})</span>
+          <span className="text-xs">Granel insuficiente</span>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="p-2 bg-neutral-50 rounded-lg flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-semibold flex-1 min-w-[80px]">{formatoProd.formato_gramos}g</span>
+        <span className="text-xs text-neutral-500">stock: {stockActual}</span>
+        <input 
+          type="number" 
+          value={unidades} 
+          onChange={e => setUnidades(Math.min(maxUnidades, Math.max(0, parseInt(e.target.value) || 0)))}
+          min="0"
+          max={maxUnidades}
+          className="w-16 px-2 py-1 rounded border text-sm text-center"
+        />
+        <span className="text-xs text-neutral-500 min-w-[70px]">= {gramosNec}g</span>
+        <Button 
+          size="sm"
+          disabled={unidades <= 0 || unidades > maxUnidades}
+          onClick={() => handleEmpaquetar({ granelProd, formatoProd, unidades })}
+        >
+          Empaquetar
+        </Button>
+        <button 
+          onClick={() => setUnidades(maxUnidades)}
+          className="text-xs text-blue-600 hover:underline"
+          title="Empaquetar máximo posible"
+        >
+          máx ({maxUnidades})
+        </button>
       </div>
     );
   };
@@ -8532,6 +8738,18 @@ const MainApp = () => {
             <FileText size={18} />Etiquetas
           </button>
           <button 
+            onClick={() => setProduccionTab('empaquetado')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'empaquetado' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Package size={18} />Empaquetado
+            {(() => {
+              const totalGranel = productos
+                .filter(p => p.estado_inventario === 'listo_sin_empaquetar')
+                .reduce((s, p) => s + (p.gramos_disponibles || p.stock || 0), 0);
+              return totalGranel > 0 ? <span className={`text-xs px-2 py-0.5 rounded-full ${produccionTab === 'empaquetado' ? 'bg-white/20' : 'bg-green-500 text-white'}`}>{(totalGranel/1000).toFixed(1)}kg</span> : null;
+            })()}
+          </button>
+          <button 
             onClick={() => setProduccionTab('planificacion')} 
             className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'planificacion' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
           >
@@ -8768,6 +8986,130 @@ const MainApp = () => {
                 <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Cosecha un lote para poder generar etiquetas</p>
               </Card>
             )}
+          </div>
+        )}
+
+        {produccionTab === 'empaquetado' && (
+          <div className="space-y-4">
+            {(() => {
+              // Listar todos los granel disponibles (estado listo_sin_empaquetar con gramos > 0)
+              const granelesDisponibles = productos.filter(p => 
+                p.estado_inventario === 'listo_sin_empaquetar' && 
+                (p.gramos_disponibles || p.stock || 0) > 0
+              );
+              
+              if (granelesDisponibles.length === 0) {
+                return (
+                  <Card className="p-8 text-center">
+                    <Package size={48} className="mx-auto text-neutral-300 mb-4" />
+                    <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay granel disponible</h3>
+                    <p className="text-sm text-neutral-500 mb-4">Cuando coseches un lote, el granel aparecerá aquí listo para empaquetar.</p>
+                  </Card>
+                );
+              }
+              
+              return (
+                <>
+                  <Card className="p-4 bg-blue-50 border-blue-200">
+                    <p className="text-sm text-blue-800">
+                      <strong>📦 Cómo funciona:</strong> Aquí ves el producto cosechado a granel (en gramos) y puedes convertirlo en formatos empaquetados (15g, 30g, 100g, etc.). 
+                      Al empaquetar, los gramos se restan del granel y se añaden unidades al formato elegido.
+                    </p>
+                  </Card>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {granelesDisponibles.map(granelProd => {
+                      const variedad = variedades.find(v => v.id === granelProd.variedad_id);
+                      const gramosDisp = granelProd.gramos_disponibles || granelProd.stock || 0;
+                      // Buscar formatos empaquetados de esta variedad
+                      const formatos = productos.filter(p => 
+                        p.variedad_id === granelProd.variedad_id && 
+                        p.estado_inventario === 'empaquetado' && 
+                        p.formato_gramos
+                      ).sort((a, b) => (a.formato_gramos || 0) - (b.formato_gramos || 0));
+                      
+                      return (
+                        <Card key={granelProd.id} className="p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <h3 className="font-bold text-neutral-900">{variedad?.nombre || granelProd.nombre}</h3>
+                              <p className="text-xs text-neutral-500">a granel cosechado</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-2xl font-black text-green-600">{gramosDisp}g</p>
+                              <p className="text-xs text-neutral-500">{(gramosDisp/1000).toFixed(2)}kg</p>
+                            </div>
+                          </div>
+                          
+                          {formatos.length === 0 ? (
+                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                              <p className="text-sm text-amber-700">
+                                ⚠️ No hay formatos empaquetados para esta variedad. 
+                                <button onClick={() => { setEditingItem({ variedad_id: granelProd.variedad_id, estado_inventario: 'empaquetado' }); setShowModal('producto'); }} className="text-orange-600 font-semibold ml-1 hover:underline">
+                                  Crear formato →
+                                </button>
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-neutral-700">Empaquetar a:</p>
+                              {formatos.map(formato => {
+                                const maxUnidades = Math.floor(gramosDisp / (formato.formato_gramos || 1));
+                                return (
+                                  <FormatoEmpaquetar 
+                                    key={formato.id}
+                                    granelProd={granelProd}
+                                    formatoProd={formato}
+                                    maxUnidades={maxUnidades}
+                                    handleEmpaquetar={handleEmpaquetar}
+                                  />
+                                );
+                              })}
+                            </div>
+                          )}
+                          
+                          {/* Acciones extra */}
+                          <div className="flex gap-2 mt-3 pt-3 border-t border-neutral-100">
+                            <button 
+                              onClick={async () => {
+                                const cantidad = prompt(`¿Cuántos gramos quieres registrar como merma?\n\nDisponible: ${gramosDisp}g`);
+                                if (!cantidad) return;
+                                const gramos = parseInt(cantidad);
+                                if (isNaN(gramos) || gramos <= 0 || gramos > gramosDisp) {
+                                  alert('❌ Cantidad inválida');
+                                  return;
+                                }
+                                const nuevoGranel = gramosDisp - gramos;
+                                await supabase.from('productos').update({ 
+                                  gramos_disponibles: nuevoGranel,
+                                  stock: nuevoGranel,
+                                }).eq('id', granelProd.id);
+                                await registrarMovimientoStock({
+                                  producto_id: granelProd.id,
+                                  variedad_id: granelProd.variedad_id,
+                                  tipo: 'merma',
+                                  cantidad: -gramos,
+                                  gramos: -gramos,
+                                  stock_anterior: gramosDisp,
+                                  stock_nuevo: nuevoGranel,
+                                  notas: 'Merma manual desde empaquetado',
+                                });
+                                refetchProductos();
+                                refetchMovimientosStock();
+                                alert(`✅ Registrados ${gramos}g como merma`);
+                              }}
+                              className="text-xs text-red-600 hover:text-red-800 font-medium"
+                            >
+                              🗑️ Registrar merma
+                            </button>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
