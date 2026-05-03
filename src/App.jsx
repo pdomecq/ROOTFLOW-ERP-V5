@@ -9763,7 +9763,7 @@ const MainApp = () => {
             </div>
           </>
         ) : (
-          /* === VISTA TURNOS === */
+          /* === VISTA TURNOS REDISEÑADA === */
           <>
             {socios.length === 0 ? (
               <Card className="p-8 text-center">
@@ -9772,409 +9772,725 @@ const MainApp = () => {
                 <p className="text-sm text-neutral-500 mb-4">Crea los socios primero para poder asignar turnos</p>
                 <Button onClick={() => setShowModal('socio')}><UserPlus size={18} />Añadir Socio</Button>
               </Card>
-            ) : (
-              <>
-                {/* Stats por socio - clickable para filtrar */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wide">
-                      {calendarioSocioFiltro 
-                        ? `Filtrando turnos de: ${socios.find(s => s.id === calendarioSocioFiltro)?.nombre}`
-                        : 'Vista de todos los socios (clic en una card para filtrar)'}
-                    </p>
-                    {calendarioSocioFiltro && (
-                      <button onClick={() => setCalendarioSocioFiltro(null)} className="text-xs text-orange-600 font-medium hover:underline">
-                        ✕ Quitar filtro
-                      </button>
-                    )}
-                  </div>
-                  <div className={`grid grid-cols-1 md:grid-cols-${Math.min(socios.length, 4)} gap-4`}>
-                    {estadisticasSocios.map(s => {
-                      const seleccionado = calendarioSocioFiltro === s.id;
-                      // Ausencias activas/futuras
-                      const ausenciasFuturasSocio = ausenciasSocios.filter(a => 
-                        a.socio_id === s.id && new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0))
-                      ).length;
-                      
-                      return (
-                        <Card 
-                          key={s.id} 
-                          className={`p-4 cursor-pointer transition-all ${seleccionado ? 'ring-2 ring-orange-500 bg-orange-50' : 'hover:shadow-md'}`}
-                          onClick={() => setCalendarioSocioFiltro(seleccionado ? null : s.id)}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0" style={{backgroundColor: s.color || '#F97316'}}>
-                              {s.nombre.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-bold text-neutral-900 truncate">{s.nombre}</p>
-                              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                <span className="text-xs font-bold text-orange-600">{s.turnos} turnos</span>
-                                <span className="text-xs text-neutral-400">•</span>
-                                <span className="text-xs text-green-600">{s.completados} ✓</span>
-                                {ausenciasFuturasSocio > 0 && (
-                                  <>
-                                    <span className="text-xs text-neutral-400">•</span>
-                                    <span className="text-xs text-amber-600">🏖️ {ausenciasFuturasSocio}</span>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </Card>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Selector de vista (mes/semana) */}
-                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
-                  <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl">
-                    <button 
-                      onClick={() => setCalendarioVista('mes')} 
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'mes' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
-                    >
-                      📅 Mes
-                    </button>
-                    <button 
-                      onClick={() => setCalendarioVista('semana')} 
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'semana' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
-                    >
-                      🗓️ Semana
-                    </button>
-                  </div>
-                </div>
-
-                {/* RENDER VISTA SEMANAL */}
-                {calendarioVista === 'semana' && (() => {
-                  // Calcular días de la semana (lunes a domingo)
-                  const fechaRef = new Date(semanaCalendario);
-                  const diaSemana = fechaRef.getDay() === 0 ? 6 : fechaRef.getDay() - 1;
-                  const lunes = new Date(fechaRef);
-                  lunes.setDate(fechaRef.getDate() - diaSemana);
-                  
-                  const diasSemanaArray = [];
-                  for (let i = 0; i < 7; i++) {
-                    const d = new Date(lunes);
-                    d.setDate(lunes.getDate() + i);
-                    diasSemanaArray.push(d);
-                  }
-                  
-                  const cambiarSemana = (delta) => {
-                    const nueva = new Date(semanaCalendario);
-                    nueva.setDate(nueva.getDate() + (delta * 7));
-                    setSemanaCalendario(nueva);
-                  };
-                  
-                  const horasArray = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
-                  
-                  return (
-                    <Card className="p-4">
-                      <div className="flex items-center justify-between mb-4">
-                        <button onClick={() => cambiarSemana(-1)} className="p-2 hover:bg-neutral-100 rounded-lg">
-                          <ArrowDownRight size={20} className="rotate-135" />
-                        </button>
-                        <div className="text-center">
-                          <h2 className="text-lg font-bold text-neutral-900">
-                            Semana del {diasSemanaArray[0].getDate()} {diasSemanaArray[0].toLocaleDateString('es-ES', { month: 'short' })} al {diasSemanaArray[6].getDate()} {diasSemanaArray[6].toLocaleDateString('es-ES', { month: 'short' })}
-                          </h2>
-                          <button onClick={() => setSemanaCalendario(new Date())} className="text-xs text-orange-600 hover:underline">
-                            Ir a hoy
-                          </button>
+            ) : (() => {
+              // === LÓGICA COMPARTIDA ===
+              const hoyFecha = new Date();
+              const hoyStr = hoyFecha.toISOString().split('T')[0];
+              
+              // Próximos 7 días (resumen rápido)
+              const proximos7Dias = [];
+              for (let i = 0; i < 7; i++) {
+                const d = new Date(hoyFecha);
+                d.setDate(d.getDate() + i);
+                proximos7Dias.push(d.toISOString().split('T')[0]);
+              }
+              
+              // Filtro: turnos pendientes hoy
+              const turnosHoy = turnos.filter(t => t.fecha === hoyStr && !t.completado);
+              const turnosManana = turnos.filter(t => {
+                const m = new Date(hoyFecha); m.setDate(m.getDate() + 1);
+                return t.fecha === m.toISOString().split('T')[0] && !t.completado;
+              });
+              
+              // Detectar conflictos: turnos en días con ausencia
+              const conflictos = turnos.filter(t => {
+                if (t.completado) return false;
+                if (new Date(t.fecha) < new Date(hoyStr)) return false;
+                return ausenciasSocios.some(a => 
+                  a.socio_id === t.socio_id &&
+                  t.fecha >= a.fecha_inicio &&
+                  t.fecha <= a.fecha_fin
+                );
+              });
+              
+              // Días sin cobertura: en próximos 7, ningún turno asignado
+              const diasSinCobertura = proximos7Dias.filter(fecha => {
+                const turnosDia = turnos.filter(t => t.fecha === fecha && !t.completado);
+                return turnosDia.length === 0;
+              });
+              
+              return (
+                <>
+                  {/* === BARRA SUPERIOR: ALERTAS Y RESUMEN HOY === */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <Card className="p-4 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+                      <div className="flex items-center gap-3">
+                        <CalendarClock size={28} />
+                        <div>
+                          <p className="text-xs uppercase tracking-wide opacity-90">Hoy</p>
+                          <p className="text-2xl font-black">{turnosHoy.length}</p>
+                          <p className="text-xs opacity-90">turno{turnosHoy.length !== 1 ? 's' : ''}</p>
                         </div>
-                        <button onClick={() => cambiarSemana(1)} className="p-2 hover:bg-neutral-100 rounded-lg">
-                          <ArrowUpRight size={20} />
-                        </button>
                       </div>
-                      
-                      {/* Cabecera días */}
-                      <div className="grid grid-cols-8 gap-1 mb-1 sticky top-0 bg-white z-10">
-                        <div className="text-xs text-neutral-400 text-center py-2">Hora</div>
-                        {diasSemanaArray.map((d, i) => {
-                          const esHoy = d.toISOString().split('T')[0] === hoy;
-                          const nombresDia = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+                    </Card>
+                    <Card className="p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-lg bg-blue-100">
+                          <Calendar size={20} className="text-blue-600" />
+                        </div>
+                        <div>
+                          <p className="text-xs text-neutral-500 uppercase tracking-wide">Mañana</p>
+                          <p className="text-2xl font-black text-neutral-900">{turnosManana.length}</p>
+                          <p className="text-xs text-neutral-500">turno{turnosManana.length !== 1 ? 's' : ''}</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className={`p-4 ${conflictos.length > 0 ? 'bg-red-50 border-red-300' : ''}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${conflictos.length > 0 ? 'bg-red-200' : 'bg-neutral-100'}`}>
+                          <AlertTriangle size={20} className={conflictos.length > 0 ? 'text-red-600' : 'text-neutral-400'} />
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase tracking-wide" style={{color: conflictos.length > 0 ? '#DC2626' : '#737373'}}>Conflictos</p>
+                          <p className={`text-2xl font-black ${conflictos.length > 0 ? 'text-red-700' : 'text-neutral-900'}`}>{conflictos.length}</p>
+                          <p className="text-xs text-neutral-500">con ausencias</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className={`p-4 ${diasSinCobertura.length > 0 ? 'bg-amber-50 border-amber-300' : 'bg-green-50 border-green-300'}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${diasSinCobertura.length > 0 ? 'bg-amber-200' : 'bg-green-200'}`}>
+                          {diasSinCobertura.length > 0 ? <AlertCircle size={20} className="text-amber-700" /> : <CheckCircle size={20} className="text-green-700" />}
+                        </div>
+                        <div>
+                          <p className={`text-xs uppercase tracking-wide ${diasSinCobertura.length > 0 ? 'text-amber-700' : 'text-green-700'}`}>7 días</p>
+                          <p className={`text-2xl font-black ${diasSinCobertura.length > 0 ? 'text-amber-700' : 'text-green-700'}`}>{diasSinCobertura.length}</p>
+                          <p className="text-xs text-neutral-500">sin cubrir</p>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* === ALERTAS DE CONFLICTOS (DESPLEGABLE) === */}
+                  {conflictos.length > 0 && (
+                    <details className="border-2 border-red-300 rounded-xl bg-red-50">
+                      <summary className="p-3 cursor-pointer font-bold text-red-800 flex items-center gap-2">
+                        <AlertTriangle size={18} />
+                        ⚠️ {conflictos.length} conflicto{conflictos.length !== 1 ? 's' : ''}: turnos asignados en días de ausencia
+                      </summary>
+                      <div className="p-3 pt-0 space-y-2">
+                        {conflictos.map(t => {
+                          const socio = socios.find(s => s.id === t.socio_id);
+                          const ausencia = ausenciasSocios.find(a => 
+                            a.socio_id === t.socio_id && t.fecha >= a.fecha_inicio && t.fecha <= a.fecha_fin
+                          );
                           return (
-                            <div key={i} className={`text-center py-2 rounded-lg ${esHoy ? 'bg-orange-100 font-bold text-orange-700' : 'text-neutral-700'}`}>
-                              <div className="text-xs">{nombresDia[i]}</div>
-                              <div className="text-lg font-bold">{d.getDate()}</div>
+                            <div key={t.id} className="flex items-center justify-between p-2 bg-white rounded-lg border border-red-200">
+                              <div className="flex-1 text-sm">
+                                <span className="font-bold text-red-700">{socio?.nombre}</span>
+                                <span className="text-neutral-600"> tiene turno {t.tipo} el {formatDate(t.fecha)} a las {t.hora}</span>
+                                <span className="text-amber-700"> pero está de {ausencia?.tipo}</span>
+                                {ausencia?.motivo && <span className="text-neutral-500 italic"> ({ausencia.motivo})</span>}
+                              </div>
+                              <button onClick={() => { setEditingItem(t); setShowModal('turno'); }} className="text-xs px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600">
+                                Reasignar
+                              </button>
                             </div>
                           );
                         })}
                       </div>
-                      
-                      {/* Filas por hora */}
-                      <div className="max-h-[500px] overflow-y-auto">
-                        {horasArray.map(hora => (
-                          <div key={hora} className="grid grid-cols-8 gap-1 border-t border-neutral-100">
-                            <div className="text-xs text-neutral-400 text-right pr-2 py-2">{String(hora).padStart(2, '0')}:00</div>
-                            {diasSemanaArray.map((d, i) => {
-                              const fechaStrDia = d.toISOString().split('T')[0];
-                              // Turnos en esa hora (filtrado por socio si aplica)
-                              const turnosHora = turnos.filter(t => {
-                                if (t.fecha !== fechaStrDia) return false;
-                                if (calendarioSocioFiltro && t.socio_id !== calendarioSocioFiltro) return false;
-                                if (!t.hora) return false;
-                                const horaT = parseInt(t.hora.split(':')[0]);
-                                return horaT === hora;
-                              });
-                              // Ausencias del día (no por hora)
-                              const ausenciasDia = hora === 6 ? ausenciasSocios.filter(a => 
-                                fechaStrDia >= a.fecha_inicio && fechaStrDia <= a.fecha_fin &&
-                                (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
-                              ) : [];
-                              
-                              return (
-                                <div 
-                                  key={i} 
-                                  className="min-h-[40px] p-0.5 border-l border-neutral-100 cursor-pointer hover:bg-orange-50"
-                                  onClick={() => { 
-                                    setEditingItem({ fecha: fechaStrDia, hora: `${String(hora).padStart(2, '0')}:00` }); 
-                                    setShowModal('turno'); 
-                                  }}
-                                >
-                                  {ausenciasDia.map(a => {
-                                    const socio = socios.find(s => s.id === a.socio_id);
-                                    return (
-                                      <div 
-                                        key={a.id} 
-                                        className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-700 line-through truncate mb-0.5"
-                                        title={`${socio?.nombre} - ${a.tipo}`}
-                                        onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
-                                      >
-                                        🏖️ {socio?.nombre?.split(' ')[0]}
-                                      </div>
-                                    );
-                                  })}
-                                  {turnosHora.map(t => {
-                                    const socio = socios.find(s => s.id === t.socio_id);
-                                    const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
-                                    return (
-                                      <div 
-                                        key={t.id} 
-                                        className={`text-[9px] px-1 py-0.5 rounded truncate mb-0.5 border ${tipo.color} ${t.completado ? 'opacity-50 line-through' : ''}`}
-                                        style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
-                                        title={`${socio?.nombre} - ${t.tipo} ${t.hora}`}
-                                        onClick={(e) => { e.stopPropagation(); setEditingItem(t); setShowModal('turno'); }}
-                                      >
-                                        {tipo.icon} {socio?.nombre?.split(' ')[0]}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ))}
+                    </details>
+                  )}
+
+                  {/* === HOY: turnos de hoy con detalles === */}
+                  {turnosHoy.length > 0 && (
+                    <Card className="p-4 border-l-4 border-l-orange-500">
+                      <h3 className="font-bold text-neutral-900 mb-3 flex items-center gap-2">
+                        <Sun size={18} className="text-orange-500" /> Lo que toca HOY
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {turnosHoy.sort((a, b) => (a.hora || '').localeCompare(b.hora || '')).map(t => {
+                          const socio = socios.find(s => s.id === t.socio_id);
+                          const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                          return (
+                            <div 
+                              key={t.id} 
+                              onClick={() => { setEditingItem(t); setShowModal('turno'); }}
+                              className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer hover:shadow-md transition-shadow ${tipo.color}`}
+                            >
+                              <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0" style={{backgroundColor: socio?.color || '#F97316'}}>
+                                {socio?.nombre?.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-semibold text-sm truncate">{socio?.nombre} · {tipo.icon} {tipo.label}</p>
+                                <p className="text-xs">{t.hora} ({t.duracion_minutos || 60} min) {t.notas && `· ${t.notas}`}</p>
+                              </div>
+                              <button 
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await supabase.from('turnos').update({ completado: true }).eq('id', t.id);
+                                  refetchTurnos();
+                                }}
+                                className="p-2 text-green-600 hover:bg-green-100 rounded-lg flex-shrink-0"
+                                title="Marcar completado"
+                              >
+                                <CheckCircle size={18} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  )}
+
+                  {/* === FILTROS POR SOCIO Y SELECTOR VISTA === */}
+                  <Card className="p-3">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                      {/* Socios filter */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-neutral-500 font-semibold">FILTRAR:</span>
+                        <button 
+                          onClick={() => setCalendarioSocioFiltro(null)}
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${!calendarioSocioFiltro ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}
+                        >
+                          Todos
+                        </button>
+                        {socios.filter(s => s.activo !== false).map(s => {
+                          const seleccionado = calendarioSocioFiltro === s.id;
+                          const turnosSocio = turnos.filter(t => t.socio_id === s.id && new Date(t.fecha) >= new Date(hoyStr) && !t.completado).length;
+                          return (
+                            <button
+                              key={s.id}
+                              onClick={() => setCalendarioSocioFiltro(seleccionado ? null : s.id)}
+                              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${seleccionado ? 'text-white shadow' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+                              style={seleccionado ? {backgroundColor: s.color || '#F97316'} : {}}
+                            >
+                              <div className="w-5 h-5 rounded-full flex items-center justify-center text-white font-bold text-[10px]" style={{backgroundColor: s.color || '#F97316'}}>
+                                {s.nombre.charAt(0).toUpperCase()}
+                              </div>
+                              {s.nombre.split(' ')[0]}
+                              {turnosSocio > 0 && <span className={`text-xs ${seleccionado ? 'bg-white/30' : 'bg-orange-500 text-white'} px-1.5 rounded-full`}>{turnosSocio}</span>}
+                            </button>
+                          );
+                        })}
                       </div>
                       
-                      <p className="text-xs text-neutral-400 text-center mt-3">
-                        💡 Clic en una celda vacía para asignar turno · Clic en turno para editar · Hora 06:00 muestra ausencias del día
-                      </p>
-                    </Card>
-                  );
-                })()}
-
-                {/* Calendario de turnos (vista MES) - solo si calendarioVista === 'mes' */}
-                {calendarioVista === 'mes' && (
-                <Card className="p-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
-                    <h2 className="text-xl font-bold text-neutral-900">
-                      {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
-                    </h2>
-                    <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowUpRight size={20} /></button>
-                  </div>
-                  
-                  <div className="grid grid-cols-7 gap-1 mb-2">
-                    {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
-                      <div key={d} className="text-center text-sm font-bold text-neutral-500 py-2">{d}</div>
-                    ))}
-                  </div>
-                  
-                  <div className="grid grid-cols-7 gap-1">
-                    {diasCalendario.map((dia, idx) => {
-                      if (!dia) return <div key={idx} className="h-32 bg-neutral-50 rounded-lg" />;
-                      
-                      const turnosDelDia = turnosDia(dia);
-                      const fechaDelDia = fechaStr(dia);
-                      const esHoy = fechaDelDia === hoy;
-                      
-                      // Ausencias activas en este día
-                      const ausenciasDia = ausenciasSocios.filter(a => 
-                        fechaDelDia >= a.fecha_inicio && fechaDelDia <= a.fecha_fin
-                      );
-                      
-                      return (
-                        <div 
-                          key={idx} 
-                          onClick={() => { setEditingItem({ fecha: fechaDelDia }); setShowModal('turno'); }}
-                          className={`h-32 p-2 rounded-lg border cursor-pointer hover:border-orange-300 transition-colors ${esHoy ? 'bg-orange-50 border-orange-300' : 'bg-white border-neutral-200'} overflow-hidden`}
+                      {/* Selector vista */}
+                      <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl">
+                        <button 
+                          onClick={() => setCalendarioVista('mes')} 
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'mes' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
                         >
-                          <p className={`text-sm font-bold ${esHoy ? 'text-orange-600' : 'text-neutral-700'}`}>{dia}</p>
-                          
-                          {/* Ausencias del día */}
-                          {ausenciasDia.length > 0 && (
-                            <div className="mt-0.5 space-y-0.5">
-                              {ausenciasDia.slice(0, 2).map(a => {
-                                const socio = socios.find(s => s.id === a.socio_id);
-                                const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                          📅 Mes
+                        </button>
+                        <button 
+                          onClick={() => setCalendarioVista('semana')} 
+                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'semana' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                        >
+                          🗓️ Semana
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+
+                  {/* === LEYENDA === */}
+                  <div className="flex flex-wrap gap-3 px-2 text-xs text-neutral-600">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-orange-500 rounded"></span>Hoy</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-100 border border-red-400 rounded"></span>Ausencia</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-50 border-2 border-red-500 rounded"></span>Conflicto</span>
+                    <span className="flex items-center gap-1 line-through opacity-60">Turno completado</span>
+                    <span className="text-neutral-400">· Clic en celda vacía: asignar · Clic en turno/ausencia: editar</span>
+                  </div>
+
+                  {/* === VISTA SEMANAL === */}
+                  {calendarioVista === 'semana' && (() => {
+                    const fechaRef = new Date(semanaCalendario);
+                    const diaSemanaRef = fechaRef.getDay() === 0 ? 6 : fechaRef.getDay() - 1;
+                    const lunes = new Date(fechaRef);
+                    lunes.setDate(fechaRef.getDate() - diaSemanaRef);
+                    
+                    const diasSemanaArray = [];
+                    for (let i = 0; i < 7; i++) {
+                      const d = new Date(lunes);
+                      d.setDate(lunes.getDate() + i);
+                      diasSemanaArray.push(d);
+                    }
+                    
+                    const cambiarSemana = (delta) => {
+                      const nueva = new Date(semanaCalendario);
+                      nueva.setDate(nueva.getDate() + (delta * 7));
+                      setSemanaCalendario(nueva);
+                    };
+                    
+                    const horasArray = [];
+                    for (let h = 6; h <= 21; h++) horasArray.push(h);
+                    
+                    return (
+                      <Card className="p-4 overflow-hidden">
+                        {/* Navegación */}
+                        <div className="flex items-center justify-between mb-3">
+                          <button onClick={() => cambiarSemana(-1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                            <ArrowDownRight size={20} className="rotate-135" />
+                          </button>
+                          <div className="text-center">
+                            <h2 className="text-lg font-bold text-neutral-900">
+                              {diasSemanaArray[0].getDate()}{' '}
+                              {diasSemanaArray[0].toLocaleDateString('es-ES', { month: 'short' })}
+                              {' - '}
+                              {diasSemanaArray[6].getDate()}{' '}
+                              {diasSemanaArray[6].toLocaleDateString('es-ES', { month: 'short' })}{' '}
+                              {diasSemanaArray[6].getFullYear()}
+                            </h2>
+                            <button onClick={() => setSemanaCalendario(new Date())} className="text-xs text-orange-600 hover:underline">
+                              Ir a hoy
+                            </button>
+                          </div>
+                          <button onClick={() => cambiarSemana(1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                            <ArrowUpRight size={20} />
+                          </button>
+                        </div>
+
+                        {/* Cabecera días */}
+                        <div className="grid grid-cols-[60px_repeat(7,1fr)] gap-1 mb-1">
+                          <div className="text-xs text-neutral-400 text-center py-2">Hora</div>
+                          {diasSemanaArray.map((d, i) => {
+                            const fechaDStr = d.toISOString().split('T')[0];
+                            const esHoy = fechaDStr === hoyStr;
+                            const nombresDia = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+                            // Ausencias del día (badge)
+                            const ausenciasDD = ausenciasSocios.filter(a => 
+                              fechaDStr >= a.fecha_inicio && fechaDStr <= a.fecha_fin &&
+                              (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
+                            );
+                            // Turnos del día
+                            const turnosDD = turnos.filter(t => 
+                              t.fecha === fechaDStr &&
+                              (!calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            );
+                            return (
+                              <div key={i} className={`text-center py-2 rounded-lg ${esHoy ? 'bg-orange-100 ring-2 ring-orange-400' : 'bg-neutral-50'}`}>
+                                <div className={`text-xs ${esHoy ? 'text-orange-700 font-bold' : 'text-neutral-500'}`}>{nombresDia[i]}</div>
+                                <div className={`text-lg font-bold ${esHoy ? 'text-orange-700' : 'text-neutral-700'}`}>{d.getDate()}</div>
+                                {turnosDD.length > 0 && <div className="text-[10px] text-orange-600 font-bold">{turnosDD.length} turno{turnosDD.length !== 1 ? 's' : ''}</div>}
+                                {ausenciasDD.length > 0 && (
+                                  <div className="text-[10px] text-red-600">
+                                    {ausenciasDD.map(a => {
+                                      const so = socios.find(s => s.id === a.socio_id);
+                                      const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                                      return <span key={a.id} title={`${so?.nombre} - ${a.tipo}`}>{tipoIcon}</span>;
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* === FILA TODO EL DÍA: ausencias === */}
+                        <div className="grid grid-cols-[60px_repeat(7,1fr)] gap-1 mb-1 bg-red-50 rounded-lg p-1">
+                          <div className="text-[10px] text-red-700 font-bold text-right pr-1 py-1 flex items-center justify-end">
+                            🏖️
+                          </div>
+                          {diasSemanaArray.map((d, i) => {
+                            const fechaDStr = d.toISOString().split('T')[0];
+                            const ausenciasDD = ausenciasSocios.filter(a => 
+                              fechaDStr >= a.fecha_inicio && fechaDStr <= a.fecha_fin &&
+                              a.todo_el_dia !== false &&
+                              (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
+                            );
+                            return (
+                              <div 
+                                key={i}
+                                className="min-h-[28px] p-0.5 cursor-pointer hover:bg-red-100/50 rounded"
+                                onClick={() => { setEditingItem({ fecha_inicio: fechaDStr, fecha_fin: fechaDStr }); setShowModal('ausencia'); }}
+                              >
+                                {ausenciasDD.map(a => {
+                                  const socio = socios.find(s => s.id === a.socio_id);
+                                  const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                                  return (
+                                    <div 
+                                      key={a.id}
+                                      onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
+                                      className="text-[10px] px-1 py-0.5 rounded bg-red-200 text-red-800 truncate flex items-center gap-1 mb-0.5"
+                                      style={{borderLeft: `3px solid ${socio?.color || '#DC2626'}`}}
+                                      title={`${socio?.nombre} - ${a.tipo}${a.motivo ? ': ' + a.motivo : ''}`}
+                                    >
+                                      <span>{tipoIcon}</span>
+                                      <span className="truncate">{socio?.nombre?.split(' ')[0]}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* === HORAS === */}
+                        <div className="max-h-[500px] overflow-y-auto border-t pt-1">
+                          {horasArray.map(hora => (
+                            <div key={hora} className="grid grid-cols-[60px_repeat(7,1fr)] gap-1 border-b border-neutral-100 hover:bg-orange-50/30">
+                              <div className="text-xs text-neutral-400 text-right pr-2 py-2 flex items-start justify-end">
+                                {String(hora).padStart(2, '0')}:00
+                              </div>
+                              {diasSemanaArray.map((d, i) => {
+                                const fechaDStr = d.toISOString().split('T')[0];
+                                // Turnos en esa hora
+                                const turnosHora = turnos.filter(t => {
+                                  if (t.fecha !== fechaDStr) return false;
+                                  if (calendarioSocioFiltro && t.socio_id !== calendarioSocioFiltro) return false;
+                                  if (!t.hora) return hora === 9; // Sin hora → ponerlo a las 9
+                                  const horaT = parseInt(t.hora.split(':')[0]);
+                                  return horaT === hora;
+                                });
+                                // Ausencias parciales (no todo el día) que cubran esta hora
+                                const ausenciasHora = ausenciasSocios.filter(a => {
+                                  if (a.todo_el_dia !== false) return false;
+                                  if (fechaDStr < a.fecha_inicio || fechaDStr > a.fecha_fin) return false;
+                                  if (calendarioSocioFiltro && a.socio_id !== calendarioSocioFiltro) return false;
+                                  if (!a.hora_inicio || !a.hora_fin) return false;
+                                  const hi = parseInt(a.hora_inicio.split(':')[0]);
+                                  const hf = parseInt(a.hora_fin.split(':')[0]);
+                                  return hora >= hi && hora < hf;
+                                });
+                                
                                 return (
                                   <div 
-                                    key={a.id}
-                                    onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
-                                    className="text-[10px] px-1.5 py-0.5 rounded truncate bg-red-100 text-red-700 border border-red-200 flex items-center gap-1"
-                                    style={{borderLeft: `3px solid ${socio?.color || '#DC2626'}`}}
-                                    title={`${socio?.nombre} - ${a.tipo}${a.motivo ? ': ' + a.motivo : ''}`}
+                                    key={i} 
+                                    className="min-h-[40px] p-0.5 border-l border-neutral-100 cursor-pointer hover:bg-orange-100/40 rounded"
+                                    onClick={() => { 
+                                      setEditingItem({ fecha: fechaDStr, hora: `${String(hora).padStart(2, '0')}:00` }); 
+                                      setShowModal('turno'); 
+                                    }}
                                   >
-                                    <span>{tipoIcon}</span>
-                                    <span className="truncate font-medium line-through">{socio?.nombre?.split(' ')[0]}</span>
+                                    {ausenciasHora.map(a => {
+                                      const socio = socios.find(s => s.id === a.socio_id);
+                                      return (
+                                        <div 
+                                          key={a.id}
+                                          onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
+                                          className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-700 truncate mb-0.5 line-through"
+                                          title={`${socio?.nombre} - ${a.motivo}`}
+                                        >
+                                          🚫 {socio?.nombre?.split(' ')[0]}
+                                        </div>
+                                      );
+                                    })}
+                                    {turnosHora.map(t => {
+                                      const socio = socios.find(s => s.id === t.socio_id);
+                                      const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                                      const enConflicto = ausenciasSocios.some(a => 
+                                        a.socio_id === t.socio_id && 
+                                        fechaDStr >= a.fecha_inicio && 
+                                        fechaDStr <= a.fecha_fin
+                                      );
+                                      return (
+                                        <div 
+                                          key={t.id} 
+                                          onClick={(e) => { e.stopPropagation(); setEditingItem(t); setShowModal('turno'); }}
+                                          className={`text-[10px] px-1 py-0.5 rounded truncate mb-0.5 border ${tipo.color} ${t.completado ? 'opacity-50 line-through' : ''} ${enConflicto ? 'ring-2 ring-red-500' : ''}`}
+                                          style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
+                                          title={`${socio?.nombre} - ${t.tipo} ${t.hora || ''} (${t.duracion_minutos || 60}min)${enConflicto ? ' - ⚠️ CONFLICTO' : ''}`}
+                                        >
+                                          {tipo.icon} {socio?.nombre?.split(' ')[0]}
+                                          {enConflicto && ' ⚠️'}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 );
                               })}
                             </div>
-                          )}
-                          
-                          <div className="mt-1 space-y-0.5">
-                            {turnosDelDia.slice(0, ausenciasDia.length > 0 ? 2 : 3).map(t => {
-                              const socio = socios.find(s => s.id === t.socio_id);
-                              const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
-                              const enAusencia = ausenciasSocios.some(a => 
-                                a.socio_id === t.socio_id && 
-                                fechaDelDia >= a.fecha_inicio && 
-                                fechaDelDia <= a.fecha_fin
-                              );
-                              return (
-                                <div 
-                                  key={t.id} 
-                                  className={`text-[10px] px-1.5 py-0.5 rounded truncate flex items-center gap-1 border ${tipo.color} ${t.completado ? 'line-through opacity-60' : ''} ${enAusencia ? 'ring-1 ring-red-400' : ''}`}
-                                  style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
-                                  title={enAusencia ? '⚠️ Conflicto: socio ausente' : ''}
-                                >
-                                  <span>{tipo.icon}</span>
-                                  <span className="truncate font-medium">{socio?.nombre?.split(' ')[0]}</span>
-                                  {enAusencia && <AlertTriangle size={8} className="text-red-500 flex-shrink-0" />}
-                                </div>
-                              );
-                            })}
-                            {turnosDelDia.length > (ausenciasDia.length > 0 ? 2 : 3) && (
-                              <p className="text-[10px] text-neutral-400">+{turnosDelDia.length - (ausenciasDia.length > 0 ? 2 : 3)} más</p>
-                            )}
-                          </div>
+                          ))}
                         </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-                )}
+                      </Card>
+                    );
+                  })()}
 
-                {/* Lista de ausencias actuales/futuras */}
-                {ausenciasSocios.filter(a => new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0))).length > 0 && (
-                  <Card className="p-5">
-                    <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><Calendar size={20} className="text-amber-500" /> Ausencias Programadas</h3>
-                    <div className="space-y-2 max-h-72 overflow-y-auto">
-                      {ausenciasSocios
-                        .filter(a => new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0)))
-                        .sort((a, b) => new Date(a.fecha_inicio) - new Date(b.fecha_inicio))
-                        .map(a => {
-                          const socio = socios.find(s => s.id === a.socio_id);
-                          const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
-                          const tipoLabel = a.tipo === 'vacaciones' ? 'Vacaciones' : a.tipo === 'evento' ? 'Evento' : a.tipo === 'viaje' ? 'Viaje' : a.tipo === 'baja' ? 'Baja' : a.tipo === 'personal' ? 'Personal' : 'Otro';
-                          const dias = Math.ceil((new Date(a.fecha_fin) - new Date(a.fecha_inicio)) / (1000*60*60*24)) + 1;
+                  {/* === VISTA MES === */}
+                  {calendarioVista === 'mes' && (
+                    <Card className="p-4 md:p-6">
+                      {/* Navegación mes */}
+                      <div className="flex items-center justify-between mb-6">
+                        <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                          <ArrowDownRight size={20} className="rotate-135" />
+                        </button>
+                        <div className="text-center">
+                          <h2 className="text-xl font-bold text-neutral-900 capitalize">
+                            {mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                          </h2>
+                          <button onClick={() => setMesCalendario(new Date())} className="text-xs text-orange-600 hover:underline">
+                            Ir a hoy
+                          </button>
+                        </div>
+                        <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                          <ArrowUpRight size={20} />
+                        </button>
+                      </div>
+
+                      {/* Cabecera días semana */}
+                      <div className="grid grid-cols-7 gap-1 mb-2">
+                        {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+                          <div key={d} className="text-center text-xs font-bold text-neutral-500 py-2">{d}</div>
+                        ))}
+                      </div>
+
+                      {/* Días del mes */}
+                      <div className="grid grid-cols-7 gap-1">
+                        {diasCalendario.map((dia, idx) => {
+                          if (!dia) return <div key={idx} className="h-32 bg-neutral-50/50 rounded-lg" />;
+                          
+                          const fechaDStr = fechaStr(dia);
+                          const esHoy = fechaDStr === hoyStr;
+                          const esPasado = fechaDStr < hoyStr;
+                          
+                          // Turnos del día (con filtro si aplica)
+                          const turnosDelDia = turnos.filter(t => 
+                            t.fecha === fechaDStr &&
+                            (!calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                          );
+                          
+                          // Ausencias del día (con filtro si aplica)
+                          const ausenciasDia = ausenciasSocios.filter(a => 
+                            fechaDStr >= a.fecha_inicio && 
+                            fechaDStr <= a.fecha_fin &&
+                            (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
+                          );
+                          
+                          // Hay conflictos en este día?
+                          const hayConflicto = turnosDelDia.some(t => 
+                            ausenciasSocios.some(a => 
+                              a.socio_id === t.socio_id &&
+                              fechaDStr >= a.fecha_inicio &&
+                              fechaDStr <= a.fecha_fin
+                            )
+                          );
+                          
                           return (
-                            <div key={a.id} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                              <div className="flex items-center gap-3 flex-1">
-                                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor: socio?.color || '#F97316'}}>
-                                  {socio?.nombre?.charAt(0).toUpperCase()}
-                                </div>
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-semibold text-neutral-900">{socio?.nombre}</span>
-                                    <Badge className="bg-amber-100 text-amber-700">{tipoIcon} {tipoLabel}</Badge>
-                                  </div>
-                                  <p className="text-sm text-neutral-500">
-                                    {formatDate(a.fecha_inicio)} → {formatDate(a.fecha_fin)} ({dias} día{dias !== 1 ? 's' : ''})
-                                  </p>
-                                  {a.motivo && <p className="text-xs text-amber-700 italic">"{a.motivo}"</p>}
-                                </div>
+                            <div 
+                              key={idx} 
+                              onClick={() => { setEditingItem({ fecha: fechaDStr }); setShowModal('turno'); }}
+                              className={`h-32 p-1.5 rounded-lg border-2 cursor-pointer transition-all overflow-hidden flex flex-col
+                                ${esHoy ? 'bg-orange-50 border-orange-400 ring-1 ring-orange-300' : 'bg-white border-neutral-200 hover:border-orange-300'}
+                                ${esPasado && !esHoy ? 'opacity-60' : ''}
+                                ${hayConflicto ? 'ring-2 ring-red-500' : ''}
+                              `}
+                            >
+                              {/* Cabecera del día */}
+                              <div className="flex items-center justify-between mb-0.5">
+                                <span className={`text-sm font-bold ${esHoy ? 'text-orange-700' : 'text-neutral-700'}`}>
+                                  {dia}
+                                </span>
+                                {hayConflicto && <AlertTriangle size={12} className="text-red-500" />}
                               </div>
-                              <div className="flex gap-1">
-                                <button onClick={() => { setEditingItem(a); setShowModal('ausencia'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg">
-                                  <Edit2 size={16} />
-                                </button>
-                                <button onClick={() => handleDelete('ausencias_socios', a.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                                  <Trash2 size={16} />
-                                </button>
+
+                              {/* Ausencias compactas */}
+                              {ausenciasDia.length > 0 && (
+                                <div className="flex flex-wrap gap-0.5 mb-1">
+                                  {ausenciasDia.slice(0, 3).map(a => {
+                                    const socio = socios.find(s => s.id === a.socio_id);
+                                    const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                                    return (
+                                      <span 
+                                        key={a.id}
+                                        onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
+                                        className="inline-flex items-center text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-700 hover:bg-red-200"
+                                        style={{borderLeft: `2px solid ${socio?.color || '#DC2626'}`}}
+                                        title={`${socio?.nombre} - ${a.tipo}${a.motivo ? ': ' + a.motivo : ''}`}
+                                      >
+                                        {tipoIcon}
+                                      </span>
+                                    );
+                                  })}
+                                  {ausenciasDia.length > 3 && <span className="text-[9px] text-red-600">+{ausenciasDia.length - 3}</span>}
+                                </div>
+                              )}
+
+                              {/* Turnos del día */}
+                              <div className="flex-1 space-y-0.5 overflow-hidden">
+                                {turnosDelDia.slice(0, ausenciasDia.length > 0 ? 3 : 4).sort((a, b) => (a.hora || '').localeCompare(b.hora || '')).map(t => {
+                                  const socio = socios.find(s => s.id === t.socio_id);
+                                  const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                                  const enConflicto = ausenciasSocios.some(a => 
+                                    a.socio_id === t.socio_id && 
+                                    fechaDStr >= a.fecha_inicio && 
+                                    fechaDStr <= a.fecha_fin
+                                  );
+                                  return (
+                                    <div 
+                                      key={t.id} 
+                                      onClick={(e) => { e.stopPropagation(); setEditingItem(t); setShowModal('turno'); }}
+                                      className={`text-[10px] px-1 py-0.5 rounded truncate flex items-center gap-1 border 
+                                        ${tipo.color} 
+                                        ${t.completado ? 'opacity-50 line-through' : ''} 
+                                        ${enConflicto ? 'ring-1 ring-red-500' : ''}`}
+                                      style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
+                                      title={`${socio?.nombre} - ${t.hora || 'sin hora'} - ${tipo.label}${t.notas ? ' - ' + t.notas : ''}${enConflicto ? ' ⚠️ CONFLICTO' : ''}`}
+                                    >
+                                      <span>{tipo.icon}</span>
+                                      <span className="truncate font-medium">{socio?.nombre?.split(' ')[0]}</span>
+                                      {t.hora && <span className="text-[9px] opacity-75 ml-auto">{t.hora.substring(0, 5)}</span>}
+                                    </div>
+                                  );
+                                })}
+                                {turnosDelDia.length > (ausenciasDia.length > 0 ? 3 : 4) && (
+                                  <p className="text-[9px] text-neutral-400">+{turnosDelDia.length - (ausenciasDia.length > 0 ? 3 : 4)} más</p>
+                                )}
                               </div>
                             </div>
                           );
                         })}
-                    </div>
-                  </Card>
-                )}
+                      </div>
+                    </Card>
+                  )}
 
-                {/* Lista próximos turnos */}
-                <Card className="p-5">
-                  <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><CalendarClock size={20} className="text-orange-500" /> Próximos Turnos</h3>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {turnos
-                      .filter(t => 
-                        new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && 
-                        !t.completado &&
-                        (!calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
-                      )
-                      .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
-                      .slice(0, 15)
-                      .map(t => {
-                        const socio = socios.find(s => s.id === t.socio_id);
-                        const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
-                        const esHoyTurno = t.fecha === hoy;
-                        return (
-                          <div key={t.id} className={`flex items-center justify-between p-3 rounded-xl border ${esHoyTurno ? 'bg-orange-50 border-orange-300' : 'bg-neutral-50 border-neutral-200'}`}>
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold" style={{backgroundColor: socio?.color || '#F97316'}}>
-                                {socio?.nombre?.charAt(0).toUpperCase()}
-                              </div>
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-semibold text-neutral-900">{socio?.nombre}</span>
-                                  <Badge className={tipo.color}>{tipo.icon} {tipo.label}</Badge>
-                                  {esHoyTurno && <Badge className="bg-red-500 text-white">¡HOY!</Badge>}
-                                </div>
-                                <p className="text-sm text-neutral-500">
-                                  {formatDate(t.fecha)}
-                                  {t.hora && ` • ${t.hora}`}
-                                  {t.notas && ` • ${t.notas}`}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex gap-1">
-                              <button 
-                                onClick={async () => {
-                                  await supabase.from('turnos').update({ completado: !t.completado }).eq('id', t.id);
-                                  refetchTurnos();
-                                }} 
-                                className="p-2 text-green-500 hover:bg-green-50 rounded-lg"
-                                title="Marcar completado"
+                  {/* === LISTAS LATERALES === */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Lista de turnos próximos */}
+                    <Card className="p-4">
+                      <h3 className="text-base font-bold text-neutral-900 mb-3 flex items-center gap-2">
+                        <CalendarClock size={18} className="text-orange-500" /> Próximos turnos
+                        {calendarioSocioFiltro && (
+                          <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">
+                            de {socios.find(s => s.id === calendarioSocioFiltro)?.nombre?.split(' ')[0]}
+                          </span>
+                        )}
+                      </h3>
+                      <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                        {(() => {
+                          const proximos = turnos
+                            .filter(t => 
+                              t.fecha >= hoyStr && 
+                              !t.completado &&
+                              (!calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            )
+                            .sort((a, b) => {
+                              if (a.fecha !== b.fecha) return a.fecha < b.fecha ? -1 : 1;
+                              return (a.hora || '99:99').localeCompare(b.hora || '99:99');
+                            })
+                            .slice(0, 12);
+                          
+                          if (proximos.length === 0) {
+                            return <p className="text-neutral-400 text-center py-6 text-sm">No hay turnos programados</p>;
+                          }
+                          
+                          return proximos.map(t => {
+                            const socio = socios.find(s => s.id === t.socio_id);
+                            const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                            const esHoyT = t.fecha === hoyStr;
+                            const enConflicto = ausenciasSocios.some(a => 
+                              a.socio_id === t.socio_id && 
+                              t.fecha >= a.fecha_inicio && 
+                              t.fecha <= a.fecha_fin
+                            );
+                            return (
+                              <div 
+                                key={t.id} 
+                                onClick={() => { setEditingItem(t); setShowModal('turno'); }}
+                                className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer hover:shadow-sm transition-all ${esHoyT ? 'bg-orange-50 border-orange-300' : 'bg-neutral-50 border-neutral-200'} ${enConflicto ? 'ring-2 ring-red-400' : ''}`}
                               >
-                                <CheckCircle size={16} />
-                              </button>
-                              <button onClick={() => { setEditingItem(t); setShowModal('turno'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg">
-                                <Edit2 size={16} />
-                              </button>
-                              <button onClick={() => handleDelete('turnos', t.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    {turnos.filter(t => new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && !t.completado).length === 0 && (
-                      <p className="text-neutral-400 text-center py-4">No hay turnos próximos asignados</p>
-                    )}
+                                <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0" style={{backgroundColor: socio?.color || '#F97316'}}>
+                                  {socio?.nombre?.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-semibold text-sm">{socio?.nombre?.split(' ')[0]}</span>
+                                    <span className="text-xs">{tipo.icon} {tipo.label}</span>
+                                    {esHoyT && <Badge className="bg-orange-500 text-white text-[10px]">HOY</Badge>}
+                                    {enConflicto && <Badge className="bg-red-100 text-red-700 text-[10px]">⚠️ Conflicto</Badge>}
+                                  </div>
+                                  <p className="text-xs text-neutral-500">
+                                    {formatDate(t.fecha)} {t.hora && `· ${t.hora}`} {t.duracion_minutos && `(${t.duracion_minutos}min)`}
+                                  </p>
+                                </div>
+                                <button 
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    await supabase.from('turnos').update({ completado: !t.completado }).eq('id', t.id);
+                                    refetchTurnos();
+                                  }} 
+                                  className="p-1.5 text-green-500 hover:bg-green-50 rounded flex-shrink-0"
+                                  title="Marcar completado"
+                                >
+                                  <CheckCircle size={14} />
+                                </button>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </Card>
+
+                    {/* Lista de ausencias programadas */}
+                    <Card className="p-4">
+                      <h3 className="text-base font-bold text-neutral-900 mb-3 flex items-center gap-2">
+                        <Calendar size={18} className="text-amber-500" /> Ausencias programadas
+                        {calendarioSocioFiltro && (
+                          <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">
+                            de {socios.find(s => s.id === calendarioSocioFiltro)?.nombre?.split(' ')[0]}
+                          </span>
+                        )}
+                      </h3>
+                      <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                        {(() => {
+                          const ausFuturas = ausenciasSocios
+                            .filter(a => 
+                              new Date(a.fecha_fin) >= new Date(hoyStr) &&
+                              (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
+                            )
+                            .sort((a, b) => new Date(a.fecha_inicio) - new Date(b.fecha_inicio));
+                          
+                          if (ausFuturas.length === 0) {
+                            return (
+                              <div className="text-center py-6">
+                                <p className="text-neutral-400 text-sm mb-2">Sin ausencias programadas</p>
+                                <button 
+                                  onClick={() => { setEditingItem(null); setShowModal('ausencia'); }} 
+                                  className="text-xs text-amber-600 hover:underline font-medium"
+                                >
+                                  + Marcar ausencia
+                                </button>
+                              </div>
+                            );
+                          }
+                          
+                          return ausFuturas.map(a => {
+                            const socio = socios.find(s => s.id === a.socio_id);
+                            const tipoIcon = a.tipo === 'vacaciones' ? '🏖️' : a.tipo === 'evento' ? '🎉' : a.tipo === 'viaje' ? '✈️' : a.tipo === 'baja' ? '🏥' : '👤';
+                            const tipoLabel = a.tipo === 'vacaciones' ? 'Vacaciones' : a.tipo === 'evento' ? 'Evento' : a.tipo === 'viaje' ? 'Viaje' : a.tipo === 'baja' ? 'Baja' : a.tipo === 'personal' ? 'Personal' : 'Otro';
+                            const dias = Math.ceil((new Date(a.fecha_fin) - new Date(a.fecha_inicio)) / (1000*60*60*24)) + 1;
+                            const empezado = a.fecha_inicio <= hoyStr;
+                            return (
+                              <div 
+                                key={a.id} 
+                                onClick={() => { setEditingItem(a); setShowModal('ausencia'); }}
+                                className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer hover:shadow-sm ${empezado ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-200'}`}
+                              >
+                                <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0" style={{backgroundColor: socio?.color || '#F97316'}}>
+                                  {socio?.nombre?.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-semibold text-sm">{socio?.nombre?.split(' ')[0]}</span>
+                                    <span className="text-xs">{tipoIcon} {tipoLabel}</span>
+                                    {empezado && <Badge className="bg-red-500 text-white text-[10px]">EN CURSO</Badge>}
+                                  </div>
+                                  <p className="text-xs text-neutral-600">
+                                    {formatDate(a.fecha_inicio)} → {formatDate(a.fecha_fin)} ({dias}d)
+                                  </p>
+                                  {a.motivo && <p className="text-xs text-neutral-500 italic truncate">"{a.motivo}"</p>}
+                                </div>
+                                <button 
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (window.confirm('¿Eliminar esta ausencia?')) {
+                                      await supabase.from('ausencias_socios').delete().eq('id', a.id);
+                                      refetchAusenciasSocios();
+                                    }
+                                  }} 
+                                  className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </Card>
                   </div>
-                </Card>
-              </>
-            )}
+                </>
+              );
+            })()}
           </>
         )}
 
@@ -10237,16 +10553,54 @@ const MainApp = () => {
               socioInicial={editingItem?.socio_id}
               onSave={async (form) => {
                 try {
+                  // Limpiar campos: TIME vacío en Postgres da error
+                  const datos = {
+                    socio_id: form.socio_id,
+                    fecha_inicio: form.fecha_inicio,
+                    fecha_fin: form.fecha_fin,
+                    tipo: form.tipo,
+                    motivo: form.motivo || null,
+                    todo_el_dia: form.todo_el_dia,
+                    hora_inicio: form.todo_el_dia ? null : (form.hora_inicio || null),
+                    hora_fin: form.todo_el_dia ? null : (form.hora_fin || null),
+                  };
+                  
+                  console.log('📤 Guardando ausencia:', datos);
+                  
+                  let result;
                   if (editingItem?.id) {
-                    await supabase.from('ausencias_socios').update(form).eq('id', editingItem.id);
+                    result = await supabase.from('ausencias_socios').update(datos).eq('id', editingItem.id).select();
                   } else {
-                    await supabase.from('ausencias_socios').insert(form);
+                    result = await supabase.from('ausencias_socios').insert(datos).select();
                   }
+                  
+                  if (result.error) {
+                    console.error('❌ Error Supabase:', result.error);
+                    let msg = `❌ Error al guardar ausencia\n\n`;
+                    msg += `📋 Mensaje: ${result.error.message}\n`;
+                    if (result.error.code) msg += `🔢 Código: ${result.error.code}\n`;
+                    if (result.error.details) msg += `🔍 Detalles: ${result.error.details}\n`;
+                    msg += `\n`;
+                    if (result.error.code === '42P01' || result.error.message?.includes('does not exist')) {
+                      msg += `🛠️ La tabla "ausencias_socios" no existe.\nEjecuta ROOTFLOW-SQL-V23-BANDEJAS-AUSENCIAS.sql en Supabase.`;
+                    } else if (result.error.code === '42703') {
+                      msg += `🛠️ Falta una columna en "ausencias_socios".\nEjecuta ROOTFLOW-SQL-V23-BANDEJAS-AUSENCIAS.sql en Supabase.`;
+                    } else {
+                      msg += `🛠️ Abre F12 → Console para ver más detalles.`;
+                    }
+                    alert(msg);
+                    return;
+                  }
+                  
+                  console.log('✅ Ausencia guardada:', result.data);
                   refetchAusenciasSocios();
                   setShowModal(null);
                   setEditingItem(null);
-                  alert('✅ Ausencia registrada');
-                } catch (e) { alert('❌ Error: ' + e.message); }
+                  alert(`✅ Ausencia ${editingItem?.id ? 'actualizada' : 'registrada'}`);
+                } catch (e) { 
+                  console.error('Error general:', e);
+                  alert('❌ Error: ' + (e.message || String(e))); 
+                }
               }} 
               onCancel={() => { setShowModal(null); setEditingItem(null); }} 
             />
