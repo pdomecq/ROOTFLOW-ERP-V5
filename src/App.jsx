@@ -744,6 +744,9 @@ const MainApp = () => {
   // Calendario - mes actual
   const [mesCalendario, setMesCalendario] = useState(new Date());
   const [calendarioTab, setCalendarioTab] = useState('eventos'); // 'eventos' | 'turnos'
+  const [calendarioVista, setCalendarioVista] = useState('mes'); // 'mes' | 'semana'
+  const [calendarioSocioFiltro, setCalendarioSocioFiltro] = useState(null); // null = todos
+  const [semanaCalendario, setSemanaCalendario] = useState(new Date()); // fecha de referencia para vista semanal
   // V22 - Productos por variedad
   const [productosViewMode, setProductosViewMode] = useState('variedades'); // 'variedades' | 'tabla'
   const [variedadesExpandidas, setVariedadesExpandidas] = useState([]);
@@ -1570,6 +1573,9 @@ const MainApp = () => {
   const { data: ausenciasSociosData, refetch: refetchAusenciasSocios } = useRealtime('ausencias_socios');
   // V25 - Movimientos de stock (auditoría)
   const { data: movimientosStockData, refetch: refetchMovimientosStock } = useRealtime('movimientos_stock');
+  // V28 - Configuración de notificaciones (sincronizada entre dispositivos)
+  const { data: notificacionesConfigData, refetch: refetchNotificacionesConfig } = useRealtime('notificaciones_config');
+  const { data: plantillasTurnosData, refetch: refetchPlantillasTurnos } = useRealtime('plantillas_turnos');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1629,6 +1635,32 @@ const MainApp = () => {
   const ausenciasSocios = ausenciasSociosData || [];
   // V25 - Movimientos stock
   const movimientosStock = movimientosStockData || [];
+  // V28 - Notificaciones config (siempre fila id=1)
+  const notificacionesConfig = (notificacionesConfigData && notificacionesConfigData[0]) || {
+    id: 1,
+    slack_activo: true,
+    slack_usar_edge_function: true,
+    slack_webhook_url: '',
+    slack_canal_default: '#rootflow-alertas',
+    slack_mencionar_en_criticas: true,
+    notif_pedido_nuevo: true,
+    notif_pedido_estado: false,
+    notif_pedido_atrasado: true,
+    notif_stock_bajo: true,
+    notif_stock_critico: true,
+    notif_cosecha_lista: true,
+    notif_siembra_pendiente: true,
+    notif_turno_asignado: true,
+    notif_turno_recordatorio: true,
+    notif_turno_conflicto: true,
+    notif_pago_proveedor: true,
+    notif_factura_vencida: true,
+    notif_muestra_pendiente: true,
+    notif_lead_seguimiento: false,
+    notif_resumen_diario: false,
+    email_activo: false,
+  };
+  const plantillasTurnos = plantillasTurnosData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2648,10 +2680,53 @@ const MainApp = () => {
     localStorage.setItem('rootflow_slack_config', JSON.stringify(config));
   };
 
+  // V28 - Guardar config de notificaciones en Supabase (sincronizada)
+  const guardarNotificacionesConfig = async (cambios) => {
+    try {
+      const { error } = await supabase
+        .from('notificaciones_config')
+        .update({ ...cambios, updated_at: new Date().toISOString() })
+        .eq('id', 1);
+      if (error) throw error;
+      refetchNotificacionesConfig();
+      return { success: true };
+    } catch (e) {
+      console.error('Error guardando config:', e);
+      return { success: false, error: e.message };
+    }
+  };
+
   // Función para enviar mensaje a Slack
-  const enviarSlack = async ({ titulo, mensaje, prioridad = 'media', alertaId = null, blocks = null }) => {
-    if (!slackConfig.activo) {
+  const enviarSlack = async ({ titulo, mensaje, prioridad = 'media', alertaId = null, blocks = null, tipoEvento = null }) => {
+    // V28: usar config sincronizada de BD (con fallback a localStorage por compatibilidad)
+    const cfg = notificacionesConfig;
+    
+    if (!cfg.slack_activo) {
       return { success: false, error: 'Sistema de Slack desactivado en configuración' };
+    }
+    
+    // Filtro granular: si se especifica tipoEvento, comprobar si está activado
+    if (tipoEvento) {
+      const flagPorTipo = {
+        pedido_nuevo: cfg.notif_pedido_nuevo,
+        pedido_estado: cfg.notif_pedido_estado,
+        pedido_atrasado: cfg.notif_pedido_atrasado,
+        stock_bajo: cfg.notif_stock_bajo,
+        stock_critico: cfg.notif_stock_critico,
+        cosecha_lista: cfg.notif_cosecha_lista,
+        siembra_pendiente: cfg.notif_siembra_pendiente,
+        turno_asignado: cfg.notif_turno_asignado,
+        turno_recordatorio: cfg.notif_turno_recordatorio,
+        turno_conflicto: cfg.notif_turno_conflicto,
+        pago_proveedor: cfg.notif_pago_proveedor,
+        factura_vencida: cfg.notif_factura_vencida,
+        muestra_pendiente: cfg.notif_muestra_pendiente,
+        lead_seguimiento: cfg.notif_lead_seguimiento,
+      };
+      
+      if (flagPorTipo[tipoEvento] === false) {
+        return { success: false, error: `Tipo "${tipoEvento}" desactivado en configuración`, skipped: true };
+      }
     }
 
     // Construir mensaje Slack en Block Kit
@@ -2663,26 +2738,18 @@ const MainApp = () => {
                            prioridad === 'alta' ? '⚠️' : 
                            prioridad === 'media' ? '🔔' : 'ℹ️';
 
-    const mencion = (prioridad === 'critica' && slackConfig.mencionarEnCriticas) ? '<!channel> ' : '';
+    const mencion = (prioridad === 'critica' && cfg.slack_mencionar_en_criticas) ? '<!channel> ' : '';
 
     const slackPayload = blocks ? { blocks } : {
-      text: `${emojiPrioridad} ${titulo}`, // fallback para notificaciones
+      text: `${emojiPrioridad} ${titulo}`,
       attachments: [{
         color: colorPrioridad,
         blocks: [
-          {
-            type: 'header',
-            text: { type: 'plain_text', text: `${emojiPrioridad} ${titulo}` }
-          },
-          {
-            type: 'section',
-            text: { type: 'mrkdwn', text: `${mencion}${mensaje}` }
-          },
+          { type: 'header', text: { type: 'plain_text', text: `${emojiPrioridad} ${titulo}` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `${mencion}${mensaje}` } },
           {
             type: 'context',
-            elements: [
-              { type: 'mrkdwn', text: `*Prioridad:* ${prioridad.toUpperCase()} | *Origen:* Rootflow ERP | ${new Date().toLocaleString('es-ES')}` }
-            ]
+            elements: [{ type: 'mrkdwn', text: `*Prioridad:* ${prioridad.toUpperCase()} | *Origen:* Rootflow ERP | ${new Date().toLocaleString('es-ES')}` }]
           },
           {
             type: 'actions',
@@ -2700,19 +2767,17 @@ const MainApp = () => {
     try {
       let result;
       
-      if (slackConfig.usarEdgeFunction) {
-        // Usar Edge Function (más seguro: webhook URL como secret)
+      if (cfg.slack_usar_edge_function) {
         const { data, error } = await supabase.functions.invoke('send-slack', {
           body: { payload: slackPayload }
         });
         if (error) throw error;
         result = data;
       } else {
-        // Llamada directa al webhook (URL guardada en localStorage - menos seguro)
-        if (!slackConfig.webhookUrl) {
+        if (!cfg.slack_webhook_url) {
           throw new Error('Webhook URL no configurada');
         }
-        const res = await fetch(slackConfig.webhookUrl, {
+        const res = await fetch(cfg.slack_webhook_url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(slackPayload),
@@ -2721,9 +2786,8 @@ const MainApp = () => {
         result = await res.text();
       }
 
-      // Registrar en log (reutilizamos email_log con campo destinatarios = "Slack")
       await supabase.from('email_log').insert({
-        destinatarios: 'Slack: ' + (slackConfig.canalDefault || '#default'),
+        destinatarios: 'Slack: ' + (cfg.slack_canal_default || '#default'),
         asunto: titulo,
         alerta_id: alertaId,
         estado: 'enviado',
@@ -2734,7 +2798,7 @@ const MainApp = () => {
     } catch (e) {
       console.error('Error Slack:', e);
       await supabase.from('email_log').insert({
-        destinatarios: 'Slack: ' + (slackConfig.canalDefault || '#default'),
+        destinatarios: 'Slack: ' + (cfg.slack_canal_default || '#default'),
         asunto: titulo,
         alerta_id: alertaId,
         estado: 'error',
@@ -4779,8 +4843,10 @@ const MainApp = () => {
     ];
 
     const initialForm = {
-      producto_id: receta?.producto_id || (productos.length > 0 ? productos[0].id : null),
-      variedad: receta?.variedad || '',
+      // V28: ahora la receta se asocia a VARIEDAD, no a producto
+      variedad_id: receta?.variedad_id || (variedades.length > 0 ? variedades[0].id : null),
+      producto_id: receta?.producto_id || null, // mantenido como fallback opcional
+      variedad: receta?.variedad || '', // texto libre (legado, lo mantenemos por si tienen recetas viejas sin variedad_id)
       dias_ciclo: receta?.dias_ciclo || 10,
       rendimiento_esperado: receta?.rendimiento_esperado || 85,
       semillas_por_bandeja: receta?.semillas_por_bandeja || '',
@@ -4927,17 +4993,21 @@ const MainApp = () => {
     };
 
     const handleSubmit = async () => {
-      if (!form.producto_id) {
-        alert('Selecciona un producto');
+      if (!form.variedad_id) {
+        alert('Selecciona una variedad');
         return;
       }
       
       try {
         clearFormStorage();
+        // Limpiar campos antes de guardar (no mandamos producto_id si es null)
+        const dataToSave = { ...form };
+        if (!dataToSave.producto_id) delete dataToSave.producto_id;
+        
         if (receta?.id) {
-          await supabase.from('recetas_produccion').update(form).eq('id', receta.id);
+          await supabase.from('recetas_produccion').update(dataToSave).eq('id', receta.id);
         } else {
-          await supabase.from('recetas_produccion').insert(form);
+          await supabase.from('recetas_produccion').insert(dataToSave);
         }
         refetchRecetas();
         onSave();
@@ -4953,24 +5023,55 @@ const MainApp = () => {
       onCancel();
     };
 
+    // Auto-rellenar dias_ciclo desde la variedad seleccionada
+    useEffect(() => {
+      if (form.variedad_id) {
+        const v = variedades.find(x => x.id === form.variedad_id);
+        if (v && v.dias_crecimiento && form.dias_ciclo === 10) {
+          // Solo si está en valor por defecto, para no machacar lo que ya editó
+          setForm(f => ({ ...f, dias_ciclo: v.dias_crecimiento }));
+        }
+      }
+    }, [form.variedad_id]);
+
+    if (variedades.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <Leaf size={48} className="mx-auto text-amber-500 mb-4" />
+          <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay variedades</h3>
+          <p className="text-neutral-500 mb-4">Crea variedades en Productos antes de crear recetas.</p>
+          <Button onClick={handleCancel}>Cerrar</Button>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
-        {/* Producto y variedad */}
-        <div className="grid grid-cols-2 gap-4">
+        {/* Variedad asociada */}
+        <Card className="p-3 bg-green-50 border-green-200">
           <Select 
-            label="Producto" 
-            value={form.producto_id} 
-            onChange={e => setForm({...form, producto_id: parseInt(e.target.value)})} 
-            options={productos.map(p => ({ value: p.id, label: p.nombre }))} 
+            label="🌱 Variedad asociada (la receta se aplica a TODOS los formatos de esta variedad)"
+            value={form.variedad_id || ''} 
+            onChange={e => setForm({...form, variedad_id: parseInt(e.target.value) || null})} 
+            options={[
+              { value: '', label: '— Selecciona variedad —' },
+              ...variedades.sort((a,b) => a.nombre.localeCompare(b.nombre)).map(v => ({ 
+                value: v.id, 
+                label: `${v.nombre} (${v.categoria})` 
+              }))
+            ]} 
           />
           <Input 
-            label="Variedad/Tipo" 
+            label="Subtipo / variante (opcional)" 
             value={form.variedad} 
             onChange={e => setForm({...form, variedad: e.target.value})} 
-            placeholder="Ej: Semilla italiana, Estándar..."
+            placeholder="Ej: Semilla italiana, Cherry-belle, Daikon..."
+            className="mt-2"
           />
-        </div>
-
+          <p className="text-xs text-green-700 mt-2">
+            💡 La receta se aplica a la variedad completa. Por ejemplo, una receta de Rábano valdrá tanto para "Rábano 15g" como para "Rábano 30g" o "Rábano 100g".
+          </p>
+        </Card>
         {/* Ciclo y rendimiento */}
         <Card className="p-4 bg-green-50 border-green-200">
           <h4 className="font-semibold text-green-800 mb-3">🌱 Ciclo de Producción</h4>
@@ -5712,27 +5813,44 @@ const MainApp = () => {
   };
 
   // ==================== SLACK CONFIG FORM ====================
-  const SlackConfigForm = ({ config, onSave, onCancel, onAbrirEmail, enviarSlackTest }) => {
+  const SlackConfigForm = ({ config, onSave, onCancel, onAbrirEmail, enviarSlackTest, guardarBD }) => {
+    // V28: ahora la config viene de BD (notificaciones_config)
     const [form, setForm] = useState({
-      activo: config.activo || false,
-      webhookUrl: config.webhookUrl || '',
-      usarEdgeFunction: config.usarEdgeFunction !== false,
-      canalDefault: config.canalDefault || '#rootflow-alertas',
-      enviarSoloCriticas: config.enviarSoloCriticas || false,
-      mencionarEnCriticas: config.mencionarEnCriticas !== false,
+      slack_activo: config.slack_activo !== false,
+      slack_webhook_url: config.slack_webhook_url || '',
+      slack_usar_edge_function: config.slack_usar_edge_function !== false,
+      slack_canal_default: config.slack_canal_default || '#rootflow-alertas',
+      slack_mencionar_en_criticas: config.slack_mencionar_en_criticas !== false,
+      // Filtros granulares
+      notif_pedido_nuevo: config.notif_pedido_nuevo !== false,
+      notif_pedido_estado: config.notif_pedido_estado === true,
+      notif_pedido_atrasado: config.notif_pedido_atrasado !== false,
+      notif_stock_bajo: config.notif_stock_bajo !== false,
+      notif_stock_critico: config.notif_stock_critico !== false,
+      notif_cosecha_lista: config.notif_cosecha_lista !== false,
+      notif_siembra_pendiente: config.notif_siembra_pendiente !== false,
+      notif_turno_asignado: config.notif_turno_asignado !== false,
+      notif_turno_recordatorio: config.notif_turno_recordatorio !== false,
+      notif_turno_conflicto: config.notif_turno_conflicto !== false,
+      notif_pago_proveedor: config.notif_pago_proveedor !== false,
+      notif_factura_vencida: config.notif_factura_vencida !== false,
+      notif_muestra_pendiente: config.notif_muestra_pendiente !== false,
+      notif_lead_seguimiento: config.notif_lead_seguimiento === true,
+      notif_resumen_diario: config.notif_resumen_diario === true,
     });
     const [testStatus, setTestStatus] = useState(null);
+    const [secciones, setSecciones] = useState({ general: true, eventos: false, instr: false });
 
     const probarSlack = async () => {
       setTestStatus('enviando');
+      // Guardar config en BD ANTES de probar para que enviarSlack la lea correctamente
+      await guardarBD({ ...form, slack_activo: true });
+      // Esperar un momento a que el realtime actualice el estado
+      await new Promise(r => setTimeout(r, 500));
       
-      // Guardar config temporal para que enviarSlack lo use
-      const configTemporal = { ...form, activo: true };
-      localStorage.setItem('rootflow_slack_config', JSON.stringify(configTemporal));
-
       const result = await enviarSlackTest({
         titulo: 'Mensaje de prueba',
-        mensaje: '✅ Si ves esto, el sistema de notificaciones Slack está funcionando correctamente. A partir de ahora recibirás las alertas del ERP en este canal.',
+        mensaje: '✅ Si ves esto, el sistema de notificaciones Slack está funcionando correctamente. Las notificaciones del ERP están sincronizadas entre todos los dispositivos y cuentas.',
         prioridad: 'media',
       });
 
@@ -5743,133 +5861,241 @@ const MainApp = () => {
       }
     };
 
+    // Tipos de eventos agrupados por categoría
+    const tiposEventos = [
+      {
+        categoria: '🛒 Pedidos',
+        eventos: [
+          { key: 'notif_pedido_nuevo', label: 'Nuevo pedido creado' },
+          { key: 'notif_pedido_estado', label: 'Cambio de estado de pedido' },
+          { key: 'notif_pedido_atrasado', label: 'Pedido con entrega atrasada', critico: true },
+        ],
+      },
+      {
+        categoria: '📦 Stock',
+        eventos: [
+          { key: 'notif_stock_bajo', label: 'Stock bajo (por debajo del mínimo)' },
+          { key: 'notif_stock_critico', label: 'Stock crítico (cero o negativo)', critico: true },
+        ],
+      },
+      {
+        categoria: '🌱 Producción',
+        eventos: [
+          { key: 'notif_cosecha_lista', label: 'Cosecha lista para hoy' },
+          { key: 'notif_siembra_pendiente', label: 'Siembra urgente pendiente', critico: true },
+        ],
+      },
+      {
+        categoria: '👥 Turnos socios',
+        eventos: [
+          { key: 'notif_turno_asignado', label: 'Cuando me asignan un turno' },
+          { key: 'notif_turno_recordatorio', label: 'Recordatorio 1 día antes' },
+          { key: 'notif_turno_conflicto', label: 'Conflicto con ausencia', critico: true },
+        ],
+      },
+      {
+        categoria: '💰 Finanzas',
+        eventos: [
+          { key: 'notif_pago_proveedor', label: 'Pago a proveedor próximo a vencer' },
+          { key: 'notif_factura_vencida', label: 'Factura vencida sin cobrar', critico: true },
+        ],
+      },
+      {
+        categoria: '🤝 CRM',
+        eventos: [
+          { key: 'notif_muestra_pendiente', label: 'Muestra pendiente de entregar' },
+          { key: 'notif_lead_seguimiento', label: 'Recordatorio seguimiento lead' },
+        ],
+      },
+      {
+        categoria: '📅 Resumen',
+        eventos: [
+          { key: 'notif_resumen_diario', label: 'Resumen diario (9:00 AM)' },
+        ],
+      },
+    ];
+
+    const totalActivos = tiposEventos.reduce((sum, cat) => sum + cat.eventos.filter(e => form[e.key]).length, 0);
+    const totalEventos = tiposEventos.reduce((sum, cat) => sum + cat.eventos.length, 0);
+
     return (
       <div className="space-y-4">
         {/* Estado del sistema */}
-        <div className={`p-4 rounded-xl border ${form.activo ? 'bg-purple-50 border-purple-200' : 'bg-amber-50 border-amber-200'}`}>
+        <div className={`p-4 rounded-xl border ${form.slack_activo ? 'bg-purple-50 border-purple-200' : 'bg-amber-50 border-amber-200'}`}>
           <label className="flex items-center gap-3 cursor-pointer">
             <input 
               type="checkbox" 
-              checked={form.activo} 
-              onChange={e => setForm({...form, activo: e.target.checked})} 
+              checked={form.slack_activo} 
+              onChange={e => setForm({...form, slack_activo: e.target.checked})} 
               className="w-5 h-5 rounded" 
             />
-            <div>
-              <span className={`font-bold ${form.activo ? 'text-purple-800' : 'text-amber-800'}`}>
-                {form.activo ? '✅ Notificaciones Slack ACTIVAS' : '⚠️ Notificaciones Slack DESACTIVADAS'}
+            <div className="flex-1">
+              <span className={`font-bold ${form.slack_activo ? 'text-purple-800' : 'text-amber-800'}`}>
+                {form.slack_activo ? '✅ Notificaciones Slack ACTIVAS' : '⚠️ Notificaciones Slack DESACTIVADAS'}
               </span>
-              <p className={`text-xs ${form.activo ? 'text-purple-700' : 'text-amber-700'}`}>
-                Activa esta opción cuando hayas creado el webhook de Slack
+              <p className={`text-xs ${form.slack_activo ? 'text-purple-700' : 'text-amber-700'}`}>
+                {form.slack_activo ? `${totalActivos}/${totalEventos} tipos de eventos activados · Sincronizado entre dispositivos` : 'Activa para empezar a recibir alertas'}
               </p>
             </div>
           </label>
         </div>
 
-        {/* Instrucciones de configuración */}
-        <details className="border border-purple-200 rounded-xl bg-purple-50">
-          <summary className="p-3 cursor-pointer font-semibold text-purple-900">
-            📋 Pasos para configurar Slack (clic para expandir)
-          </summary>
-          <div className="p-4 pt-0 text-sm text-purple-900 space-y-3">
-            <div>
-              <strong>1. Ir al espacio Slack de Rootflow</strong>
-              <p className="text-purple-700">Asegúrate de tener un canal donde quieres recibir las alertas (ej: #rootflow-alertas)</p>
-            </div>
-            <div>
-              <strong>2. Crear una App de Slack con webhook</strong>
-              <p className="text-purple-700">Ve a <a href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener noreferrer" className="underline">api.slack.com/apps</a> → "Create New App" → "From scratch"</p>
-              <p className="text-purple-700">Nombre: "Rootflow ERP" → Selecciona tu workspace</p>
-            </div>
-            <div>
-              <strong>3. Activar Incoming Webhooks</strong>
-              <p className="text-purple-700">En el menú lateral → "Incoming Webhooks" → activar el toggle</p>
-            </div>
-            <div>
-              <strong>4. Añadir webhook al canal</strong>
-              <p className="text-purple-700">Pulsar "Add New Webhook to Workspace" → seleccionar el canal → "Allow"</p>
-              <p className="text-purple-700">Copiar la URL que empieza por <code className="bg-white px-1 rounded">https://hooks.slack.com/services/...</code></p>
-            </div>
-            <div>
-              <strong>5. Configurar en Supabase (Opción A - recomendada)</strong>
-              <p className="text-purple-700">Supabase → Project Settings → Edge Functions → Add Secret:</p>
-              <code className="bg-white px-2 py-1 rounded text-xs block mt-1">SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...</code>
-              <p className="text-purple-700 mt-1">Luego desplegar: <code className="bg-white px-1 rounded">supabase functions deploy send-slack</code></p>
-              <p className="text-purple-700">Sigue las instrucciones detalladas en el archivo <code className="bg-white px-1 rounded">SUPABASE-EDGE-FUNCTION-SLACK.md</code></p>
-            </div>
-            <div>
-              <strong>6. (Opción B - rápida) Pegar URL aquí</strong>
-              <p className="text-purple-700">Si no quieres usar Edge Function, desactiva la opción de abajo y pega la URL del webhook directamente. <strong>Aviso:</strong> la URL queda visible en el navegador.</p>
-            </div>
-          </div>
-        </details>
-
-        {/* Configuración */}
-        <div className="space-y-3">
-          <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={form.usarEdgeFunction} 
-                onChange={e => setForm({...form, usarEdgeFunction: e.target.checked})} 
-                className="w-4 h-4 rounded" 
-              />
-              <div>
-                <span className="text-sm font-medium">🔒 Usar Edge Function (recomendado)</span>
-                <p className="text-xs text-neutral-500">El webhook URL se guarda como secret en Supabase, no es visible</p>
+        {/* SECCIÓN: Configuración general */}
+        <div className="border border-neutral-200 rounded-xl overflow-hidden">
+          <button 
+            onClick={() => setSecciones({...secciones, general: !secciones.general})}
+            className="w-full p-3 bg-neutral-50 hover:bg-neutral-100 flex items-center justify-between"
+          >
+            <span className="font-semibold text-neutral-900">⚙️ Configuración general</span>
+            <ChevronDown size={18} className={`transition-transform ${secciones.general ? 'rotate-180' : ''}`} />
+          </button>
+          {secciones.general && (
+            <div className="p-4 space-y-3 border-t">
+              <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={form.slack_usar_edge_function} 
+                    onChange={e => setForm({...form, slack_usar_edge_function: e.target.checked})} 
+                    className="w-4 h-4 rounded" 
+                  />
+                  <div>
+                    <span className="text-sm font-medium">🔒 Usar Edge Function (recomendado)</span>
+                    <p className="text-xs text-neutral-500">El webhook URL se guarda como secret en Supabase</p>
+                  </div>
+                </label>
               </div>
-            </label>
-          </div>
-
-          {!form.usarEdgeFunction && (
-            <Input 
-              label="Webhook URL de Slack" 
-              value={form.webhookUrl} 
-              onChange={e => setForm({...form, webhookUrl: e.target.value})} 
-              placeholder="https://hooks.slack.com/services/T.../B.../..."
-            />
+              {!form.slack_usar_edge_function && (
+                <Input 
+                  label="Webhook URL de Slack" 
+                  value={form.slack_webhook_url} 
+                  onChange={e => setForm({...form, slack_webhook_url: e.target.value})} 
+                  placeholder="https://hooks.slack.com/services/..."
+                />
+              )}
+              <Input 
+                label="Canal por defecto (informativo)" 
+                value={form.slack_canal_default} 
+                onChange={e => setForm({...form, slack_canal_default: e.target.value})} 
+                placeholder="#rootflow-alertas"
+              />
+              <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={form.slack_mencionar_en_criticas} 
+                    onChange={e => setForm({...form, slack_mencionar_en_criticas: e.target.checked})} 
+                    className="w-4 h-4 rounded" 
+                  />
+                  <div>
+                    <span className="text-sm font-medium">@channel en alertas críticas</span>
+                    <p className="text-xs text-neutral-500">Notifica a todo el canal cuando hay algo crítico</p>
+                  </div>
+                </label>
+              </div>
+            </div>
           )}
-          
-          <Input 
-            label="Canal por defecto (informativo)" 
-            value={form.canalDefault} 
-            onChange={e => setForm({...form, canalDefault: e.target.value})} 
-            placeholder="#rootflow-alertas"
-          />
-          <p className="text-xs text-neutral-500 -mt-2">El canal real lo determina el webhook al crearlo. Este campo es solo para identificar.</p>
-          
-          <div className="space-y-2 p-3 bg-neutral-50 border border-neutral-200 rounded-xl">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={form.enviarSoloCriticas} 
-                onChange={e => setForm({...form, enviarSoloCriticas: e.target.checked})} 
-                className="w-4 h-4 rounded" 
-              />
-              <span className="text-sm font-medium">Enviar solo alertas críticas</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input 
-                type="checkbox" 
-                checked={form.mencionarEnCriticas} 
-                onChange={e => setForm({...form, mencionarEnCriticas: e.target.checked})} 
-                className="w-4 h-4 rounded" 
-              />
-              <div>
-                <span className="text-sm font-medium">Mencionar @channel en alertas críticas</span>
-                <p className="text-xs text-neutral-500">Notifica a todo el canal cuando hay algo crítico</p>
+        </div>
+
+        {/* SECCIÓN: Eventos granulares */}
+        <div className="border border-neutral-200 rounded-xl overflow-hidden">
+          <button 
+            onClick={() => setSecciones({...secciones, eventos: !secciones.eventos})}
+            className="w-full p-3 bg-neutral-50 hover:bg-neutral-100 flex items-center justify-between"
+          >
+            <span className="font-semibold text-neutral-900">🔔 Qué eventos disparan notificación ({totalActivos}/{totalEventos})</span>
+            <ChevronDown size={18} className={`transition-transform ${secciones.eventos ? 'rotate-180' : ''}`} />
+          </button>
+          {secciones.eventos && (
+            <div className="p-4 space-y-3 border-t max-h-96 overflow-y-auto">
+              {/* Botones rápidos */}
+              <div className="flex gap-2 mb-2 pb-3 border-b">
+                <button 
+                  onClick={() => {
+                    const updates = {};
+                    tiposEventos.forEach(cat => cat.eventos.forEach(e => { updates[e.key] = true; }));
+                    setForm({...form, ...updates});
+                  }}
+                  className="text-xs px-3 py-1 bg-green-100 text-green-700 rounded-full hover:bg-green-200"
+                >
+                  ✓ Activar todos
+                </button>
+                <button 
+                  onClick={() => {
+                    const updates = {};
+                    tiposEventos.forEach(cat => cat.eventos.forEach(e => { 
+                      updates[e.key] = e.critico === true; 
+                    }));
+                    setForm({...form, ...updates});
+                  }}
+                  className="text-xs px-3 py-1 bg-red-100 text-red-700 rounded-full hover:bg-red-200"
+                >
+                  🚨 Solo críticos
+                </button>
+                <button 
+                  onClick={() => {
+                    const updates = {};
+                    tiposEventos.forEach(cat => cat.eventos.forEach(e => { updates[e.key] = false; }));
+                    setForm({...form, ...updates});
+                  }}
+                  className="text-xs px-3 py-1 bg-neutral-100 text-neutral-700 rounded-full hover:bg-neutral-200"
+                >
+                  ✗ Desactivar todos
+                </button>
               </div>
-            </label>
-          </div>
+              
+              {tiposEventos.map(cat => (
+                <div key={cat.categoria} className="space-y-1.5">
+                  <p className="text-xs font-bold text-neutral-700 uppercase tracking-wide">{cat.categoria}</p>
+                  {cat.eventos.map(evento => (
+                    <label key={evento.key} className="flex items-center gap-2 cursor-pointer p-2 hover:bg-neutral-50 rounded-lg">
+                      <input 
+                        type="checkbox" 
+                        checked={form[evento.key] === true} 
+                        onChange={e => setForm({...form, [evento.key]: e.target.checked})} 
+                        className="w-4 h-4 rounded flex-shrink-0" 
+                      />
+                      <span className="text-sm flex-1">{evento.label}</span>
+                      {evento.critico && (
+                        <Badge className="bg-red-100 text-red-700 text-[10px]">crítico</Badge>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SECCIÓN: Instrucciones */}
+        <div className="border border-purple-200 rounded-xl overflow-hidden bg-purple-50">
+          <button 
+            onClick={() => setSecciones({...secciones, instr: !secciones.instr})}
+            className="w-full p-3 hover:bg-purple-100 flex items-center justify-between"
+          >
+            <span className="font-semibold text-purple-900">📋 Cómo configurar Slack (primera vez)</span>
+            <ChevronDown size={18} className={`text-purple-700 transition-transform ${secciones.instr ? 'rotate-180' : ''}`} />
+          </button>
+          {secciones.instr && (
+            <div className="p-4 pt-0 text-sm text-purple-900 space-y-2 border-t border-purple-200">
+              <div><strong>1.</strong> Ir a <a href="https://api.slack.com/apps?new_app=1" target="_blank" rel="noopener noreferrer" className="underline">api.slack.com/apps</a> → Create New App → From scratch</div>
+              <div><strong>2.</strong> En menú lateral: Incoming Webhooks → Activate → Add to Workspace → seleccionar canal</div>
+              <div><strong>3.</strong> Copiar URL que sale (https://hooks.slack.com/services/...)</div>
+              <div><strong>4.</strong> En Supabase Dashboard → Project Settings → Edge Functions → Secrets → Add: <code className="bg-white px-1 rounded text-xs">SLACK_WEBHOOK_URL</code></div>
+              <div><strong>5.</strong> En terminal: <code className="bg-white px-1 rounded text-xs">supabase functions deploy send-slack</code></div>
+              <div><strong>6.</strong> Activar el toggle de arriba y pulsar "Probar"</div>
+            </div>
+          )}
         </div>
 
         {/* Botón probar */}
         <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
           <Button 
             onClick={probarSlack} 
-            disabled={testStatus === 'enviando' || (!form.usarEdgeFunction && !form.webhookUrl)}
+            disabled={testStatus === 'enviando' || (!form.slack_usar_edge_function && !form.slack_webhook_url)}
             className="w-full bg-purple-600 hover:bg-purple-700"
           >
-            💬 {testStatus === 'enviando' ? 'Enviando...' : 'Enviar mensaje de prueba a Slack'}
+            💬 {testStatus === 'enviando' ? 'Enviando...' : 'Enviar mensaje de prueba'}
           </Button>
           {testStatus && testStatus !== 'enviando' && (
             <div className={`mt-2 p-2 rounded text-xs ${testStatus.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
@@ -5878,11 +6104,11 @@ const MainApp = () => {
           )}
         </div>
 
-        {/* Link al sistema email */}
+        {/* Link a email */}
         <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm">
           <p className="text-blue-800">
             <Mail size={14} className="inline mr-1" />
-            ¿También quieres recibir notificaciones por email? 
+            ¿Notificaciones por email también? 
             <button onClick={onAbrirEmail} className="text-blue-600 font-semibold ml-1 hover:underline">
               Configurar email →
             </button>
@@ -9204,22 +9430,42 @@ const MainApp = () => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {recetas.map(receta => {
-                  const producto = productos.find(p => p.id === receta.producto_id);
-                  const lotesReceta = lotes.filter(l => l.producto_id === receta.producto_id && l.estado === 'cosechado');
+                  const variedad = variedades.find(v => v.id === receta.variedad_id);
+                  const producto = productos.find(p => p.id === receta.producto_id); // legado
+                  const tituloPrincipal = variedad?.nombre || producto?.nombre || 'Sin variedad';
+                  const subtitulo = receta.variedad || (producto && variedad ? '' : (variedad?.categoria || ''));
+                  // Lotes de esta variedad cosechados
+                  const lotesReceta = variedad 
+                    ? lotes.filter(l => l.variedad_id === variedad.id && l.estado === 'cosechado')
+                    : lotes.filter(l => l.producto_id === receta.producto_id && l.estado === 'cosechado');
                   const rendimientoReal = lotesReceta.length > 0 
                     ? Math.round(lotesReceta.reduce((sum, l) => sum + (l.cantidad_real || 0), 0) / lotesReceta.length)
                     : null;
+                  // Cuántos formatos hay de esta variedad
+                  const formatosVariedad = variedad 
+                    ? productos.filter(p => p.variedad_id === variedad.id && p.estado_inventario === 'empaquetado').length
+                    : 0;
                   
                   return (
                     <Card key={receta.id} className="p-4 hover:shadow-lg transition-shadow">
                       <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-xl bg-green-500 flex items-center justify-center text-white">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-12 h-12 rounded-xl bg-green-500 flex items-center justify-center text-white flex-shrink-0">
                             <Leaf size={24} />
                           </div>
-                          <div>
-                            <h3 className="font-bold text-neutral-900">{producto?.nombre || 'Producto'}</h3>
-                            <p className="text-sm text-neutral-500">{receta.variedad || 'Variedad estándar'}</p>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-bold text-neutral-900 truncate">{tituloPrincipal}</h3>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {subtitulo && <p className="text-sm text-neutral-500">{subtitulo}</p>}
+                              {formatosVariedad > 0 && (
+                                <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
+                                  {formatosVariedad} formato{formatosVariedad !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                              {!variedad && producto && (
+                                <Badge className="bg-amber-100 text-amber-700 text-[10px]">⚠️ legado</Badge>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -9528,29 +9774,208 @@ const MainApp = () => {
               </Card>
             ) : (
               <>
-                {/* Stats por socio */}
-                <div className={`grid grid-cols-1 md:grid-cols-${Math.min(socios.length, 4)} gap-4`}>
-                  {estadisticasSocios.map(s => (
-                    <Card key={s.id} className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg" style={{backgroundColor: s.color || '#F97316'}}>
-                          {s.nombre.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-bold text-neutral-900">{s.nombre}</p>
-                          <p className="text-xs text-neutral-500">{s.email || 'Sin email'}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xs font-bold text-orange-600">{s.turnos} turnos</span>
-                            <span className="text-xs text-neutral-400">•</span>
-                            <span className="text-xs text-green-600">{s.completados} completados</span>
+                {/* Stats por socio - clickable para filtrar */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <p className="text-xs text-neutral-500 font-semibold uppercase tracking-wide">
+                      {calendarioSocioFiltro 
+                        ? `Filtrando turnos de: ${socios.find(s => s.id === calendarioSocioFiltro)?.nombre}`
+                        : 'Vista de todos los socios (clic en una card para filtrar)'}
+                    </p>
+                    {calendarioSocioFiltro && (
+                      <button onClick={() => setCalendarioSocioFiltro(null)} className="text-xs text-orange-600 font-medium hover:underline">
+                        ✕ Quitar filtro
+                      </button>
+                    )}
+                  </div>
+                  <div className={`grid grid-cols-1 md:grid-cols-${Math.min(socios.length, 4)} gap-4`}>
+                    {estadisticasSocios.map(s => {
+                      const seleccionado = calendarioSocioFiltro === s.id;
+                      // Ausencias activas/futuras
+                      const ausenciasFuturasSocio = ausenciasSocios.filter(a => 
+                        a.socio_id === s.id && new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0))
+                      ).length;
+                      
+                      return (
+                        <Card 
+                          key={s.id} 
+                          className={`p-4 cursor-pointer transition-all ${seleccionado ? 'ring-2 ring-orange-500 bg-orange-50' : 'hover:shadow-md'}`}
+                          onClick={() => setCalendarioSocioFiltro(seleccionado ? null : s.id)}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg flex-shrink-0" style={{backgroundColor: s.color || '#F97316'}}>
+                              {s.nombre.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-neutral-900 truncate">{s.nombre}</p>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                <span className="text-xs font-bold text-orange-600">{s.turnos} turnos</span>
+                                <span className="text-xs text-neutral-400">•</span>
+                                <span className="text-xs text-green-600">{s.completados} ✓</span>
+                                {ausenciasFuturasSocio > 0 && (
+                                  <>
+                                    <span className="text-xs text-neutral-400">•</span>
+                                    <span className="text-xs text-amber-600">🏖️ {ausenciasFuturasSocio}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
+                        </Card>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* Calendario de turnos */}
+                {/* Selector de vista (mes/semana) */}
+                <div className="flex items-center justify-between flex-wrap gap-2 px-1">
+                  <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl">
+                    <button 
+                      onClick={() => setCalendarioVista('mes')} 
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'mes' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                    >
+                      📅 Mes
+                    </button>
+                    <button 
+                      onClick={() => setCalendarioVista('semana')} 
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${calendarioVista === 'semana' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                    >
+                      🗓️ Semana
+                    </button>
+                  </div>
+                </div>
+
+                {/* RENDER VISTA SEMANAL */}
+                {calendarioVista === 'semana' && (() => {
+                  // Calcular días de la semana (lunes a domingo)
+                  const fechaRef = new Date(semanaCalendario);
+                  const diaSemana = fechaRef.getDay() === 0 ? 6 : fechaRef.getDay() - 1;
+                  const lunes = new Date(fechaRef);
+                  lunes.setDate(fechaRef.getDate() - diaSemana);
+                  
+                  const diasSemanaArray = [];
+                  for (let i = 0; i < 7; i++) {
+                    const d = new Date(lunes);
+                    d.setDate(lunes.getDate() + i);
+                    diasSemanaArray.push(d);
+                  }
+                  
+                  const cambiarSemana = (delta) => {
+                    const nueva = new Date(semanaCalendario);
+                    nueva.setDate(nueva.getDate() + (delta * 7));
+                    setSemanaCalendario(nueva);
+                  };
+                  
+                  const horasArray = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
+                  
+                  return (
+                    <Card className="p-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <button onClick={() => cambiarSemana(-1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                          <ArrowDownRight size={20} className="rotate-135" />
+                        </button>
+                        <div className="text-center">
+                          <h2 className="text-lg font-bold text-neutral-900">
+                            Semana del {diasSemanaArray[0].getDate()} {diasSemanaArray[0].toLocaleDateString('es-ES', { month: 'short' })} al {diasSemanaArray[6].getDate()} {diasSemanaArray[6].toLocaleDateString('es-ES', { month: 'short' })}
+                          </h2>
+                          <button onClick={() => setSemanaCalendario(new Date())} className="text-xs text-orange-600 hover:underline">
+                            Ir a hoy
+                          </button>
+                        </div>
+                        <button onClick={() => cambiarSemana(1)} className="p-2 hover:bg-neutral-100 rounded-lg">
+                          <ArrowUpRight size={20} />
+                        </button>
+                      </div>
+                      
+                      {/* Cabecera días */}
+                      <div className="grid grid-cols-8 gap-1 mb-1 sticky top-0 bg-white z-10">
+                        <div className="text-xs text-neutral-400 text-center py-2">Hora</div>
+                        {diasSemanaArray.map((d, i) => {
+                          const esHoy = d.toISOString().split('T')[0] === hoy;
+                          const nombresDia = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+                          return (
+                            <div key={i} className={`text-center py-2 rounded-lg ${esHoy ? 'bg-orange-100 font-bold text-orange-700' : 'text-neutral-700'}`}>
+                              <div className="text-xs">{nombresDia[i]}</div>
+                              <div className="text-lg font-bold">{d.getDate()}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      
+                      {/* Filas por hora */}
+                      <div className="max-h-[500px] overflow-y-auto">
+                        {horasArray.map(hora => (
+                          <div key={hora} className="grid grid-cols-8 gap-1 border-t border-neutral-100">
+                            <div className="text-xs text-neutral-400 text-right pr-2 py-2">{String(hora).padStart(2, '0')}:00</div>
+                            {diasSemanaArray.map((d, i) => {
+                              const fechaStrDia = d.toISOString().split('T')[0];
+                              // Turnos en esa hora (filtrado por socio si aplica)
+                              const turnosHora = turnos.filter(t => {
+                                if (t.fecha !== fechaStrDia) return false;
+                                if (calendarioSocioFiltro && t.socio_id !== calendarioSocioFiltro) return false;
+                                if (!t.hora) return false;
+                                const horaT = parseInt(t.hora.split(':')[0]);
+                                return horaT === hora;
+                              });
+                              // Ausencias del día (no por hora)
+                              const ausenciasDia = hora === 6 ? ausenciasSocios.filter(a => 
+                                fechaStrDia >= a.fecha_inicio && fechaStrDia <= a.fecha_fin &&
+                                (!calendarioSocioFiltro || a.socio_id === calendarioSocioFiltro)
+                              ) : [];
+                              
+                              return (
+                                <div 
+                                  key={i} 
+                                  className="min-h-[40px] p-0.5 border-l border-neutral-100 cursor-pointer hover:bg-orange-50"
+                                  onClick={() => { 
+                                    setEditingItem({ fecha: fechaStrDia, hora: `${String(hora).padStart(2, '0')}:00` }); 
+                                    setShowModal('turno'); 
+                                  }}
+                                >
+                                  {ausenciasDia.map(a => {
+                                    const socio = socios.find(s => s.id === a.socio_id);
+                                    return (
+                                      <div 
+                                        key={a.id} 
+                                        className="text-[9px] px-1 py-0.5 rounded bg-red-100 text-red-700 line-through truncate mb-0.5"
+                                        title={`${socio?.nombre} - ${a.tipo}`}
+                                        onClick={(e) => { e.stopPropagation(); setEditingItem(a); setShowModal('ausencia'); }}
+                                      >
+                                        🏖️ {socio?.nombre?.split(' ')[0]}
+                                      </div>
+                                    );
+                                  })}
+                                  {turnosHora.map(t => {
+                                    const socio = socios.find(s => s.id === t.socio_id);
+                                    const tipo = tiposTurno[t.tipo] || tiposTurno.otros;
+                                    return (
+                                      <div 
+                                        key={t.id} 
+                                        className={`text-[9px] px-1 py-0.5 rounded truncate mb-0.5 border ${tipo.color} ${t.completado ? 'opacity-50 line-through' : ''}`}
+                                        style={{borderLeft: `3px solid ${socio?.color || '#F97316'}`}}
+                                        title={`${socio?.nombre} - ${t.tipo} ${t.hora}`}
+                                        onClick={(e) => { e.stopPropagation(); setEditingItem(t); setShowModal('turno'); }}
+                                      >
+                                        {tipo.icon} {socio?.nombre?.split(' ')[0]}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      
+                      <p className="text-xs text-neutral-400 text-center mt-3">
+                        💡 Clic en una celda vacía para asignar turno · Clic en turno para editar · Hora 06:00 muestra ausencias del día
+                      </p>
+                    </Card>
+                  );
+                })()}
+
+                {/* Calendario de turnos (vista MES) - solo si calendarioVista === 'mes' */}
+                {calendarioVista === 'mes' && (
                 <Card className="p-6">
                   <div className="flex items-center justify-between mb-6">
                     <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg"><ArrowDownRight size={20} className="rotate-135" /></button>
@@ -9640,6 +10065,7 @@ const MainApp = () => {
                     })}
                   </div>
                 </Card>
+                )}
 
                 {/* Lista de ausencias actuales/futuras */}
                 {ausenciasSocios.filter(a => new Date(a.fecha_fin) >= new Date(new Date().setHours(0,0,0,0))).length > 0 && (
@@ -9691,7 +10117,11 @@ const MainApp = () => {
                   <h3 className="text-lg font-bold text-neutral-900 mb-4 flex items-center gap-2"><CalendarClock size={20} className="text-orange-500" /> Próximos Turnos</h3>
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {turnos
-                      .filter(t => new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && !t.completado)
+                      .filter(t => 
+                        new Date(t.fecha) >= new Date(new Date().setHours(0,0,0,0)) && 
+                        !t.completado &&
+                        (!calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                      )
                       .sort((a, b) => new Date(a.fecha) - new Date(b.fecha))
                       .slice(0, 15)
                       .map(t => {
@@ -9782,7 +10212,7 @@ const MainApp = () => {
                 setEditingItem(null);
                 
                 // Enviar alerta Slack si está activado y es nuevo
-                if (esNuevo && form.enviar_alerta && slackConfig.activo) {
+                if (esNuevo && form.enviar_alerta && notificacionesConfig.slack_activo) {
                   const socio = socios.find(s => s.id === form.socio_id);
                   if (socio) {
                     const tiposEmoji = { riego: '💧', cosecha: '🌱', empaquetado: '📦', siembra: '🌰', reparto: '🚚', limpieza: '🧹', otros: '📌' };
@@ -9790,6 +10220,7 @@ const MainApp = () => {
                       titulo: `Nuevo turno asignado a ${socio.nombre}`,
                       mensaje: `${tiposEmoji[form.tipo] || ''} *${form.tipo}* el ${form.fecha} a las ${form.hora || '09:00'}\n_${form.notas || 'Sin notas'}_`,
                       prioridad: 'media',
+                      tipoEvento: 'turno_asignado',
                     });
                   }
                 }
@@ -14078,7 +14509,7 @@ Firma repartidor: _________________
                       {/* Botón notificar a todos por SLACK */}
                       {alertas.length > 0 && (
                         <div className={`p-3 border-b ${darkMode ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-purple-50'} flex-shrink-0 space-y-2`}>
-                          {!slackConfig.activo && !emailConfig.activo ? (
+                          {!notificacionesConfig.slack_activo && !emailConfig.activo ? (
                             <div className="flex items-center gap-2 text-xs">
                               <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
                               <span className={darkMode ? 'text-neutral-300' : 'text-neutral-700'}>
@@ -14090,12 +14521,12 @@ Firma repartidor: _________________
                             </div>
                           ) : (
                             <>
-                              {slackConfig.activo && (
+                              {notificacionesConfig.slack_activo && (
                                 <Button 
                                   size="sm" 
                                   className="w-full bg-purple-600 hover:bg-purple-700"
                                   onClick={async () => {
-                                    const alertasFiltradas = slackConfig.enviarSoloCriticas 
+                                    const alertasFiltradas = false 
                                       ? alertas.filter(a => a.prioridad === 'critica')
                                       : alertas;
                                     if (alertasFiltradas.length === 0) {
@@ -14196,7 +14627,7 @@ Firma repartidor: _________________
                                   {alerta.prioridad}
                                 </span>
                                 <div className="flex gap-1">
-                                  {slackConfig.activo && (
+                                  {notificacionesConfig.slack_activo && (
                                     <button
                                       onClick={async (e) => {
                                         e.stopPropagation();
@@ -14428,11 +14859,20 @@ Firma repartidor: _________________
       </Modal>}
       {showModal === 'slackConfig' && <Modal title="Configurar Notificaciones (Slack)" onClose={() => setShowModal(null)} size="max-w-2xl">
         <SlackConfigForm 
-          config={slackConfig} 
-          onSave={(c) => { guardarSlackConfig(c); setShowModal(null); }} 
+          config={notificacionesConfig} 
+          onSave={async (c) => { 
+            const result = await guardarNotificacionesConfig(c);
+            if (result.success) {
+              setShowModal(null);
+              alert('✅ Configuración guardada y sincronizada');
+            } else {
+              alert('❌ Error al guardar: ' + result.error);
+            }
+          }} 
           onCancel={() => setShowModal(null)}
           onAbrirEmail={() => { setShowModal('emailConfig'); }}
           enviarSlackTest={enviarSlack}
+          guardarBD={guardarNotificacionesConfig}
         />
       </Modal>}
     </div>
