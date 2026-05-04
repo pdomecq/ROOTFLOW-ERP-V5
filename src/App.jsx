@@ -4776,25 +4776,101 @@ const MainApp = () => {
 
   // ==================== TAREA FORM ====================
   const TareaForm = ({ tarea, onSave, onCancel }) => {
-    const initialForm = tarea || { titulo: '', descripcion: '', categoria: 'otro', prioridad: 'media', fecha_limite: '', cliente_id: null, asignado_a: null, completada: false };
+    const initialForm = tarea || { 
+      titulo: '', 
+      descripcion: '', 
+      categoria: 'otro', 
+      prioridad: 'media', 
+      fecha_limite: '', 
+      hora_limite: '',
+      cliente_id: null, 
+      asignado_a: null,
+      socio_id: null,
+      completada: false,
+      recordatorio_slack: false,
+      recordatorio_minutos_antes: 60,
+    };
     const [form, setForm, clearFormStorage] = useFormPersistence(`tarea_${tarea?.id || 'new'}`, initialForm, !tarea);
     const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
+    
+    const sociosActivos = socios.filter(s => s.activo !== false);
+    
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
-          <Input label="Título" className="col-span-2" value={form.titulo} onChange={e => setForm({...form, titulo: e.target.value})} />
+          <Input label="Título" className="col-span-2" value={form.titulo} onChange={e => setForm({...form, titulo: e.target.value})} placeholder="Ej: Llamar al chef del Hotel Palace" />
           <Select label="Categoría" value={form.categoria} onChange={e => setForm({...form, categoria: e.target.value})} options={Object.entries(categoriaTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Select label="Prioridad" value={form.prioridad} onChange={e => setForm({...form, prioridad: e.target.value})} options={Object.entries(prioridadTareaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
           <Input label="Fecha límite" type="date" value={form.fecha_limite} onChange={e => setForm({...form, fecha_limite: e.target.value})} />
-          <Select label="Asignar a" value={form.asignado_a || ''} onChange={e => setForm({...form, asignado_a: e.target.value || null})} options={[{ value: '', label: 'Sin asignar' }, ...SOCIOS.map(s => ({ value: s.id, label: s.nombre }))]} />
-          <Select label="Cliente (opcional)" className="col-span-2" value={form.cliente_id || ''} onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})} options={[{ value: '', label: 'Sin cliente' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]} />
+          <Input label="Hora límite (opcional)" type="time" value={form.hora_limite || ''} onChange={e => setForm({...form, hora_limite: e.target.value})} />
+          
+          {/* Asignar a socio (real, no SOCIOS estático) */}
+          <Select 
+            label="Asignar a socio" 
+            className="col-span-2"
+            value={form.socio_id || ''} 
+            onChange={e => setForm({...form, socio_id: e.target.value ? parseInt(e.target.value) : null})} 
+            options={[
+              { value: '', label: '— Sin asignar —' }, 
+              ...sociosActivos.map(s => ({ value: s.id, label: s.nombre }))
+            ]} 
+          />
+          
+          <Select 
+            label="Cliente (opcional)" 
+            className="col-span-2" 
+            value={form.cliente_id || ''} 
+            onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})} 
+            options={[{ value: '', label: 'Sin cliente' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]} 
+          />
+          
           <div className="col-span-2">
             <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Descripción</label>
             <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} />
           </div>
         </div>
-        <div className="flex justify-end gap-3 pt-4 border-t"><Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button><Button onClick={() => handleSaveWithClear(form)}>{tarea ? 'Guardar' : 'Crear Tarea'}</Button></div>
+
+        {/* Recordatorio Slack */}
+        <div className={`p-4 rounded-xl border ${form.recordatorio_slack ? 'bg-purple-50 border-purple-200' : 'bg-neutral-50 border-neutral-200'}`}>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox" 
+              checked={form.recordatorio_slack} 
+              onChange={e => setForm({...form, recordatorio_slack: e.target.checked})} 
+              className="w-4 h-4 rounded" 
+            />
+            <div className="flex-1">
+              <span className="text-sm font-medium">💬 Enviar recordatorio por Slack</span>
+              <p className="text-xs text-neutral-500">Notifica al socio asignado cuando se acerque la fecha</p>
+            </div>
+          </label>
+          {form.recordatorio_slack && (
+            <div className="mt-3 pl-6 space-y-2">
+              <Select 
+                label="¿Cuándo avisar?" 
+                value={form.recordatorio_minutos_antes || 60} 
+                onChange={e => setForm({...form, recordatorio_minutos_antes: parseInt(e.target.value)})} 
+                options={[
+                  { value: 15, label: '15 min antes' },
+                  { value: 30, label: '30 min antes' },
+                  { value: 60, label: '1 hora antes' },
+                  { value: 180, label: '3 horas antes' },
+                  { value: 1440, label: '1 día antes' },
+                  { value: 2880, label: '2 días antes' },
+                  { value: 10080, label: '1 semana antes' },
+                ]}
+              />
+              {!form.fecha_limite && <p className="text-xs text-amber-700">⚠️ Define una fecha límite para que funcione el recordatorio</p>}
+              {!form.socio_id && <p className="text-xs text-amber-700">⚠️ Asigna la tarea a un socio para que reciba el aviso</p>}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
+          <Button onClick={() => handleSaveWithClear(form)}>{tarea ? 'Guardar' : 'Crear Tarea'}</Button>
+        </div>
       </div>
     );
   };
@@ -6592,8 +6668,16 @@ const MainApp = () => {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">¡Hola, {userProfile?.nombre?.split(' ')[0] || 'Usuario'}!</h1>
-            <p className="text-neutral-500 mt-1 font-medium text-sm md:text-base">Panel de control de RootFlow ERP</p>
+            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">
+              {(() => {
+                const h = new Date().getHours();
+                const saludo = h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches';
+                return `${saludo}, ${userProfile?.nombre?.split(' ')[0] || 'Usuario'} 👋`;
+              })()}
+            </h1>
+            <p className="text-neutral-500 mt-1 font-medium text-sm md:text-base">
+              {new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Calendar size={20} className="text-neutral-400 hidden sm:block" />
@@ -6612,6 +6696,84 @@ const MainApp = () => {
             </select>
           </div>
         </div>
+
+        {/* === MI DÍA: vista operativa de hoy === */}
+        {(() => {
+          const hoyStrD = new Date().toISOString().split('T')[0];
+          const turnosHoyD = turnos.filter(t => t.fecha === hoyStrD && !t.completado);
+          const tareasHoyD = tareas.filter(t => t.fecha_limite === hoyStrD && !t.completada);
+          const tareasAtrasD = tareas.filter(t => !t.completada && t.fecha_limite && t.fecha_limite < hoyStrD);
+          const entregasHoy = pedidos.filter(p => p.fecha_entrega === hoyStrD && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+          const cosechasHoy = lotes.filter(l => l.fecha_cosecha_prevista === hoyStrD && l.estado !== 'cosechado');
+
+          const totalHoy = turnosHoyD.length + tareasHoyD.length + entregasHoy.length + cosechasHoy.length;
+
+          if (totalHoy === 0 && tareasAtrasD.length === 0) {
+            return (
+              <Card className="p-6 bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
+                <div className="flex items-center gap-3">
+                  <div className="text-4xl">🌟</div>
+                  <div>
+                    <h2 className="text-xl font-bold text-green-800">¡Día tranquilo!</h2>
+                    <p className="text-sm text-green-700">No hay nada urgente pendiente para hoy. Buen momento para planificar.</p>
+                  </div>
+                </div>
+              </Card>
+            );
+          }
+
+          return (
+            <Card className="p-5 bg-gradient-to-br from-orange-500 to-orange-600 text-white shadow-xl">
+              <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
+                <div>
+                  <h2 className="text-2xl font-black">📋 Mi día</h2>
+                  <p className="text-sm opacity-90">{totalHoy} cosa{totalHoy !== 1 ? 's' : ''} pendiente{totalHoy !== 1 ? 's' : ''} hoy{tareasAtrasD.length > 0 ? ` · ${tareasAtrasD.length} tarea${tareasAtrasD.length !== 1 ? 's' : ''} atrasada${tareasAtrasD.length !== 1 ? 's' : ''}` : ''}</p>
+                </div>
+                <button onClick={() => setActiveSection('calendario')} className="text-xs px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg font-semibold">
+                  Ver calendario →
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div onClick={() => setActiveSection('calendario')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
+                  <div className="flex items-center gap-2 mb-1">
+                    <CalendarClock size={18} />
+                    <span className="text-xs uppercase opacity-90">Turnos hoy</span>
+                  </div>
+                  <p className="text-3xl font-black">{turnosHoyD.length}</p>
+                  {turnosHoyD.length > 0 && <p className="text-xs opacity-80 truncate">{turnosHoyD.slice(0,2).map(t => socios.find(s => s.id === t.socio_id)?.nombre?.split(' ')[0]).join(', ')}</p>}
+                </div>
+                
+                <div onClick={() => setActiveSection('calendario')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ClipboardList size={18} />
+                    <span className="text-xs uppercase opacity-90">Tareas hoy</span>
+                  </div>
+                  <p className="text-3xl font-black">{tareasHoyD.length}</p>
+                  {tareasAtrasD.length > 0 && <p className="text-xs bg-red-500 inline-block px-1.5 rounded">+{tareasAtrasD.length} atrasadas</p>}
+                </div>
+                
+                <div onClick={() => setActiveSection('pedidos')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Truck size={18} />
+                    <span className="text-xs uppercase opacity-90">Entregas hoy</span>
+                  </div>
+                  <p className="text-3xl font-black">{entregasHoy.length}</p>
+                  {entregasHoy.length > 0 && <p className="text-xs opacity-80 truncate">{formatCurrency(entregasHoy.reduce((s, p) => s + (p.total || 0), 0))}</p>}
+                </div>
+                
+                <div onClick={() => setActiveSection('produccion')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Leaf size={18} />
+                    <span className="text-xs uppercase opacity-90">Cosechas hoy</span>
+                  </div>
+                  <p className="text-3xl font-black">{cosechasHoy.length}</p>
+                  {cosechasHoy.length > 0 && <p className="text-xs opacity-80 truncate">{cosechasHoy.reduce((s, l) => s + (l.bandejas || 0), 0)} bandejas</p>}
+                </div>
+              </div>
+            </Card>
+          );
+        })()}
 
         {/* Alertas importantes */}
         {totalAlertas > 0 && (
@@ -9627,12 +9789,12 @@ const MainApp = () => {
         </div>
 
         {/* Pestañas */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button 
             onClick={() => setCalendarioTab('eventos')} 
-            className={`px-4 py-2 rounded-xl font-semibold transition-colors ${calendarioTab === 'eventos' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${calendarioTab === 'eventos' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
           >
-            <Calendar size={18} className="inline mr-2" />Eventos
+            <Calendar size={18} />Eventos
           </button>
           <button 
             onClick={() => setCalendarioTab('turnos')} 
@@ -9645,9 +9807,20 @@ const MainApp = () => {
               </span>
             )}
           </button>
+          <button 
+            onClick={() => setCalendarioTab('tareas')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${calendarioTab === 'tareas' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <ClipboardList size={18} />Tareas
+            {tareas.filter(t => !t.completada).length > 0 && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${calendarioTab === 'tareas' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
+                {tareas.filter(t => !t.completada).length}
+              </span>
+            )}
+          </button>
         </div>
 
-        {calendarioTab === 'eventos' ? (
+        {calendarioTab === 'eventos' && (
           /* === VISTA EVENTOS === */
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -9762,7 +9935,9 @@ const MainApp = () => {
               </Card>
             </div>
           </>
-        ) : (
+        )}
+        
+        {calendarioTab === 'turnos' && (
           /* === VISTA TURNOS REDISEÑADA === */
           <>
             {socios.length === 0 ? (
@@ -10487,6 +10662,270 @@ const MainApp = () => {
                         })()}
                       </div>
                     </Card>
+                  </div>
+                </>
+              );
+            })()}
+          </>
+        )}
+        
+        {calendarioTab === 'tareas' && (
+          /* === VISTA TAREAS UNIFICADA === */
+          <>
+            {(() => {
+              const hoyStrT = new Date().toISOString().split('T')[0];
+              const tareasPendientes = tareas.filter(t => !t.completada);
+              const tareasHoy = tareasPendientes.filter(t => t.fecha_limite === hoyStrT);
+              const tareasManana = tareasPendientes.filter(t => {
+                const m = new Date(); m.setDate(m.getDate() + 1);
+                return t.fecha_limite === m.toISOString().split('T')[0];
+              });
+              const tareasAtrasadas = tareasPendientes.filter(t => t.fecha_limite && t.fecha_limite < hoyStrT);
+              const tareasSinFecha = tareasPendientes.filter(t => !t.fecha_limite);
+              const tareasFuturas = tareasPendientes.filter(t => t.fecha_limite && t.fecha_limite > hoyStrT);
+
+              const prioridadColor = (p) => p === 'urgente' ? 'bg-red-100 text-red-700 border-red-300' : p === 'alta' ? 'bg-amber-100 text-amber-700 border-amber-300' : p === 'media' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-neutral-100 text-neutral-600 border-neutral-300';
+              const prioridadIcon = (p) => p === 'urgente' ? '🔴' : p === 'alta' ? '🟠' : p === 'media' ? '🔵' : '⚪';
+
+              const TareaItem = ({ t, mostrarFecha = true }) => {
+                const socio = socios.find(s => s.id === t.socio_id);
+                const cliente = clientes.find(c => c.id === t.cliente_id);
+                const cat = categoriaTareaConfig[t.categoria] || categoriaTareaConfig.otro;
+                
+                return (
+                  <div 
+                    onClick={() => { setEditingItem(t); setShowModal('tarea'); }}
+                    className={`p-3 rounded-lg border cursor-pointer hover:shadow-sm transition-all bg-white ${prioridadColor(t.prioridad)}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <button 
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          await supabase.from('tareas').update({ completada: !t.completada }).eq('id', t.id);
+                          refetchTareas();
+                        }}
+                        className="mt-0.5 flex-shrink-0"
+                      >
+                        <div className={`w-5 h-5 rounded-full border-2 ${t.completada ? 'bg-green-500 border-green-500' : 'border-neutral-300 hover:border-orange-500'} flex items-center justify-center`}>
+                          {t.completada && <CheckCircle size={12} className="text-white" />}
+                        </div>
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                          <span className={`font-semibold text-sm ${t.completada ? 'line-through text-neutral-400' : ''}`}>
+                            {prioridadIcon(t.prioridad)} {t.titulo}
+                          </span>
+                          {cat && <Badge className="text-[10px]">{cat.label}</Badge>}
+                          {t.recordatorio_slack && <Badge className="bg-purple-100 text-purple-700 text-[10px]">💬 Slack</Badge>}
+                        </div>
+                        {t.descripcion && (
+                          <p className="text-xs text-neutral-500 line-clamp-2">{t.descripcion}</p>
+                        )}
+                        <div className="flex items-center gap-3 text-xs text-neutral-500 mt-1 flex-wrap">
+                          {mostrarFecha && t.fecha_limite && (
+                            <span className="flex items-center gap-1">
+                              <Calendar size={10} />
+                              {formatDate(t.fecha_limite)}
+                              {t.hora_limite && ` · ${t.hora_limite.substring(0, 5)}`}
+                            </span>
+                          )}
+                          {socio && (
+                            <span className="flex items-center gap-1">
+                              <div className="w-3 h-3 rounded-full" style={{backgroundColor: socio.color || '#F97316'}} />
+                              {socio.nombre.split(' ')[0]}
+                            </span>
+                          )}
+                          {cliente && (
+                            <span className="flex items-center gap-1 truncate">
+                              <Building2 size={10} />
+                              {cliente.nombre}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm('¿Eliminar esta tarea?')) {
+                            handleDelete('tareas', t.id);
+                          }
+                        }}
+                        className="p-1 text-neutral-400 hover:text-red-600 flex-shrink-0"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              };
+
+              return (
+                <>
+                  {/* KPIs */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <Card className={`p-4 ${tareasAtrasadas.length > 0 ? 'bg-red-50 border-red-300' : ''}`}>
+                      <div className="flex items-center gap-3">
+                        <AlertTriangle size={24} className={tareasAtrasadas.length > 0 ? 'text-red-600' : 'text-neutral-300'} />
+                        <div>
+                          <p className="text-xs uppercase text-neutral-500">Atrasadas</p>
+                          <p className={`text-2xl font-black ${tareasAtrasadas.length > 0 ? 'text-red-700' : 'text-neutral-900'}`}>{tareasAtrasadas.length}</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className="p-4 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+                      <div className="flex items-center gap-3">
+                        <Sun size={24} />
+                        <div>
+                          <p className="text-xs uppercase opacity-90">Hoy</p>
+                          <p className="text-2xl font-black">{tareasHoy.length}</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className="p-4">
+                      <div className="flex items-center gap-3">
+                        <Calendar size={24} className="text-blue-500" />
+                        <div>
+                          <p className="text-xs uppercase text-neutral-500">Mañana</p>
+                          <p className="text-2xl font-black text-neutral-900">{tareasManana.length}</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className="p-4">
+                      <div className="flex items-center gap-3">
+                        <ClipboardList size={24} className="text-neutral-400" />
+                        <div>
+                          <p className="text-xs uppercase text-neutral-500">Pendientes</p>
+                          <p className="text-2xl font-black text-neutral-900">{tareasPendientes.length}</p>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Acción rápida */}
+                  <Card className="p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
+                    <div className="flex items-center justify-between flex-wrap gap-3">
+                      <div>
+                        <h3 className="font-bold text-neutral-900">📋 Gestión de tareas</h3>
+                        <p className="text-xs text-neutral-600">Crea tareas con recordatorio Slack para no olvidar nada</p>
+                      </div>
+                      <Button onClick={() => { setEditingItem(null); setShowModal('tarea'); }}>
+                        <Plus size={16} />Nueva Tarea
+                      </Button>
+                    </div>
+                  </Card>
+
+                  {/* Filtro por socio (reutiliza el de turnos) */}
+                  <Card className="p-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-neutral-500 font-semibold">FILTRAR:</span>
+                      <button 
+                        onClick={() => setCalendarioSocioFiltro(null)}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${!calendarioSocioFiltro ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}
+                      >
+                        Todas las tareas
+                      </button>
+                      {socios.filter(s => s.activo !== false).map(s => {
+                        const seleccionado = calendarioSocioFiltro === s.id;
+                        const numTareas = tareasPendientes.filter(t => t.socio_id === s.id).length;
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => setCalendarioSocioFiltro(seleccionado ? null : s.id)}
+                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${seleccionado ? 'text-white shadow' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+                            style={seleccionado ? {backgroundColor: s.color || '#F97316'} : {}}
+                          >
+                            <div className="w-5 h-5 rounded-full flex items-center justify-center text-white font-bold text-[10px]" style={{backgroundColor: s.color || '#F97316'}}>
+                              {s.nombre.charAt(0).toUpperCase()}
+                            </div>
+                            {s.nombre.split(' ')[0]}
+                            {numTareas > 0 && <span className={`text-xs ${seleccionado ? 'bg-white/30' : 'bg-orange-500 text-white'} px-1.5 rounded-full`}>{numTareas}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Card>
+
+                  {/* Listas agrupadas */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* ATRASADAS */}
+                    {tareasAtrasadas.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length > 0 && (
+                      <Card className="p-4 border-l-4 border-l-red-500 lg:col-span-2">
+                        <h3 className="text-base font-bold text-red-700 mb-3 flex items-center gap-2">
+                          <AlertTriangle size={18} /> Atrasadas ({tareasAtrasadas.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length})
+                        </h3>
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {tareasAtrasadas
+                            .filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            .sort((a, b) => (a.fecha_limite || '').localeCompare(b.fecha_limite || ''))
+                            .map(t => <TareaItem key={t.id} t={t} />)}
+                        </div>
+                      </Card>
+                    )}
+
+                    {/* HOY */}
+                    <Card className="p-4 border-l-4 border-l-orange-500">
+                      <h3 className="text-base font-bold text-orange-700 mb-3 flex items-center gap-2">
+                        <Sun size={18} /> Hoy ({tareasHoy.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length})
+                      </h3>
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {tareasHoy.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length === 0 ? (
+                          <p className="text-sm text-neutral-400 text-center py-4">Sin tareas para hoy 🎉</p>
+                        ) : (
+                          tareasHoy
+                            .filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            .sort((a, b) => (a.hora_limite || '').localeCompare(b.hora_limite || ''))
+                            .map(t => <TareaItem key={t.id} t={t} mostrarFecha={false} />)
+                        )}
+                      </div>
+                    </Card>
+
+                    {/* MAÑANA */}
+                    <Card className="p-4 border-l-4 border-l-blue-500">
+                      <h3 className="text-base font-bold text-blue-700 mb-3 flex items-center gap-2">
+                        <Calendar size={18} /> Mañana ({tareasManana.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length})
+                      </h3>
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {tareasManana.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length === 0 ? (
+                          <p className="text-sm text-neutral-400 text-center py-4">Sin tareas para mañana</p>
+                        ) : (
+                          tareasManana
+                            .filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            .sort((a, b) => (a.hora_limite || '').localeCompare(b.hora_limite || ''))
+                            .map(t => <TareaItem key={t.id} t={t} mostrarFecha={false} />)
+                        )}
+                      </div>
+                    </Card>
+
+                    {/* FUTURAS */}
+                    <Card className="p-4 lg:col-span-2">
+                      <h3 className="text-base font-bold text-neutral-700 mb-3 flex items-center gap-2">
+                        <Clock size={18} /> Próximas ({tareasFuturas.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length})
+                      </h3>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {tareasFuturas.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length === 0 ? (
+                          <p className="text-sm text-neutral-400 text-center py-4">No hay tareas planificadas más adelante</p>
+                        ) : (
+                          tareasFuturas
+                            .filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            .sort((a, b) => (a.fecha_limite || '').localeCompare(b.fecha_limite || ''))
+                            .map(t => <TareaItem key={t.id} t={t} />)
+                        )}
+                      </div>
+                    </Card>
+
+                    {/* SIN FECHA */}
+                    {tareasSinFecha.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length > 0 && (
+                      <Card className="p-4 lg:col-span-2 bg-neutral-50">
+                        <h3 className="text-base font-bold text-neutral-600 mb-3 flex items-center gap-2">
+                          <ClipboardList size={18} /> Sin fecha límite ({tareasSinFecha.filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro).length})
+                        </h3>
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {tareasSinFecha
+                            .filter(t => !calendarioSocioFiltro || t.socio_id === calendarioSocioFiltro)
+                            .map(t => <TareaItem key={t.id} t={t} mostrarFecha={false} />)}
+                        </div>
+                      </Card>
+                    )}
                   </div>
                 </>
               );
@@ -15179,7 +15618,33 @@ Firma repartidor: _________________
       {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={form => handleSave('lotes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
-      {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}><TareaForm tarea={editingItem} onSave={form => handleSave('tareas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
+        <TareaForm 
+          tarea={editingItem} 
+          onSave={async (form) => {
+            const esNueva = !editingItem;
+            await handleSave('tareas', form, editingItem?.id);
+            
+            // Si la tarea es nueva, tiene recordatorio Slack y socio asignado, notificar
+            if (esNueva && form.recordatorio_slack && form.socio_id && notificacionesConfig.slack_activo) {
+              const socio = socios.find(s => s.id === form.socio_id);
+              if (socio) {
+                const fechaInfo = form.fecha_limite 
+                  ? `📅 ${form.fecha_limite}${form.hora_limite ? ' a las ' + form.hora_limite : ''}` 
+                  : '⏰ Sin fecha límite';
+                const prioridadEmoji = form.prioridad === 'urgente' ? '🔴' : form.prioridad === 'alta' ? '🟠' : form.prioridad === 'media' ? '🔵' : '⚪';
+                
+                enviarSlack({
+                  titulo: `Nueva tarea asignada a ${socio.nombre}`,
+                  mensaje: `${prioridadEmoji} *${form.titulo}*\n\n${form.descripcion || '_Sin descripción_'}\n\n${fechaInfo}\n_Recibirás un recordatorio ${form.recordatorio_minutos_antes >= 1440 ? Math.floor(form.recordatorio_minutos_antes / 1440) + ' día(s)' : form.recordatorio_minutos_antes + ' min'} antes._`,
+                  prioridad: form.prioridad === 'urgente' ? 'critica' : form.prioridad === 'alta' ? 'alta' : 'media',
+                });
+              }
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
