@@ -74,7 +74,10 @@ const EMPRESA = {
   telefono: '+34 638 161 990',
   email: 'info@rootflow.es',
   web: 'www.rootflow.es',
-  cif: 'B27535137'
+  cif: 'B27535137',
+  iban: 'ES58 0182 4015 6002 0261 4010',
+  banco: 'BBVA',
+  swift: 'BBVAESMMXXX'
 };
 
 // ==================== ROOTFLOW LOGO OFICIAL ====================
@@ -1578,8 +1581,6 @@ const MainApp = () => {
   const { data: plantillasTurnosData, refetch: refetchPlantillasTurnos } = useRealtime('plantillas_turnos');
   // V31 - Extractos bancarios
   const { data: extractosBancariosData, refetch: refetchExtractosBancarios } = useRealtime('extractos_bancarios');
-  // Extractos bancarios
-  const { data: extractosBancariosData, refetch: refetchExtractosBancarios } = useRealtime('extractos_bancarios');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1666,7 +1667,6 @@ const MainApp = () => {
   };
   const plantillasTurnos = plantillasTurnosData || [];
   // V31 - Extractos bancarios
-  const extractosBancarios = extractosBancariosData || [];
   const extractosBancarios = extractosBancariosData || [];
 
   // Combinar asientos con sus líneas
@@ -8112,6 +8112,17 @@ const MainApp = () => {
             <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(factura.total)}</span></div>
           </div>
           
+          <div style="margin-top: 30px; padding: 20px; background: #f0fdf4; border-left: 4px solid #2D6A4F; border-radius: 6px;">
+            <h3 style="font-size: 11px; color: #2D6A4F; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; font-weight: 700;">💳 Datos bancarios para transferencia</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; font-size: 13px; color: #333;">
+              <p><strong>Titular:</strong> ${EMPRESA.nombre}</p>
+              <p><strong>Banco:</strong> ${EMPRESA.banco}</p>
+              <p style="grid-column: 1 / -1;"><strong>IBAN:</strong> <span style="font-family: 'Courier New', monospace; letter-spacing: 1px;">${EMPRESA.iban}</span></p>
+              <p><strong>SWIFT/BIC:</strong> <span style="font-family: 'Courier New', monospace;">${EMPRESA.swift}</span></p>
+              <p><strong>Concepto:</strong> ${factura.id}</p>
+            </div>
+          </div>
+          
           <div class="footer">
             <p><strong>${EMPRESA.nombre}</strong> · CIF: ${EMPRESA.cif}</p>
             <p>${EMPRESA.direccion}, ${EMPRESA.cp} ${EMPRESA.ciudad}</p>
@@ -8201,6 +8212,18 @@ const MainApp = () => {
             </div>
           </div>
           
+          {/* Datos bancarios para transferencia */}
+          <div className="mt-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+            <h3 className="text-xs font-bold text-emerald-700 uppercase mb-2 tracking-wide">💳 Datos bancarios para transferencia</h3>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+              <p><strong>Titular:</strong> {EMPRESA.nombre}</p>
+              <p><strong>Banco:</strong> {EMPRESA.banco}</p>
+              <p className="col-span-2"><strong>IBAN:</strong> <span className="font-mono">{EMPRESA.iban}</span></p>
+              <p><strong>SWIFT/BIC:</strong> <span className="font-mono">{EMPRESA.swift}</span></p>
+              <p><strong>Concepto:</strong> {factura.id}</p>
+            </div>
+          </div>
+          
           {/* Acciones */}
           <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
             <Button variant="secondary" onClick={onClose}>Cerrar</Button>
@@ -8212,7 +8235,7 @@ const MainApp = () => {
               
               const reTexto = factura.recargo_equivalencia ? `%0ARecargo Equiv. (${factura.re_porcentaje || 0.5}%): ${formatCurrency(factura.re_importe || 0)}` : '';
               const asunto = `Factura ${factura.id} - RootFlow Hydroponics`;
-              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (${factura.iva_porcentaje || 4}%): ${formatCurrency(factura.iva)}${reTexto}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0AIBAN: ES00 0000 0000 0000 0000 0000%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
+              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (${factura.iva_porcentaje || 4}%): ${formatCurrency(factura.iva)}${reTexto}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0ATitular: ${EMPRESA.nombre}%0ABanco: ${EMPRESA.banco}%0AIBAN: ${EMPRESA.iban}%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
               
               window.open(`mailto:${cliente?.email || ''}?subject=${asunto}&body=${cuerpo}`, '_blank');
             }}>
@@ -13093,6 +13116,62 @@ Firma repartidor: _________________
             <p className="text-neutral-500 font-medium">Configuración del ERP</p>
           </div>
         </div>
+
+        {/* Info de la empresa */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-emerald-100 rounded-xl">
+              <Building2 size={24} className="text-emerald-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-neutral-900">Información de la empresa</h3>
+              <p className="text-sm text-neutral-500">Datos que aparecen en facturas, presupuestos y documentos</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <h4 className="text-xs uppercase text-neutral-400 tracking-wide font-bold">Datos fiscales</h4>
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">Razón social:</span><span className="font-semibold text-right">{EMPRESA.nombre}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">CIF:</span><span className="font-mono font-semibold">{EMPRESA.cif}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">Dirección:</span><span className="text-right">{EMPRESA.direccion}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">CP / Ciudad:</span><span className="text-right">{EMPRESA.cp} {EMPRESA.ciudad}</span></div>
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <h4 className="text-xs uppercase text-neutral-400 tracking-wide font-bold">Contacto</h4>
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">Teléfono:</span><span className="font-semibold">{EMPRESA.telefono}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">Email:</span><span>{EMPRESA.email}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-500">Web:</span><span>{EMPRESA.web}</span></div>
+              </div>
+            </div>
+            
+            {/* Datos bancarios */}
+            <div className="md:col-span-2 mt-2 p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <h4 className="text-xs uppercase text-emerald-700 tracking-wide font-bold mb-2">💳 Datos bancarios para cobros</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                <div className="flex justify-between gap-2"><span className="text-neutral-600">Titular:</span><span className="font-semibold text-right">{EMPRESA.nombre}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-600">Banco:</span><span className="font-semibold">{EMPRESA.banco}</span></div>
+                <div className="md:col-span-2 flex justify-between gap-2 items-center"><span className="text-neutral-600">IBAN:</span><span className="font-mono font-bold tracking-wider text-emerald-800">{EMPRESA.iban}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-neutral-600">SWIFT/BIC:</span><span className="font-mono font-semibold">{EMPRESA.swift}</span></div>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(EMPRESA.iban.replace(/\s/g, ''));
+                    alert('✅ IBAN copiado al portapapeles');
+                  }}
+                  className="text-xs text-emerald-700 hover:text-emerald-900 hover:underline font-semibold"
+                >
+                  📋 Copiar IBAN
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <p className="text-xs text-neutral-400 mt-4 italic">💡 Estos datos están definidos en el código (constante EMPRESA en App.jsx). Para cambiarlos, contacta al desarrollador.</p>
+        </Card>
 
         {/* Configuración de Notificaciones por Email */}
         <Card className="p-5">
