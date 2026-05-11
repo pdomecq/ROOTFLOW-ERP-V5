@@ -1576,6 +1576,10 @@ const MainApp = () => {
   // V28 - Configuración de notificaciones (sincronizada entre dispositivos)
   const { data: notificacionesConfigData, refetch: refetchNotificacionesConfig } = useRealtime('notificaciones_config');
   const { data: plantillasTurnosData, refetch: refetchPlantillasTurnos } = useRealtime('plantillas_turnos');
+  // V31 - Extractos bancarios
+  const { data: extractosBancariosData, refetch: refetchExtractosBancarios } = useRealtime('extractos_bancarios');
+  // Extractos bancarios
+  const { data: extractosBancariosData, refetch: refetchExtractosBancarios } = useRealtime('extractos_bancarios');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1661,6 +1665,9 @@ const MainApp = () => {
     email_activo: false,
   };
   const plantillasTurnos = plantillasTurnosData || [];
+  // V31 - Extractos bancarios
+  const extractosBancarios = extractosBancariosData || [];
+  const extractosBancarios = extractosBancariosData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -3171,6 +3178,7 @@ const MainApp = () => {
       else if (table === 'socios') refetchSocios();
       else if (table === 'ausencias_socios') refetchAusenciasSocios();
       else if (table === 'variedades') refetchVariedades();
+      else if (table === 'extractos_bancarios') refetchExtractosBancarios();
     }
   };
 
@@ -4336,6 +4344,118 @@ const MainApp = () => {
     );
   };
 
+  // ==================== EXTRACTO BANCARIO FORM ====================
+  const ExtractoBancarioForm = ({ extracto, onSave, onCancel }) => {
+    const initialForm = extracto || {
+      tipo_cuenta: 'empresa',
+      nombre_cuenta: '',
+      banco: '',
+      iban: '',
+      titular: '',
+      fecha_inicio: '',
+      fecha_fin: '',
+      saldo_inicial: null,
+      saldo_final: null,
+      archivo_url: '',
+      notas: '',
+    };
+    const [form, setForm, clearFormStorage] = useFormPersistence(`extracto_${extracto?.id || 'new'}`, initialForm, !extracto);
+    const [subiendo, setSubiendo] = useState(false);
+    const [archivoName, setArchivoName] = useState(extracto?.archivo_url ? 'Extracto adjunto' : '');
+
+    const handleUpload = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setSubiendo(true);
+      try {
+        const ext = file.name.split('.').pop();
+        const fn = `extracto-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${ext}`;
+        const { data, error } = await supabase.storage.from('facturas-gastos').upload(fn, file);
+        if (error) {
+          if (error.message.includes('bucket') || error.message.includes('not found')) {
+            alert('⚠️ Crea el bucket "facturas-gastos" en Supabase Storage');
+          } else throw error;
+        } else {
+          const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fn);
+          setForm({...form, archivo_url: urlData.publicUrl});
+          setArchivoName(file.name);
+        }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+      setSubiendo(false);
+    };
+
+    const handleSaveX = () => { clearFormStorage(); onSave(form); };
+    const handleCancelX = () => { clearFormStorage(); onCancel(); };
+
+    return (
+      <div className="space-y-4">
+        <Select 
+          label="Tipo de cuenta" 
+          value={form.tipo_cuenta} 
+          onChange={e => setForm({...form, tipo_cuenta: e.target.value})}
+          options={[
+            { value: 'empresa', label: '🏢 Cuenta de empresa (BBVA, etc.)' },
+            { value: 'tarjeta', label: '💳 Tarjeta de crédito/débito empresa' },
+            { value: 'socio_nico', label: '👤 Cuenta personal - Nico' },
+            { value: 'socio_peri', label: '👤 Cuenta personal - Peri' },
+            { value: 'socio_guzman', label: '👤 Cuenta personal - Guzmán' },
+            { value: 'otro', label: '📋 Otra' },
+          ]}
+        />
+        
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Nombre de la cuenta" value={form.nombre_cuenta} onChange={e => setForm({...form, nombre_cuenta: e.target.value})} placeholder="Ej: Cuenta corriente BBVA" />
+          <Input label="Banco" value={form.banco} onChange={e => setForm({...form, banco: e.target.value})} placeholder="BBVA, ING, Santander..." />
+          <Input label="IBAN (últimos 4 dígitos)" value={form.iban} onChange={e => setForm({...form, iban: e.target.value})} placeholder="ES80 ... 1234" />
+          <Input label="Titular" value={form.titular} onChange={e => setForm({...form, titular: e.target.value})} placeholder="Rootflow Hydroponics SL" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Periodo desde" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value})} />
+          <Input label="Periodo hasta" type="date" value={form.fecha_fin} onChange={e => setForm({...form, fecha_fin: e.target.value})} />
+          <Input label="Saldo inicial (€)" type="number" step="0.01" value={form.saldo_inicial ?? ''} onChange={e => setForm({...form, saldo_inicial: e.target.value === '' ? null : parseFloat(e.target.value)})} />
+          <Input label="Saldo final (€)" type="number" step="0.01" value={form.saldo_final ?? ''} onChange={e => setForm({...form, saldo_final: e.target.value === '' ? null : parseFloat(e.target.value)})} />
+        </div>
+
+        {/* Adjuntar archivo */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">📎 Archivo del extracto (PDF, imagen, CSV)</label>
+          {form.archivo_url ? (
+            <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+              <FileText size={24} className="text-blue-600" />
+              <div className="flex-1">
+                <p className="font-medium text-blue-800">{archivoName}</p>
+                <a href={form.archivo_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">Ver extracto</a>
+              </div>
+              <button type="button" onClick={() => { setForm({...form, archivo_url: ''}); setArchivoName(''); }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+            </div>
+          ) : (
+            <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-blue-200 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50">
+              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.csv,.xlsx" onChange={handleUpload} disabled={subiendo} />
+              {subiendo ? (
+                <><Loader2 size={24} className="animate-spin text-blue-500" /><span>Subiendo...</span></>
+              ) : (
+                <><Upload size={24} className="text-blue-400" /><span className="text-neutral-600">Subir extracto bancario</span></>
+              )}
+            </label>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} rows={2} className="w-full px-4 py-2 rounded-xl border border-neutral-300" placeholder="Observaciones sobre este extracto..." />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={handleCancelX}>Cancelar</Button>
+          <Button onClick={handleSaveX}>{extracto ? 'Guardar' : 'Subir Extracto'}</Button>
+        </div>
+      </div>
+    );
+  };
+
   const GastoForm = ({ gasto, onSave, onCancel }) => {
     // Inicialización correcta - manejar valores null/undefined explícitamente
     const initialForm = {
@@ -4347,7 +4467,8 @@ const MainApp = () => {
       iva_tipo: gasto?.iva_tipo || 'general',
       pagado: gasto?.pagado || false, 
       forma_pago: gasto?.forma_pago || 'banco', 
-      factura_url: gasto?.factura_url || ''
+      factura_url: gasto?.factura_url || '',
+      justificante_pago_url: gasto?.justificante_pago_url || '',
     };
     
     // Usar hook de persistencia (solo para formularios nuevos, no edición)
@@ -4356,8 +4477,9 @@ const MainApp = () => {
       initialForm, 
       !gasto // Solo persistir si es nuevo
     );
-    const [uploading, setUploading] = useState(false);
+    const [uploading, setUploading] = useState(null); // 'factura' | 'justificante' | null
     const [fileName, setFileName] = useState(gasto?.factura_url ? 'Archivo adjunto' : '');
+    const [justFileName, setJustFileName] = useState(gasto?.justificante_pago_url ? 'Justificante adjunto' : '');
 
     // Limpiar storage al guardar o cancelar
     const handleSave = (formData) => {
@@ -4380,7 +4502,7 @@ const MainApp = () => {
       { value: 'socio_guzman', label: '👤 Pagado por Guzmán - Deuda a socio (551)' },
     ];
 
-    // Tipos de IVA - IMPORTANTE: usar los mismos valores que TIPOS_IVA global
+    // Tipos de IVA
     const tiposIVA = [
       { value: 'general', label: '21% General (servicios, suministros)' },
       { value: 'reducido', label: '10% Reducido (transporte, hostelería)' },
@@ -4388,18 +4510,19 @@ const MainApp = () => {
       { value: 'exento', label: '0% Exento (seguros, formación, intracomunitario)' },
     ];
 
-    const handleFileUpload = async (e) => {
+    // Subida genérica de archivos (factura o justificante)
+    const uploadFile = async (e, tipo) => {
       const file = e.target.files?.[0];
       if (!file) return;
       
-      setUploading(true);
+      setUploading(tipo);
       try {
         const fileExt = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
+        const fileN = `${tipo}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`;
         
         const { data, error } = await supabase.storage
           .from('facturas-gastos')
-          .upload(fileName, file);
+          .upload(fileN, file);
         
         if (error) {
           if (error.message.includes('bucket') || error.message.includes('not found')) {
@@ -4408,20 +4531,30 @@ const MainApp = () => {
             throw error;
           }
         } else {
-          const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fileName);
-          setForm({...form, factura_url: urlData.publicUrl});
-          setFileName(file.name);
+          const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fileN);
+          if (tipo === 'factura') {
+            setForm({...form, factura_url: urlData.publicUrl});
+            setFileName(file.name);
+          } else {
+            setForm({...form, justificante_pago_url: urlData.publicUrl});
+            setJustFileName(file.name);
+          }
         }
       } catch (err) {
         console.error('Error subiendo archivo:', err);
         alert('Error al subir el archivo: ' + err.message);
       }
-      setUploading(false);
+      setUploading(null);
     };
 
-    const removeFile = () => {
-      setForm({...form, factura_url: ''});
-      setFileName('');
+    const removeFile = (tipo) => {
+      if (tipo === 'factura') {
+        setForm({...form, factura_url: ''});
+        setFileName('');
+      } else {
+        setForm({...form, justificante_pago_url: ''});
+        setJustFileName('');
+      }
     };
 
     // Calcular base e IVA según el tipo seleccionado - CORREGIDO para 0%
@@ -4515,27 +4648,53 @@ const MainApp = () => {
         )}
         
         {/* Adjuntar factura */}
-        <div className="border-t pt-4">
-          <label className="block text-sm font-semibold text-neutral-700 mb-2">Factura / Justificante</label>
-          {form.factura_url ? (
-            <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
-              <FileText size={24} className="text-green-600" />
-              <div className="flex-1">
-                <p className="font-medium text-green-800">{fileName || 'Archivo adjunto'}</p>
-                <a href={form.factura_url} target="_blank" rel="noopener noreferrer" className="text-sm text-green-600 hover:underline">Ver archivo</a>
+        <div className="border-t pt-4 space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-2">📄 Factura del proveedor</label>
+            {form.factura_url ? (
+              <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
+                <FileText size={24} className="text-green-600" />
+                <div className="flex-1">
+                  <p className="font-medium text-green-800">{fileName || 'Factura adjunta'}</p>
+                  <a href={form.factura_url} target="_blank" rel="noopener noreferrer" className="text-sm text-green-600 hover:underline">Ver archivo</a>
+                </div>
+                <button type="button" onClick={() => removeFile('factura')} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
               </div>
-              <button type="button" onClick={removeFile} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
-            </div>
-          ) : (
-            <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-neutral-300 rounded-xl cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
-              <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={handleFileUpload} disabled={uploading} />
-              {uploading ? (
-                <><Loader2 size={24} className="animate-spin text-orange-500" /><span className="text-neutral-600">Subiendo...</span></>
-              ) : (
-                <><Upload size={24} className="text-neutral-400" /><span className="text-neutral-600">Click para adjuntar PDF o imagen</span></>
-              )}
-            </label>
-          )}
+            ) : (
+              <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-neutral-300 rounded-xl cursor-pointer hover:border-orange-400 hover:bg-orange-50 transition-colors">
+                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => uploadFile(e, 'factura')} disabled={uploading === 'factura'} />
+                {uploading === 'factura' ? (
+                  <><Loader2 size={24} className="animate-spin text-orange-500" /><span className="text-neutral-600">Subiendo...</span></>
+                ) : (
+                  <><Upload size={24} className="text-neutral-400" /><span className="text-neutral-600">Click para adjuntar PDF o imagen</span></>
+                )}
+              </label>
+            )}
+          </div>
+          
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-2">🏦 Justificante de pago (extracto bancario o transferencia)</label>
+            {form.justificante_pago_url ? (
+              <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                <Banknote size={24} className="text-blue-600" />
+                <div className="flex-1">
+                  <p className="font-medium text-blue-800">{justFileName || 'Justificante adjunto'}</p>
+                  <a href={form.justificante_pago_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline">Ver archivo</a>
+                </div>
+                <button type="button" onClick={() => removeFile('justificante')} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+              </div>
+            ) : (
+              <label className="flex items-center justify-center gap-3 p-4 border-2 border-dashed border-blue-200 rounded-xl cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp" onChange={(e) => uploadFile(e, 'justificante')} disabled={uploading === 'justificante'} />
+                {uploading === 'justificante' ? (
+                  <><Loader2 size={24} className="animate-spin text-blue-500" /><span className="text-neutral-600">Subiendo...</span></>
+                ) : (
+                  <><Upload size={24} className="text-blue-400" /><span className="text-neutral-600">Captura del banco o pantallazo de transferencia</span></>
+                )}
+              </label>
+            )}
+            <p className="text-xs text-neutral-500 mt-1">💡 Útil para auditorías y deducción de IVA. Si todavía no has pagado, déjalo vacío.</p>
+          </div>
         </div>
 
         <div className="flex items-center gap-3 pt-2">
@@ -8465,19 +8624,31 @@ const MainApp = () => {
           </div>
         </div>
 
-        {/* Pestañas Gastos / CAPEX */}
-        <div className="flex gap-2 border-b">
+        {/* Pestañas Gastos / CAPEX / Extractos */}
+        <div className="flex gap-2 border-b overflow-x-auto">
           <button 
             onClick={() => setGastosTab('gastos')} 
-            className={`px-4 py-2 font-semibold border-b-2 transition-colors ${gastosTab === 'gastos' ? 'border-orange-500 text-orange-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'gastos' ? 'border-orange-500 text-orange-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
           >
             📋 Gastos Operativos
           </button>
           <button 
             onClick={() => setGastosTab('capex')} 
-            className={`px-4 py-2 font-semibold border-b-2 transition-colors ${gastosTab === 'capex' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'capex' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
           >
             📦 CAPEX ({gastosCapex.length})
+          </button>
+          <button 
+            onClick={() => setGastosTab('extractos')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'extractos' ? 'border-blue-500 text-blue-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            🏦 Extractos Bancarios ({extractosBancarios.length})
+          </button>
+          <button 
+            onClick={() => setGastosTab('exportar')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'exportar' ? 'border-purple-500 text-purple-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            📦 Exportar masivo
           </button>
         </div>
 
@@ -8694,6 +8865,307 @@ const MainApp = () => {
             )}
           </>
         )}
+
+        {/* === PESTAÑA EXTRACTOS BANCARIOS === */}
+        {gastosTab === 'extractos' && (
+          <>
+            <Card className="p-4 bg-blue-50 border-blue-200">
+              <div className="flex items-start gap-3">
+                <Banknote size={24} className="text-blue-600 flex-shrink-0" />
+                <div className="flex-1">
+                  <h3 className="font-bold text-blue-900">🏦 Extractos bancarios mensuales</h3>
+                  <p className="text-sm text-blue-700">
+                    Sube aquí los extractos mensuales de la cuenta de empresa (BBVA), tarjeta y cuentas personales donde los socios paguen gastos del negocio. 
+                    Útil para auditorías, declaración trimestral y conciliación contable.
+                  </p>
+                </div>
+                <Button onClick={() => { setEditingItem(null); setShowModal('extractoBancario'); }}>
+                  <Plus size={16} />Subir Extracto
+                </Button>
+              </div>
+            </Card>
+
+            <Card className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-900 text-white">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Cuenta</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Periodo</th>
+                      <th className="text-left px-4 py-3 text-sm font-bold">Titular/Banco</th>
+                      <th className="text-right px-4 py-3 text-sm font-bold">Saldo final</th>
+                      <th className="text-center px-4 py-3 text-sm font-bold">Archivo</th>
+                      <th className="text-right px-4 py-3 text-sm font-bold">Acc.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extractosBancarios
+                      .sort((a, b) => (b.fecha_fin || '').localeCompare(a.fecha_fin || ''))
+                      .map(ext => (
+                        <tr key={ext.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${ext.tipo_cuenta === 'empresa' ? 'bg-blue-100' : ext.tipo_cuenta === 'tarjeta' ? 'bg-purple-100' : 'bg-amber-100'}`}>
+                                {ext.tipo_cuenta === 'empresa' ? '🏢' : ext.tipo_cuenta === 'tarjeta' ? '💳' : '👤'}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-sm">{ext.nombre_cuenta || 'Sin nombre'}</p>
+                                {ext.iban && <p className="text-xs text-neutral-500 font-mono">****{ext.iban.slice(-4)}</p>}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            {formatDate(ext.fecha_inicio)} → {formatDate(ext.fecha_fin)}
+                          </td>
+                          <td className="px-4 py-3 text-sm">{ext.banco}</td>
+                          <td className="px-4 py-3 text-right font-bold">{ext.saldo_final !== null && ext.saldo_final !== undefined ? formatCurrency(ext.saldo_final) : '-'}</td>
+                          <td className="px-4 py-3 text-center">
+                            {ext.archivo_url ? (
+                              <a href={ext.archivo_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm">
+                                <FileText size={14} /> Ver
+                              </a>
+                            ) : (
+                              <span className="text-neutral-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex justify-end gap-1">
+                              <button onClick={() => { setEditingItem(ext); setShowModal('extractoBancario'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                              <button onClick={() => handleDelete('extractos_bancarios', ext.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+              {extractosBancarios.length === 0 && (
+                <EmptyState 
+                  icon={Banknote} 
+                  title="No hay extractos subidos" 
+                  description="Sube los extractos mensuales de tus cuentas bancarias y tarjetas para facilitar la conciliación contable" 
+                  action={<Button onClick={() => setShowModal('extractoBancario')}><Plus size={16} />Subir primer extracto</Button>}
+                />
+              )}
+            </Card>
+          </>
+        )}
+
+        {/* === PESTAÑA EXPORTAR MASIVO === */}
+        {gastosTab === 'exportar' && (
+          <>
+            <Card className="p-4 bg-purple-50 border-purple-200">
+              <div className="flex items-start gap-3">
+                <Download size={24} className="text-purple-600 flex-shrink-0" />
+                <div>
+                  <h3 className="font-bold text-purple-900">📦 Exportación masiva</h3>
+                  <p className="text-sm text-purple-700">
+                    Descarga todas las facturas o justificantes de gastos de un periodo en un único ZIP. Cada archivo se renombra con el formato: 
+                    <code className="bg-white px-1.5 py-0.5 rounded text-xs ml-1">F-DDMMAAAA-Concepto.pdf</code>
+                    {' '}o{' '}
+                    <code className="bg-white px-1.5 py-0.5 rounded text-xs">JUST-DDMMAAAA-Concepto.pdf</code>
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {(() => {
+              const [exportFiltro, setExportFiltro] = [
+                { mes: filtroGastosMes },
+                () => {}
+              ];
+              const gastosConFactura = gastos.filter(g => g.factura_url && (filtroGastosMes === 'todos' || (g.fecha && filtroGastosMes !== 'todos')));
+              const gastosConJustificante = gastos.filter(g => g.justificante_pago_url);
+              const gastosFiltradosExport = filtrarPorPeriodo(gastos, 'fecha', filtroGastosMes);
+              const conFactExport = gastosFiltradosExport.filter(g => g.factura_url);
+              const conJustExport = gastosFiltradosExport.filter(g => g.justificante_pago_url);
+              
+              const formatearNombre = (g, prefijo) => {
+                const f = new Date(g.fecha);
+                const dd = String(f.getDate()).padStart(2, '0');
+                const mm = String(f.getMonth() + 1).padStart(2, '0');
+                const yyyy = f.getFullYear();
+                const concepto = (g.concepto || 'gasto')
+                  .replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]/g, '-')
+                  .replace(/-+/g, '-')
+                  .replace(/^-|-$/g, '')
+                  .substring(0, 40);
+                return `${prefijo}-${dd}${mm}${yyyy}-${concepto}`;
+              };
+              
+              const exportarMasivo = async (tipo) => {
+                const items = tipo === 'facturas' ? conFactExport : conJustExport;
+                if (items.length === 0) {
+                  alert(`No hay ${tipo} para exportar en el periodo seleccionado`);
+                  return;
+                }
+                
+                if (!window.confirm(`¿Descargar ZIP con ${items.length} ${tipo}?\n\nSe descargarán todos los archivos en un único ZIP con nombres tipo:\n${tipo === 'facturas' ? 'F' : 'JUST'}-DDMMAAAA-Concepto.pdf`)) return;
+                
+                try {
+                  const zip = new JSZip();
+                  const folder = zip.folder(tipo);
+                  let exitosos = 0;
+                  let fallidos = 0;
+                  
+                  // Mostrar progreso simple
+                  const totalItems = items.length;
+                  const progressMsg = document.createElement('div');
+                  progressMsg.style.cssText = 'position:fixed;top:20px;right:20px;background:#fff;padding:16px 24px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9999;font-family:system-ui;font-size:14px;border:2px solid #F97316;';
+                  progressMsg.innerHTML = `<div style="font-weight:bold;color:#F97316;">📦 Generando ZIP...</div><div id="progress-text" style="margin-top:4px;color:#666;">0 / ${totalItems}</div>`;
+                  document.body.appendChild(progressMsg);
+                  
+                  for (let i = 0; i < items.length; i++) {
+                    const g = items[i];
+                    const url = tipo === 'facturas' ? g.factura_url : g.justificante_pago_url;
+                    
+                    try {
+                      const response = await fetch(url);
+                      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                      const blob = await response.blob();
+                      
+                      // Obtener extensión
+                      const urlSinParams = url.split('?')[0];
+                      const ext = urlSinParams.split('.').pop().toLowerCase();
+                      const extension = ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'csv', 'xls', 'xlsx', 'doc', 'docx'].includes(ext) ? ext : 'pdf';
+                      
+                      const nombreArchivo = formatearNombre(g, tipo === 'facturas' ? 'F' : 'JUST') + '.' + extension;
+                      folder.file(nombreArchivo, blob);
+                      exitosos++;
+                    } catch (err) {
+                      console.error(`Error con ${url}:`, err);
+                      fallidos++;
+                    }
+                    
+                    // Actualizar progreso
+                    const pt = document.getElementById('progress-text');
+                    if (pt) pt.textContent = `${i + 1} / ${totalItems} ${fallidos > 0 ? '(' + fallidos + ' errores)' : ''}`;
+                  }
+                  
+                  // Añadir índice CSV al ZIP
+                  const csvLines = [
+                    ['Fecha', 'Concepto', 'Proveedor', 'Categoría', 'Importe (€)', 'IVA', 'Pagado', 'Nombre archivo'].join(';')
+                  ];
+                  items.forEach(g => {
+                    const proveedor = proveedores.find(p => p.id === g.proveedor_id)?.nombre || '';
+                    const categoria = categoriasGasto[g.categoria]?.label || g.categoria;
+                    const url = tipo === 'facturas' ? g.factura_url : g.justificante_pago_url;
+                    const ext = url.split('.').pop().split('?')[0];
+                    const nombre = formatearNombre(g, tipo === 'facturas' ? 'F' : 'JUST') + '.' + ext;
+                    csvLines.push([
+                      g.fecha,
+                      `"${(g.concepto || '').replace(/"/g, '""')}"`,
+                      `"${proveedor.replace(/"/g, '""')}"`,
+                      `"${categoria.replace(/"/g, '""')}"`,
+                      String(g.importe || 0).replace('.', ','),
+                      TIPOS_IVA[g.iva_tipo]?.label || g.iva_tipo || 'General',
+                      g.pagado ? 'Sí' : 'No',
+                      nombre,
+                    ].join(';'));
+                  });
+                  folder.file('_indice.csv', '\uFEFF' + csvLines.join('\n'));
+                  
+                  // Generar ZIP
+                  const pt = document.getElementById('progress-text');
+                  if (pt) pt.textContent = 'Comprimiendo ZIP...';
+                  
+                  const blob = await zip.generateAsync({ type: 'blob' });
+                  const periodo = filtroGastosMes === 'mes_actual' ? new Date().toISOString().slice(0, 7) : filtroGastosMes;
+                  const nombreZip = `rootflow-${tipo}-${periodo}.zip`;
+                  
+                  const link = document.createElement('a');
+                  link.href = URL.createObjectURL(blob);
+                  link.download = nombreZip;
+                  link.click();
+                  
+                  // Quitar progreso
+                  document.body.removeChild(progressMsg);
+                  
+                  alert(`✅ ZIP generado: ${nombreZip}\n\n📊 Total: ${exitosos} archivos${fallidos > 0 ? '\n⚠️ ' + fallidos + ' archivos fallaron al descargar (revisa consola)' : ''}\n\n📋 Incluye:\n• Todos los ${tipo} con nombre F-DDMMAAAA-Concepto.ext\n• _indice.csv con todos los datos`);
+                } catch (err) {
+                  console.error('Error generando ZIP:', err);
+                  alert('❌ Error: ' + err.message);
+                  // Limpiar progress si queda
+                  const p = document.querySelector('[style*="rgba(0,0,0,0.15)"]');
+                  if (p) p.remove();
+                }
+              };
+              
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 bg-green-100 rounded-xl">
+                          <FileText size={24} className="text-green-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-neutral-900">Facturas</h3>
+                          <p className="text-xs text-neutral-500">Documentos del proveedor</p>
+                        </div>
+                      </div>
+                      <span className="text-2xl font-black text-green-600">{conFactExport.length}</span>
+                    </div>
+                    <p className="text-sm text-neutral-600 mb-4">
+                      Gastos con factura adjunta en el periodo seleccionado ({filtroGastosMes === 'mes_actual' ? 'mes actual' : filtroGastosMes === 'año_actual' ? 'año actual' : filtroGastosMes}).
+                    </p>
+                    <Button 
+                      onClick={() => exportarMasivo('facturas')} 
+                      disabled={conFactExport.length === 0}
+                      className="w-full"
+                    >
+                      <Download size={16} /> Exportar todas las facturas
+                    </Button>
+                  </Card>
+
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 bg-blue-100 rounded-xl">
+                          <Banknote size={24} className="text-blue-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-neutral-900">Justificantes</h3>
+                          <p className="text-xs text-neutral-500">Comprobantes bancarios</p>
+                        </div>
+                      </div>
+                      <span className="text-2xl font-black text-blue-600">{conJustExport.length}</span>
+                    </div>
+                    <p className="text-sm text-neutral-600 mb-4">
+                      Justificantes de pago bancarios adjuntos a gastos en el periodo seleccionado.
+                    </p>
+                    <Button 
+                      onClick={() => exportarMasivo('justificantes')} 
+                      disabled={conJustExport.length === 0}
+                      className="w-full bg-blue-600 hover:bg-blue-700"
+                    >
+                      <Download size={16} /> Exportar todos los justificantes
+                    </Button>
+                  </Card>
+                  
+                  <Card className="p-5 md:col-span-2 bg-amber-50 border-amber-200">
+                    <h3 className="font-bold text-amber-900 mb-2">📋 Formato de nombrado automático</h3>
+                    <div className="space-y-2 text-sm text-amber-800">
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono bg-white px-2 py-0.5 rounded text-xs">F-DDMMAAAA-Concepto.pdf</span>
+                        <span>para facturas</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono bg-white px-2 py-0.5 rounded text-xs">JUST-DDMMAAAA-Concepto.pdf</span>
+                        <span>para justificantes</span>
+                      </div>
+                      <p className="mt-3 italic">
+                        Ejemplo: un gasto del 15/01/2026 "Cables eléctricos" → 
+                        <span className="font-mono bg-white px-2 py-0.5 rounded text-xs mx-1">F-15012026-Cables-electricos.pdf</span>
+                      </p>
+                      <p className="text-xs">Caracteres especiales se reemplazan por guiones. Máximo 40 caracteres en el concepto.</p>
+                    </div>
+                  </Card>
+                </div>
+              );
+            })()}
+          </>
+        )}
       </div>
     );
   };
@@ -8704,11 +9176,11 @@ const MainApp = () => {
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
   
-  // Configuración de etiquetas Zebra (debe estar fuera de renderProduccion)
+  // Configuración de etiquetas Zebra (50x40mm, 203dpi - estándar Rootflow)
   const [etiquetaConfig, setEtiquetaConfig] = useState({
-    ancho: 60,        // mm
-    alto: 40,         // mm
-    dpi: 203,         // dots per inch (203 o 300)
+    ancho: 50,        // mm (fijo)
+    alto: 40,         // mm (fijo)
+    dpi: 203,         // dots per inch (fijo)
     cantidad: 1,      // etiquetas por lote/bandeja
     formato: 'zpl'    // 'zpl' o 'html'
   });
@@ -8734,86 +9206,175 @@ const MainApp = () => {
     const mmToDots = (mm, dpi = 203) => Math.round(mm * dpi / 25.4);
 
     // Generar código ZPL para una etiqueta
+    // Layout 50x40mm @ 203dpi (400x320 dots):
+    //   - Logo R (40x40 dots) + "ROOTFLOW" + "BROTES FRESCOS"
+    //   - Línea separadora
+    //   - Nombre del producto (grande)
+    //   - "Lavar antes de consumir" (caja invertida)
+    //   - Lote | Cosecha | Consumir | Origen
     const generarZPL = (lote, index = 1) => {
+      const variedad = variedades.find(v => v.id === lote.variedad_id);
       const producto = productos.find(p => p.id === lote.producto_id);
+      const nombreProducto = (variedad?.nombre || producto?.nombre || 'Brotes').toUpperCase();
       const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
       const fechaConsumo = new Date(fechaCosecha);
       fechaConsumo.setDate(fechaConsumo.getDate() + 7);
       
-      const dpi = etiquetaConfig.dpi;
-      const anchoLabel = mmToDots(etiquetaConfig.ancho, dpi);
-      const altoLabel = mmToDots(etiquetaConfig.alto, dpi);
+      // Configuración fija: 50x40mm @ 203 DPI = 400x320 dots
+      const dpi = 203;
+      const anchoLabel = 400;
+      const altoLabel = 320;
       
-      // Posiciones calculadas según tamaño de etiqueta
-      const margen = mmToDots(2, dpi);
-      const anchoUtil = anchoLabel - (margen * 2);
-      
-      // Formato de fechas corto
       const fechaCosechaStr = formatDate(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
       const fechaConsumoStr = formatDate(fechaConsumo.toISOString().split('T')[0]);
       
-      // Código ZPL optimizado para etiquetas pequeñas
-      return `
-^XA
+      // === LOGO ROOTFLOW EN ZPL (64x64 dots, ~8mm) ===
+      // Diseño de hoja con tallo estilizada
+      const logoRootflow = `^FO15,15
+^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
+      
+      return `^XA
 ^CI28
 ^PW${anchoLabel}
 ^LL${altoLabel}
 ^LH0,0
+^LRN
+^LS0
 
-^FO${margen},${mmToDots(2, dpi)}
-^A0N,${mmToDots(4, dpi)},${mmToDots(3, dpi)}
+${logoRootflow}^FS
+
+^FO95,18
+^A0N,38,38
 ^FDRootFlow^FS
 
-^FO${mmToDots(35, dpi)},${mmToDots(2, dpi)}
-^A0N,${mmToDots(2.5, dpi)},${mmToDots(2, dpi)}
-^FDPRODUCTO FRESCO^FS
+^FO95,58
+^A0N,18,18
+^FDMICROBROTES PREMIUM^FS
 
-^FO${margen},${mmToDots(8, dpi)}
-^GB${anchoUtil},0,2^FS
+^FO10,90
+^GB380,2,2^FS
 
-^FO${margen},${mmToDots(10, dpi)}
-^A0N,${mmToDots(5, dpi)},${mmToDots(4, dpi)}
-^FD${(producto?.nombre || 'Brotes').toUpperCase()}^FS
+^FO10,100
+^A0N,48,48
+^FB380,1,0,C,0
+^FD${nombreProducto}^FS
 
-^FO${margen},${mmToDots(16, dpi)}
-^A0N,${mmToDots(2.5, dpi)},${mmToDots(2, dpi)}
-^FDBrotes tiernos cultivados en invernadero^FS
+^FO10,155
+^A0N,18,18
+^FB380,1,0,C,0
+^FDBrotes tiernos · Cultivado en Madrid^FS
 
-^FO${margen},${mmToDots(20, dpi)}
-^GB${anchoUtil},${mmToDots(5, dpi)},${mmToDots(5, dpi)},B^FS
-^FO${mmToDots(8, dpi)},${mmToDots(21, dpi)}
-^A0N,${mmToDots(3, dpi)},${mmToDots(2.5, dpi)}
+^FO10,182
+^GB380,28,28^FS
+^FO10,189
+^A0N,20,20
+^FB380,1,0,C,0
 ^FR^FDLAVAR ANTES DE CONSUMIR^FS
 
-^FO${margen},${mmToDots(27, dpi)}
-^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FO10,222
+^A0N,18,18
 ^FDLote: ${lote.codigo || 'L-'+lote.id}^FS
 
-^FO${mmToDots(30, dpi)},${mmToDots(27, dpi)}
-^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
-^FDPeso: 100g aprox.^FS
+^FO230,222
+^A0N,18,18
+^FDPeso neto: 100g^FS
 
-^FO${margen},${mmToDots(30, dpi)}
-^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
-^FDF.Cosecha: ${fechaCosechaStr}^FS
+^FO10,246
+^A0N,18,18
+^FDCosecha: ${fechaCosechaStr}^FS
 
-^FO${mmToDots(30, dpi)},${mmToDots(30, dpi)}
-^A0N,${mmToDots(2, dpi)},${mmToDots(1.5, dpi)}
+^FO230,246
+^A0N,18,18
 ^FDConsumir: ${fechaConsumoStr}^FS
 
-^FO${margen},${mmToDots(33, dpi)}
-^A0N,${mmToDots(1.8, dpi)},${mmToDots(1.5, dpi)}
-^FDConservar refrigerado 2-5C^FS
+^FO10,270
+^A0N,15,15
+^FDConservar refrigerado 2-5°C^FS
 
-^FO${margen},${mmToDots(36, dpi)}
-^GB${anchoUtil},0,1^FS
+^FO10,290
+^GB380,1,1^FS
 
-^FO${margen},${mmToDots(37, dpi)}
-^A0N,${mmToDots(1.5, dpi)},${mmToDots(1.2, dpi)}
-^FDOrigen: Madrid | ROOTFLOW HYDROPONICS SL | CIF: B27535137^FS
+^FO10,297
+^A0N,13,13
+^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 638 161 990^FS
 
-^XZ
-`.trim();
+^XZ`;
+    };
+
+    // Generar ZPL para etiqueta de MUESTRA (variante visual)
+    const generarZPLMuestra = (muestra, index = 1) => {
+      const nombreVariedad = muestra.nombre || 'MUESTRA';
+      const fechaEntregaStr = muestra.fecha_entrega ? formatDate(muestra.fecha_entrega) : '';
+      const empresa = (muestra.empresa || '').substring(0, 30);
+      
+      // Configuración fija: 50x40mm @ 203 DPI = 400x320 dots
+      const dpi = 203;
+      const anchoLabel = 400;
+      const altoLabel = 320;
+      
+      // Logo Rootflow (mismo que en lotes)
+      const logoRootflow = `^FO15,15
+^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
+      
+      return `^XA
+^CI28
+^PW${anchoLabel}
+^LL${altoLabel}
+^LH0,0
+^LRN
+^LS0
+
+${logoRootflow}^FS
+
+^FO95,18
+^A0N,38,38
+^FDRootFlow^FS
+
+^FO95,58
+^A0N,16,16
+^FDMUESTRA GRATUITA^FS
+
+^FO10,90
+^GB380,2,2^FS
+
+^FO10,100
+^A0N,42,42
+^FB380,1,0,C,0
+^FD${nombreVariedad.toUpperCase()}^FS
+
+^FO10,150
+^A0N,16,16
+^FB380,1,0,C,0
+^FDBrotes premium · Cultivado en Madrid^FS
+
+^FO10,178
+^GB380,28,28^FS
+^FO10,185
+^A0N,20,20
+^FB380,1,0,C,0
+^FR^FDMUESTRA - NO DESTINADA A VENTA^FS
+
+^FO10,218
+^A0N,18,18
+^FDPara: ${empresa}^FS
+
+^FO10,243
+^A0N,18,18
+^FDEntrega: ${fechaEntregaStr}^FS
+
+^FO10,268
+^A0N,15,15
+^FDConservar refrigerado 2-5°C · Consumir en 5-7 días^FS
+
+^FO10,290
+^GB380,1,1^FS
+
+^FO10,297
+^A0N,13,13
+^FB380,1,0,C,0
+^FD638 161 990 · info@rootflow.es · rootflow.es^FS
+
+^XZ`;
     };
 
     // Generar ZPL para múltiples etiquetas
@@ -15618,6 +16179,27 @@ Firma repartidor: _________________
       {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={form => handleSave('lotes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'extractoBancario' && <Modal title={editingItem ? 'Editar Extracto Bancario' : 'Subir Extracto Bancario'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <ExtractoBancarioForm 
+          extracto={editingItem} 
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                await supabase.from('extractos_bancarios').update(form).eq('id', editingItem.id);
+              } else {
+                await supabase.from('extractos_bancarios').insert(form);
+              }
+              refetchExtractosBancarios();
+              setShowModal(null);
+              setEditingItem(null);
+              alert('✅ Extracto guardado');
+            } catch (e) {
+              alert('❌ Error: ' + e.message + '\n\nAsegúrate de ejecutar ROOTFLOW-SQL-V31 en Supabase.');
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
       {showModal === 'tarea' && <Modal title={editingItem ? 'Editar Tarea' : 'Nueva Tarea'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
         <TareaForm 
           tarea={editingItem} 
