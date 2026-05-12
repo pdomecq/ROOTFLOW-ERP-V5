@@ -747,6 +747,9 @@ const MainApp = () => {
   // Calendario - mes actual
   const [mesCalendario, setMesCalendario] = useState(new Date());
   const [calendarioTab, setCalendarioTab] = useState('eventos'); // 'eventos' | 'turnos'
+  // V36 - Documentos corporativos
+  const [docFiltroCat, setDocFiltroCat] = useState(null);
+  const [docSearch, setDocSearch] = useState('');
   const [calendarioVista, setCalendarioVista] = useState('mes'); // 'mes' | 'semana'
   const [calendarioSocioFiltro, setCalendarioSocioFiltro] = useState(null); // null = todos
   const [semanaCalendario, setSemanaCalendario] = useState(new Date()); // fecha de referencia para vista semanal
@@ -1584,6 +1587,8 @@ const MainApp = () => {
   // V34 - Remesas SEPA
   const { data: remesasSepaData, refetch: refetchRemesasSepa } = useRealtime('remesas_sepa');
   const { data: remesasSepaItemsData, refetch: refetchRemesasSepaItems } = useRealtime('remesas_sepa_items');
+  // V36 - Documentos corporativos
+  const { data: documentosCorpData, refetch: refetchDocumentosCorp } = useRealtime('documentos_corporativos');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1674,6 +1679,8 @@ const MainApp = () => {
   // V34 - Remesas SEPA
   const remesasSepa = remesasSepaData || [];
   const remesasSepaItems = remesasSepaItemsData || [];
+  // V36 - Documentos corporativos
+  const documentosCorp = documentosCorpData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -2543,7 +2550,7 @@ const MainApp = () => {
           mensaje: `Venció hace ${Math.abs(diasRestantes)} días`,
           icono: CheckCircle,
           color: 'bg-red-500',
-          accion: () => setActiveSection('tareas')
+          accion: () => setActiveSection('calendario')
         });
       } else if (diasRestantes === 0 && t.prioridad === 'alta') {
         alertasList.push({
@@ -2554,7 +2561,7 @@ const MainApp = () => {
           mensaje: t.descripcion || 'Sin descripción',
           icono: CheckCircle,
           color: 'bg-amber-500',
-          accion: () => setActiveSection('tareas')
+          accion: () => setActiveSection('calendario')
         });
       }
     });
@@ -14142,6 +14149,566 @@ Firma repartidor: _________________
   };
 
   // ==================== AJUSTES ====================
+  // ==================== DOCUMENTOS CORPORATIVOS ====================
+  const renderDocumentos = () => {
+    const categorias = {
+      constitucion: { label: 'Constitución y Escrituras', icon: '🏛️', color: 'bg-purple-100 text-purple-700 border-purple-300' },
+      contratos_alquiler: { label: 'Contratos de Alquiler', icon: '🏠', color: 'bg-blue-100 text-blue-700 border-blue-300' },
+      contratos_banco: { label: 'Bancos y Financiero', icon: '🏦', color: 'bg-emerald-100 text-emerald-700 border-emerald-300' },
+      contratos_proveed: { label: 'Contratos Proveedores', icon: '📦', color: 'bg-orange-100 text-orange-700 border-orange-300' },
+      contratos_cliente: { label: 'Contratos Clientes', icon: '🤝', color: 'bg-indigo-100 text-indigo-700 border-indigo-300' },
+      seguros: { label: 'Seguros', icon: '🛡️', color: 'bg-cyan-100 text-cyan-700 border-cyan-300' },
+      fiscal: { label: 'Fiscal y Hacienda', icon: '📊', color: 'bg-red-100 text-red-700 border-red-300' },
+      laboral: { label: 'Laboral y Seguridad Social', icon: '👥', color: 'bg-pink-100 text-pink-700 border-pink-300' },
+      licencias: { label: 'Licencias y Certificados', icon: '📜', color: 'bg-amber-100 text-amber-700 border-amber-300' },
+      dominio_web: { label: 'Dominio y Web', icon: '🌐', color: 'bg-teal-100 text-teal-700 border-teal-300' },
+      marca_propiedad: { label: 'Marca y Propiedad Intelectual', icon: '™️', color: 'bg-violet-100 text-violet-700 border-violet-300' },
+      subvenciones: { label: 'Subvenciones y Ayudas', icon: '🎁', color: 'bg-lime-100 text-lime-700 border-lime-300' },
+      otros: { label: 'Otros', icon: '📁', color: 'bg-neutral-100 text-neutral-700 border-neutral-300' },
+    };
+
+    const [catFiltro, setCatFiltro] = [docFiltroCat, setDocFiltroCat];
+    const [searchDoc, setSearchDoc] = [docSearch, setDocSearch];
+
+    // Documentos filtrados
+    let docsFiltrados = documentosCorp;
+    if (catFiltro) docsFiltrados = docsFiltrados.filter(d => d.categoria === catFiltro);
+    if (searchDoc) {
+      const q = searchDoc.toLowerCase();
+      docsFiltrados = docsFiltrados.filter(d => 
+        d.titulo?.toLowerCase().includes(q) ||
+        d.descripcion?.toLowerCase().includes(q) ||
+        d.emisor?.toLowerCase().includes(q) ||
+        d.numero_referencia?.toLowerCase().includes(q)
+      );
+    }
+
+    // Stats
+    const totalDocs = documentosCorp.length;
+    const totalImportantes = documentosCorp.filter(d => d.importante).length;
+    const venciendo = documentosCorp.filter(d => {
+      if (!d.fecha_vencimiento) return false;
+      const dias = (new Date(d.fecha_vencimiento) - new Date()) / (1000*60*60*24);
+      return dias > 0 && dias < 60;
+    });
+    const caducados = documentosCorp.filter(d => 
+      d.fecha_vencimiento && new Date(d.fecha_vencimiento) < new Date()
+    );
+
+    // Conteo por categoría
+    const conteoPorCat = {};
+    Object.keys(categorias).forEach(k => {
+      conteoPorCat[k] = documentosCorp.filter(d => d.categoria === k).length;
+    });
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">📂 Documentos corporativos</h1>
+            <p className="text-neutral-500 font-medium text-sm">Archivo seguro de documentación importante de la empresa</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('documentoCorp'); }}>
+            <Upload size={18} /> Subir documento
+          </Button>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-neutral-100">
+                <FileText size={20} className="text-neutral-600" />
+              </div>
+              <div>
+                <p className="text-xs text-neutral-500 uppercase font-bold">Total</p>
+                <p className="text-2xl font-black">{totalDocs}</p>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4 bg-purple-50 border-purple-200">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-purple-200">
+                <Star size={20} className="text-purple-700" />
+              </div>
+              <div>
+                <p className="text-xs text-purple-700 uppercase font-bold">Importantes</p>
+                <p className="text-2xl font-black text-purple-900">{totalImportantes}</p>
+              </div>
+            </div>
+          </Card>
+          <Card className={`p-4 ${venciendo.length > 0 ? 'bg-amber-50 border-amber-200' : ''}`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${venciendo.length > 0 ? 'bg-amber-200' : 'bg-neutral-100'}`}>
+                <Clock size={20} className={venciendo.length > 0 ? 'text-amber-700' : 'text-neutral-600'} />
+              </div>
+              <div>
+                <p className="text-xs uppercase font-bold" style={{color: venciendo.length > 0 ? '#B45309' : '#737373'}}>Vencen pronto</p>
+                <p className={`text-2xl font-black ${venciendo.length > 0 ? 'text-amber-900' : 'text-neutral-900'}`}>{venciendo.length}</p>
+              </div>
+            </div>
+          </Card>
+          <Card className={`p-4 ${caducados.length > 0 ? 'bg-red-50 border-red-200' : ''}`}>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${caducados.length > 0 ? 'bg-red-200' : 'bg-neutral-100'}`}>
+                <AlertTriangle size={20} className={caducados.length > 0 ? 'text-red-700' : 'text-neutral-600'} />
+              </div>
+              <div>
+                <p className="text-xs uppercase font-bold" style={{color: caducados.length > 0 ? '#B91C1C' : '#737373'}}>Caducados</p>
+                <p className={`text-2xl font-black ${caducados.length > 0 ? 'text-red-700' : 'text-neutral-900'}`}>{caducados.length}</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Buscador */}
+        <div className="flex gap-3 flex-wrap">
+          <div className="flex-1 min-w-[200px] relative">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+            <input 
+              type="text"
+              placeholder="Buscar por título, emisor, referencia..."
+              value={searchDoc}
+              onChange={e => setSearchDoc(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-neutral-200 focus:ring-2 focus:ring-orange-500 outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Filtro categorías */}
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setCatFiltro(null)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${!catFiltro ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}
+          >
+            Todas ({totalDocs})
+          </button>
+          {Object.entries(categorias).filter(([k]) => conteoPorCat[k] > 0).map(([k, cat]) => {
+            const seleccionada = catFiltro === k;
+            return (
+              <button
+                key={k}
+                onClick={() => setCatFiltro(seleccionada ? null : k)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${seleccionada ? 'bg-orange-500 text-white' : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'}`}
+              >
+                <span>{cat.icon}</span>
+                {cat.label}
+                <span className={`text-xs px-1.5 rounded-full ${seleccionada ? 'bg-white/30' : 'bg-orange-500 text-white'}`}>
+                  {conteoPorCat[k]}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Lista de documentos */}
+        {docsFiltrados.length === 0 ? (
+          <Card className="p-12 text-center">
+            <FileText size={48} className="mx-auto text-neutral-300 mb-4" />
+            <h3 className="text-lg font-bold text-neutral-900 mb-2">
+              {documentosCorp.length === 0 ? 'No hay documentos archivados' : 'Sin resultados con estos filtros'}
+            </h3>
+            <p className="text-sm text-neutral-500 mb-4">
+              {documentosCorp.length === 0 
+                ? 'Sube documentos importantes como la constitución de la sociedad, contratos, escrituras...'
+                : 'Cambia los filtros o el buscador'}
+            </p>
+            {documentosCorp.length === 0 && (
+              <Button onClick={() => { setEditingItem(null); setShowModal('documentoCorp'); }}>
+                <Upload size={18} /> Subir primer documento
+              </Button>
+            )}
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {docsFiltrados.sort((a, b) => {
+              if (a.importante && !b.importante) return -1;
+              if (!a.importante && b.importante) return 1;
+              return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+            }).map(doc => {
+              const cat = categorias[doc.categoria] || categorias.otros;
+              const vencido = doc.fecha_vencimiento && new Date(doc.fecha_vencimiento) < new Date();
+              const venciendoSoon = doc.fecha_vencimiento && !vencido && (new Date(doc.fecha_vencimiento) - new Date()) / (1000*60*60*24) < 60;
+              const tamanoKB = doc.archivo_tamano_bytes ? Math.round(doc.archivo_tamano_bytes / 1024) : null;
+              
+              return (
+                <Card 
+                  key={doc.id}
+                  className={`p-4 hover:shadow-lg transition-all cursor-pointer ${doc.importante ? 'border-purple-300 bg-gradient-to-br from-white to-purple-50' : ''} ${vencido ? 'border-red-300' : venciendoSoon ? 'border-amber-300' : ''}`}
+                  onClick={() => doc.archivo_url && window.open(doc.archivo_url, '_blank')}
+                >
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className={`p-2.5 rounded-xl ${cat.color} border flex-shrink-0`}>
+                      <span className="text-xl">{cat.icon}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h3 className="font-bold text-neutral-900 text-sm leading-tight">{doc.titulo}</h3>
+                        {doc.importante && <Star size={14} className="text-purple-500 fill-purple-500 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-neutral-500 mt-0.5 line-clamp-2">{cat.label}</p>
+                    </div>
+                  </div>
+
+                  {doc.descripcion && (
+                    <p className="text-xs text-neutral-600 mb-2 line-clamp-2">{doc.descripcion}</p>
+                  )}
+
+                  <div className="space-y-1 text-xs text-neutral-500 mb-3">
+                    {doc.emisor && (
+                      <div className="flex justify-between gap-2">
+                        <span className="font-medium">Emisor:</span>
+                        <span className="truncate">{doc.emisor}</span>
+                      </div>
+                    )}
+                    {doc.numero_referencia && (
+                      <div className="flex justify-between gap-2">
+                        <span className="font-medium">Ref:</span>
+                        <span className="font-mono truncate">{doc.numero_referencia}</span>
+                      </div>
+                    )}
+                    {doc.fecha_documento && (
+                      <div className="flex justify-between gap-2">
+                        <span className="font-medium">Fecha:</span>
+                        <span>{formatDate(doc.fecha_documento)}</span>
+                      </div>
+                    )}
+                    {doc.fecha_vencimiento && (
+                      <div className={`flex justify-between gap-2 ${vencido ? 'text-red-600 font-semibold' : venciendoSoon ? 'text-amber-600 font-semibold' : ''}`}>
+                        <span className="font-medium">{vencido ? '⚠️ Caducó:' : venciendoSoon ? '⏰ Vence:' : 'Vence:'}</span>
+                        <span>{formatDate(doc.fecha_vencimiento)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {doc.tags && doc.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                      {doc.tags.slice(0, 3).map((tag, i) => (
+                        <span key={i} className="text-[10px] px-2 py-0.5 bg-neutral-100 text-neutral-600 rounded-full">#{tag}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 border-t border-neutral-100">
+                    <span className="text-[10px] text-neutral-400">
+                      {doc.archivo_nombre || 'archivo'}
+                      {tamanoKB && ` · ${tamanoKB > 1024 ? (tamanoKB/1024).toFixed(1) + ' MB' : tamanoKB + ' KB'}`}
+                    </span>
+                    <div className="flex gap-1">
+                      <button 
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          if (doc.archivo_url) window.open(doc.archivo_url, '_blank'); 
+                        }}
+                        className="p-1.5 text-neutral-400 hover:text-blue-600 hover:bg-blue-50 rounded"
+                        title="Ver / Descargar"
+                      >
+                        <Eye size={14} />
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setEditingItem(doc); setShowModal('documentoCorp'); }}
+                        className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded"
+                        title="Editar"
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                      <button 
+                        onClick={async (e) => { 
+                          e.stopPropagation();
+                          if (window.confirm(`¿Eliminar "${doc.titulo}"?\n\nEsto borrará también el archivo del Storage.`)) {
+                            // Borrar de storage si existe
+                            if (doc.archivo_url) {
+                              try {
+                                const path = doc.archivo_url.split('/documentos-corporativos/')[1]?.split('?')[0];
+                                if (path) await supabase.storage.from('documentos-corporativos').remove([path]);
+                              } catch (e) { console.error(e); }
+                            }
+                            await supabase.from('documentos_corporativos').delete().eq('id', doc.id);
+                            refetchDocumentosCorp();
+                          }
+                        }}
+                        className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"
+                        title="Eliminar"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ==================== DOCUMENTO CORP FORM ====================
+  const DocumentoCorpForm = ({ documento, onSave, onCancel }) => {
+    const initialForm = documento || {
+      titulo: '',
+      descripcion: '',
+      categoria: 'otros',
+      emisor: '',
+      numero_referencia: '',
+      fecha_documento: '',
+      fecha_vencimiento: '',
+      importe_relacionado: 0,
+      archivo_url: '',
+      archivo_nombre: '',
+      archivo_tipo: '',
+      archivo_tamano_bytes: 0,
+      importante: false,
+      tags: [],
+      notas: '',
+    };
+    const [form, setForm] = useState(initialForm);
+    const [uploading, setUploading] = useState(false);
+    const [tagInput, setTagInput] = useState('');
+
+    const categorias = [
+      { value: 'constitucion', label: '🏛️ Constitución y Escrituras' },
+      { value: 'contratos_alquiler', label: '🏠 Contratos de Alquiler' },
+      { value: 'contratos_banco', label: '🏦 Bancos y Financiero' },
+      { value: 'contratos_proveed', label: '📦 Contratos Proveedores' },
+      { value: 'contratos_cliente', label: '🤝 Contratos Clientes' },
+      { value: 'seguros', label: '🛡️ Seguros' },
+      { value: 'fiscal', label: '📊 Fiscal y Hacienda' },
+      { value: 'laboral', label: '👥 Laboral y Seguridad Social' },
+      { value: 'licencias', label: '📜 Licencias y Certificados' },
+      { value: 'dominio_web', label: '🌐 Dominio y Web' },
+      { value: 'marca_propiedad', label: '™️ Marca y Propiedad Intelectual' },
+      { value: 'subvenciones', label: '🎁 Subvenciones y Ayudas' },
+      { value: 'otros', label: '📁 Otros' },
+    ];
+
+    const handleFileUpload = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      // Validar tamaño (máx 50 MB)
+      if (file.size > 50 * 1024 * 1024) {
+        alert('❌ El archivo es demasiado grande. Máximo 50 MB.');
+        return;
+      }
+      
+      setUploading(true);
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        const timestamp = Date.now();
+        const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+        const fileName = `${form.categoria || 'otros'}/${timestamp}-${safeName}`;
+        
+        const { data, error } = await supabase.storage
+          .from('documentos-corporativos')
+          .upload(fileName, file);
+        
+        if (error) throw error;
+        
+        const { data: urlData } = supabase.storage
+          .from('documentos-corporativos')
+          .getPublicUrl(fileName);
+        
+        setForm({
+          ...form,
+          archivo_url: urlData.publicUrl,
+          archivo_nombre: file.name,
+          archivo_tipo: ext,
+          archivo_tamano_bytes: file.size,
+        });
+        
+        alert('✅ Archivo subido correctamente');
+      } catch (err) {
+        console.error('Error subiendo archivo:', err);
+        if (err.message?.includes('not found') || err.message?.includes('Bucket')) {
+          alert(`❌ Falta crear el bucket "documentos-corporativos" en Supabase Storage.\n\nVe a Supabase Dashboard → Storage → New bucket:\n- Nombre: documentos-corporativos\n- Public: ON`);
+        } else {
+          alert('❌ Error al subir: ' + err.message);
+        }
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    const addTag = () => {
+      if (!tagInput.trim()) return;
+      const newTag = tagInput.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (newTag && !form.tags?.includes(newTag)) {
+        setForm({ ...form, tags: [...(form.tags || []), newTag] });
+      }
+      setTagInput('');
+    };
+
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        <Input 
+          label="Título del documento *" 
+          value={form.titulo} 
+          onChange={e => setForm({...form, titulo: e.target.value})}
+          placeholder="Ej: Escritura de constitución de la sociedad"
+        />
+        
+        <Select 
+          label="Categoría *" 
+          value={form.categoria} 
+          onChange={e => setForm({...form, categoria: e.target.value})}
+          options={categorias}
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input 
+            label="Emisor / Entidad" 
+            value={form.emisor} 
+            onChange={e => setForm({...form, emisor: e.target.value})}
+            placeholder="Notaría, BBVA, AEAT..."
+          />
+          <Input 
+            label="Nº referencia / Protocolo" 
+            value={form.numero_referencia} 
+            onChange={e => setForm({...form, numero_referencia: e.target.value})}
+            placeholder="N/123/2026"
+          />
+          <Input 
+            label="Fecha del documento" 
+            type="date"
+            value={form.fecha_documento} 
+            onChange={e => setForm({...form, fecha_documento: e.target.value})}
+          />
+          <Input 
+            label="Fecha de vencimiento" 
+            type="date"
+            value={form.fecha_vencimiento} 
+            onChange={e => setForm({...form, fecha_vencimiento: e.target.value})}
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Descripción</label>
+          <textarea 
+            value={form.descripcion} 
+            onChange={e => setForm({...form, descripcion: e.target.value})}
+            className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+            rows={3}
+            placeholder="Detalles del documento, contenido, qué cubre, etc."
+          />
+        </div>
+
+        {/* Archivo */}
+        <div className="border-2 border-dashed border-orange-300 rounded-xl p-4 bg-orange-50/50">
+          <label className="block text-sm font-semibold text-orange-900 mb-2">📎 Archivo del documento</label>
+          
+          {form.archivo_url ? (
+            <div className="bg-white p-3 rounded-lg border border-orange-200 flex items-center gap-3">
+              <FileText size={24} className="text-orange-600 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate">{form.archivo_nombre}</p>
+                <p className="text-xs text-neutral-500">
+                  {form.archivo_tipo?.toUpperCase()} 
+                  {form.archivo_tamano_bytes && ` · ${(form.archivo_tamano_bytes / 1024).toFixed(0)} KB`}
+                </p>
+              </div>
+              <button 
+                onClick={() => window.open(form.archivo_url, '_blank')}
+                className="p-2 text-blue-600 hover:bg-blue-50 rounded"
+                type="button"
+              >
+                <Eye size={16} />
+              </button>
+              <button 
+                onClick={() => setForm({...form, archivo_url: '', archivo_nombre: '', archivo_tipo: '', archivo_tamano_bytes: 0})}
+                className="p-2 text-red-500 hover:bg-red-50 rounded"
+                type="button"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ) : (
+            <div>
+              <input 
+                type="file"
+                onChange={handleFileUpload}
+                disabled={uploading}
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp"
+                className="block w-full text-sm text-neutral-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-orange-500 file:text-white file:font-semibold hover:file:bg-orange-600 file:cursor-pointer"
+              />
+              {uploading && <p className="text-xs text-orange-600 mt-2 font-medium">⏳ Subiendo...</p>}
+              <p className="text-xs text-orange-700 mt-2">Acepta PDF, Word, Excel, imágenes. Máx 50 MB.</p>
+            </div>
+          )}
+        </div>
+
+        {/* Tags */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Etiquetas (opcional)</label>
+          <div className="flex gap-2 mb-2">
+            <input 
+              type="text"
+              value={tagInput}
+              onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+              placeholder="urgente, 2026, importante..."
+              className="flex-1 px-3 py-1.5 rounded-lg border border-neutral-300 text-sm"
+            />
+            <Button size="sm" onClick={addTag} variant="secondary">Añadir</Button>
+          </div>
+          {form.tags && form.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {form.tags.map(tag => (
+                <span key={tag} className="text-xs px-2 py-1 bg-neutral-100 text-neutral-700 rounded-full flex items-center gap-1">
+                  #{tag}
+                  <button onClick={() => setForm({...form, tags: form.tags.filter(t => t !== tag)})} className="text-neutral-400 hover:text-red-500">
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Marcar importante */}
+        <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input 
+              type="checkbox"
+              checked={form.importante}
+              onChange={e => setForm({...form, importante: e.target.checked})}
+              className="w-4 h-4 rounded"
+            />
+            <div>
+              <span className="text-sm font-semibold text-purple-900">⭐ Marcar como documento crítico</span>
+              <p className="text-xs text-purple-700">Documentos críticos aparecen primero ordenados</p>
+            </div>
+          </label>
+        </div>
+
+        {/* Notas */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas internas</label>
+          <textarea 
+            value={form.notas} 
+            onChange={e => setForm({...form, notas: e.target.value})}
+            className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+            rows={2}
+            placeholder="Anotaciones internas, recordatorios, etc."
+          />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button 
+            onClick={() => {
+              if (!form.titulo?.trim()) { alert('El título es obligatorio'); return; }
+              if (!form.archivo_url) { alert('Sube un archivo antes de guardar'); return; }
+              onSave(form);
+            }}
+          >
+            {documento ? 'Guardar cambios' : 'Archivar documento'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const renderAjustes = () => {
     const notificacionesConfig = [
       { key: 'stock_bajo', label: 'Stock bajo', descripcion: 'Cuando un producto tiene stock bajo' },
@@ -16899,8 +17466,7 @@ Firma repartidor: _________________
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto">
           <NavItem icon={BarChart3} label="Dashboard" section="dashboard" />
-          <NavItem icon={Calendar} label="Calendario" section="calendario" />
-          <NavItem icon={CheckCircle} label="Tareas" section="tareas" badge={tareasPendientes} />
+          <NavItem icon={Calendar} label="Calendario" section="calendario" badge={tareasPendientes} />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Comercial</p>}</div>
           <NavItem icon={Target} label="Leads" section="leads" badge={leadsNuevos} />
           <NavItem icon={Gift} label="Muestras" section="muestras" badge={muestras.filter(m => m.estado === 'pendiente').length} />
@@ -16921,6 +17487,8 @@ Firma repartidor: _________________
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
           <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
           <NavItem icon={Sun} label="Ambiente" section="ambiente" />
+          <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Empresa</p>}</div>
+          <NavItem icon={FileText} label="Documentos" section="documentos" />
         </nav>
         <div className="pt-4 border-t border-neutral-700 space-y-1">
           <button onClick={() => setSidebarOpen(!sidebarOpen)} className="hidden md:flex w-full items-center gap-3 px-4 py-3 text-neutral-500 hover:text-white hover:bg-neutral-800 rounded-xl"><Menu size={20} />{sidebarOpen && <span className="text-sm font-medium">Colapsar</span>}</button>
@@ -17277,7 +17845,6 @@ Firma repartidor: _________________
         <div className="p-4 md:p-8">
           {activeSection === 'dashboard' && renderDashboard()}
           {activeSection === 'calendario' && renderCalendario()}
-          {activeSection === 'tareas' && renderTareas()}
           {activeSection === 'leads' && renderLeads()}
           {activeSection === 'muestras' && renderMuestras()}
           {activeSection === 'clientes' && renderClientes()}
@@ -17295,6 +17862,7 @@ Firma repartidor: _________________
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
+          {activeSection === 'documentos' && renderDocumentos()}
           {activeSection === 'ajustes' && renderAjustes()}
         </div>
       </main>
@@ -17402,6 +17970,31 @@ Firma repartidor: _________________
           onAbrirEmail={() => { setShowModal('emailConfig'); }}
           enviarSlackTest={enviarSlack}
           guardarBD={guardarNotificacionesConfig}
+        />
+      </Modal>}
+      
+      {/* Modal Documento Corporativo */}
+      {showModal === 'documentoCorp' && <Modal title={editingItem ? 'Editar Documento' : 'Subir Documento Corporativo'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <DocumentoCorpForm 
+          documento={editingItem} 
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                const { error } = await supabase.from('documentos_corporativos').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('documentos_corporativos').insert(form);
+                if (error) throw error;
+              }
+              refetchDocumentosCorp();
+              setShowModal(null);
+              setEditingItem(null);
+              alert(`✅ Documento ${editingItem ? 'actualizado' : 'archivado'} correctamente`);
+            } catch (e) {
+              alert('❌ Error: ' + e.message);
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
         />
       </Modal>}
     </div>
