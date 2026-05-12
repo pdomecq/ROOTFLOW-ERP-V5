@@ -7661,6 +7661,666 @@ const MainApp = () => {
       </div>
     );
   };
+  const renderClientes = () => {
+    // Aplicar filtros
+    const clientesFiltrados = aplicarFiltros(
+      clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase())),
+      filtrosClientes,
+      {
+        tipo: c => c.tipo,
+        zona: c => c.zona,
+        descuento: c => c.descuento,
+        codigo_postal: c => c.codigo_postal,
+      }
+    );
+    const filtered = clientesFiltrados;
+    const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
+    
+    const tipoOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const zonaOptions = Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    
+    // Limpiar todos los filtros
+    const limpiarFiltrosClientes = () => setFiltrosClientes({});
+    const hayFiltrosActivos = Object.values(filtrosClientes).some(v => v && v !== '');
+
+    // Vista Grid (tarjetas)
+    const renderGridView = () => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filtered.map(cliente => {
+          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+          const Icon = config.icon;
+          return (
+            <Card key={cliente.id} className="p-5 hover:shadow-md transition-all">
+              <div className="flex items-start justify-between mb-3">
+                <div className={`p-2.5 rounded-xl ${config.color} border`}><Icon size={20} /></div>
+                <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
+              </div>
+              <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
+              <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
+              {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
+              <div className="flex items-center justify-between pt-3 border-t">
+                <Badge variant="orange">{cliente.descuento}% dto</Badge>
+                <div className="flex gap-1">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    );
+
+    // Vista Lista
+    const renderListView = () => (
+      <div className="space-y-3">
+        {filtered.map(cliente => {
+          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+          const Icon = config.icon;
+          return (
+            <Card key={cliente.id} className="p-4 hover:shadow-md transition-all">
+              <div className="flex items-center gap-4">
+                <div className={`p-3 rounded-xl ${config.color} border flex-shrink-0`}><Icon size={24} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h3 className="font-bold text-neutral-900">{cliente.nombre}</h3>
+                    <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
+                    <Badge variant="orange">{cliente.descuento}% dto</Badge>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-neutral-500 flex-wrap">
+                    {cliente.contacto && <span>{cliente.contacto}</span>}
+                    {cliente.email && <span className="flex items-center gap-1"><Mail size={12} />{cliente.email}</span>}
+                    {cliente.telefono && <span className="flex items-center gap-1"><Phone size={12} />{cliente.telefono}</span>}
+                    {cliente.codigo_postal && <span className="flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal}</span>}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={18} /></button>
+                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    );
+
+    // Vista Tabla con filtros
+    const renderTableView = () => (
+      <Card className="overflow-hidden">
+        {hayFiltrosActivos && (
+          <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+            <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+            <button onClick={limpiarFiltrosClientes} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+          </div>
+        )}
+        {selectedClientes.length > 0 && (
+          <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+            <span className="font-semibold text-blue-700">{selectedClientes.length} cliente(s) seleccionado(s)</span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setSelectedClientes([])}>Deseleccionar</Button>
+              <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('clientes', selectedClientes, refetchClientes, setSelectedClientes)}>
+                <Trash2 size={14} /> Eliminar
+              </Button>
+            </div>
+          </div>
+        )}
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px]">
+          <thead className="bg-neutral-900 text-white">
+            <tr>
+              <th className="px-3 py-3 text-left w-10">
+                <input type="checkbox" checked={filtered.length > 0 && selectedClientes.length === filtered.length} onChange={e => setSelectedClientes(e.target.checked ? filtered.map(c => c.id) : [])} className="w-4 h-4 rounded" />
+              </th>
+              <FilterableHeader label="Cliente" field="nombre" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
+              <FilterableHeader label="Tipo" field="tipo" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={tipoOptions} />
+              <FilterableHeader label="Zona" field="zona" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={zonaOptions} />
+              <FilterableHeader label="CP" field="codigo_postal" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
+              <FilterableHeader label="Dto" field="descuento" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="number" />
+              <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(cliente => {
+              const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
+              const isSelected = selectedClientes.includes(cliente.id);
+              return (
+                <tr key={cliente.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-blue-50' : ''}`}>
+                  <td className="px-3 py-3">
+                    <input type="checkbox" checked={isSelected} onChange={e => setSelectedClientes(e.target.checked ? [...selectedClientes, cliente.id] : selectedClientes.filter(id => id !== cliente.id))} className="w-4 h-4 rounded" />
+                  </td>
+                  <td className="px-3 md:px-5 py-3 md:py-4">
+                    <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
+                    <p className="text-xs text-neutral-400">{cliente.cif || cliente.email}</p>
+                  </td>
+                  <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
+                  <td className="px-5 py-4"><Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label || '-'}</Badge></td>
+                  <td className="px-5 py-4 text-sm">{cliente.codigo_postal || '-'}</td>
+                  <td className="px-5 py-4 font-bold text-orange-600">{cliente.descuento}%</td>
+                  <td className="px-5 py-4">
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                      <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        </div>
+      </Card>
+    );
+
+    // Vista Mapa
+    if (viewClientes === 'map') return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
+        </div>
+        <MapView items={clientes} type="clientes" />
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
+            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
+          </div>
+        </div>
+        <Card className="p-4"><div className="relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div></Card>
+        
+        {viewClientes === 'grid' && renderGridView()}
+        {viewClientes === 'list' && renderListView()}
+        {viewClientes === 'table' && renderTableView()}
+        
+        {filtered.length === 0 && <EmptyState icon={Users} title="No hay clientes" description="Añade tu primer cliente" action={<Button onClick={() => setShowModal('cliente')}><Plus size={16} />Nuevo</Button>} />}
+      </div>
+    );
+  };
+
+  const renderLeads = () => {
+    // Aplicar filtros
+    let filtered = leads.filter(l => { 
+      const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); 
+      const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; 
+      return matchesSearch && matchesFilter; 
+    });
+    
+    // Aplicar filtros de columna
+    filtered = aplicarFiltros(filtered, filtrosLeads, {
+      nombre: l => l.nombre,
+      tipo: l => l.tipo,
+      estado: l => l.estado,
+      origen: l => l.origen,
+      codigo_postal: l => l.codigo_postal,
+      valor_estimado: l => l.valor_estimado,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosLeads).some(v => v && v !== '');
+    
+    const exportColumns = [{ header: 'Nombre', accessor: l => l.nombre },{ header: 'Empresa', accessor: l => l.empresa },{ header: 'Tipo', accessor: l => tipoClienteConfig[l.tipo]?.label },{ header: 'CP', accessor: l => l.codigo_postal },{ header: 'Estado', accessor: l => estadoLeadConfig[l.estado]?.label },{ header: 'Origen', accessor: l => origenLeadConfig[l.origen]?.label },{ header: 'Valor', accessor: l => l.valor_estimado },{ header: 'Email', accessor: l => l.email },{ header: 'Teléfono', accessor: l => l.telefono }];
+
+    const estadoOptions = Object.entries(estadoLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const origenOptions = Object.entries(origenLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const tipoLeadOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
+
+    const handleConvertToClient = async (lead) => {
+      if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
+      const clienteData = { nombre: lead.nombre || lead.empresa, tipo: ['mercamadrid', 'hotel', 'restaurante'].includes(lead.tipo) ? lead.tipo : 'restaurante', contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
+      const { data: newCliente } = await supabase.from('clientes').insert(clienteData).select().single();
+      if (newCliente) { 
+        await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); 
+        refetchClientes();
+        refetchLeads();
+        alert('✅ Lead convertido a cliente'); 
+      }
+    };
+
+    if (viewLeads === 'map') return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
+          <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
+        </div>
+        <MapView items={leads} type="leads" />
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
+          <div className="flex items-center gap-3">
+            <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
+            <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={e => { if (e.target.files[0]) handleImportLeads(e.target.files[0]); e.target.value = ''; }} />
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}><Upload size={18} /> Importar Excel</Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('lead'); }}><Plus size={20} /> Nuevo Lead</Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+          {Object.entries(estadoLeadConfig).map(([key, config]) => {
+            const count = leads.filter(l => l.estado === key).length;
+            const Icon = config.icon;
+            return <Card key={key} className={`p-4 cursor-pointer hover:shadow-md ${filterEstado === key ? 'ring-2 ring-orange-500' : ''}`} onClick={() => setFilterEstado(filterEstado === key ? 'todos' : key)}>
+              <div className="flex items-center justify-between">
+                <div className={`p-2 rounded-lg ${config.color}`}><Icon size={16} /></div>
+                <span className="text-2xl font-black">{count}</span>
+              </div>
+              <p className="text-sm text-neutral-600 mt-2 font-medium">{config.label}</p>
+            </Card>;
+          })}
+        </div>
+
+        <Card className="p-4 flex items-center gap-4">
+          <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
+          {filterEstado !== 'todos' && <Button variant="ghost" size="sm" onClick={() => setFilterEstado('todos')}><X size={16} /> Limpiar filtro</Button>}
+        </Card>
+
+        <Card className="overflow-hidden">
+          {hayFiltrosActivos && (
+            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+              <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+              <button onClick={() => setFiltrosLeads({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+            </div>
+          )}
+          <table className="w-full">
+            <thead className="bg-neutral-900 text-white">
+              <tr>
+                <FilterableHeader label="Lead" field="nombre" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="Tipo" field="tipo" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={tipoLeadOptions} />
+                <FilterableHeader label="Contacto" field="email" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="CP" field="codigo_postal" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
+                <FilterableHeader label="Estado" field="estado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={estadoOptions} />
+                <FilterableHeader label="Origen" field="origen" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={origenOptions} />
+                <FilterableHeader label="Valor" field="valor_estimado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="number" />
+                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortData(filtered, sortLeads).map(lead => {
+                const tipoConfig = tipoClienteConfig[lead.tipo] || tipoClienteConfig.otro;
+                const estadoConf = estadoLeadConfig[lead.estado];
+                const origenConf = origenLeadConfig[lead.origen] || origenLeadConfig.otro;
+                const Icon = estadoConf?.icon || Star;
+                return (
+                  <tr key={lead.id} className="border-b border-neutral-100 hover:bg-neutral-50">
+                    <td className="px-5 py-4"><p className="font-bold text-neutral-900">{lead.nombre}</p><p className="text-xs text-neutral-400">{lead.empresa}</p></td>
+                    <td className="px-5 py-4"><Badge className={tipoConfig.color}>{tipoConfig.label}</Badge></td>
+                    <td className="px-5 py-4"><p className="text-sm">{lead.email}</p><p className="text-xs text-neutral-400">{lead.telefono}</p></td>
+                    <td className="px-5 py-4 text-sm">{lead.codigo_postal || '-'}</td>
+                    <td className="px-5 py-4"><Badge className={estadoConf?.color}><Icon size={12} />{estadoConf?.label}</Badge></td>
+                    <td className="px-5 py-4"><Badge className={origenConf.color}>{origenConf.label}</Badge></td>
+                    <td className="px-5 py-4 font-bold">{formatCurrency(lead.valor_estimado)}</td>
+                    <td className="px-5 py-4">
+                      <div className="flex justify-end gap-1">
+                        {lead.estado !== 'ganado' && lead.estado !== 'perdido' && <button onClick={() => handleConvertToClient(lead)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Convertir a cliente"><UserPlus size={16} /></button>}
+                        <button onClick={() => { setEditingItem(lead); setShowModal('lead'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                        <button onClick={() => handleDelete('leads', lead.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState icon={Target} title="No hay leads" description="Añade o importa leads" action={<Button onClick={() => setShowModal('lead')}><Plus size={16} />Nuevo</Button>} />}
+        </Card>
+      </div>
+    );
+  };
+
+  // Estado para pestaña de pedidos
+  const [pedidosTab, setPedidosTab] = useState('lista');
+
+  const renderPedidos = () => {
+    // Aplicar filtros
+    let filtered = pedidos.filter(p => { 
+      const cliente = clientes.find(c => c.id === p.cliente_id); 
+      const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); 
+      const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; 
+      return matchesSearch && matchesFilter; 
+    });
+    
+    // Aplicar filtros de columna
+    filtered = aplicarFiltros(filtered, filtrosPedidos, {
+      cliente_id: p => clientes.find(c => c.id === p.cliente_id)?.nombre?.toLowerCase(),
+      estado: p => p.estado,
+      total: p => p.total,
+    });
+    
+    const hayFiltrosActivos = Object.values(filtrosPedidos).some(v => v && v !== '');
+    const estadoOptions = Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }));
+    const clienteOptions = clientes.map(c => ({ value: c.nombre?.toLowerCase(), label: c.nombre }));
+    
+    const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
+    
+    const frecuenciaConfig = {
+      semanal: { label: 'Semanal', color: 'bg-blue-100 text-blue-700' },
+      quincenal: { label: 'Quincenal', color: 'bg-purple-100 text-purple-700' },
+      mensual: { label: 'Mensual', color: 'bg-green-100 text-green-700' }
+    };
+    
+    const diasSemana = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+    // Ejecutar pedido recurrente (crear pedido normal a partir del recurrente)
+    const ejecutarPedidoRecurrente = async (pr) => {
+      const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+      if (items.length === 0) {
+        alert('Este pedido recurrente no tiene productos');
+        return;
+      }
+      
+      const cliente = clientes.find(c => c.id === pr.cliente_id);
+      let total = 0;
+      const itemsData = items.map(item => {
+        const prod = productos.find(p => p.id === item.producto_id);
+        const subtotal = (prod?.precio || 0) * item.cantidad;
+        total += subtotal;
+        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: prod?.precio || 0, subtotal };
+      });
+
+      // Aplicar descuento del cliente
+      const descuento = cliente?.descuento || 0;
+      total = total * (1 - descuento / 100);
+
+      // Crear pedido
+      const hoy = new Date().toISOString().split('T')[0];
+      const { data: newPedido, error: pedidoError } = await supabase.from('pedidos').insert({
+        cliente_id: pr.cliente_id,
+        fecha: hoy,
+        fecha_entrega: hoy,
+        estado: 'pendiente',
+        notas: `Generado desde pedido recurrente: ${pr.nombre}`,
+        total
+      }).select().single();
+
+      if (pedidoError) {
+        alert('Error al crear pedido: ' + pedidoError.message);
+        return;
+      }
+
+      // Insertar items
+      for (const item of itemsData) {
+        await supabase.from('pedido_items').insert({ pedido_id: newPedido.id, ...item });
+      }
+
+      // Actualizar fecha de última ejecución
+      await supabase.from('pedidos_recurrentes').update({ 
+        ultima_ejecucion: hoy,
+        proxima_ejecucion: calcularProximaEjecucion(pr.frecuencia, pr.dia_semana)
+      }).eq('id', pr.id);
+
+      refetchPedidos();
+      refetchPedidoItems();
+      refetchPedidosRecurrentes();
+      alert(`✅ Pedido #${newPedido.id} creado para ${cliente?.nombre}`);
+    };
+
+    const calcularProximaEjecucion = (frecuencia, diaSemana) => {
+      const hoy = new Date();
+      let proxima = new Date(hoy);
+      
+      if (frecuencia === 'semanal') {
+        proxima.setDate(hoy.getDate() + 7);
+      } else if (frecuencia === 'quincenal') {
+        proxima.setDate(hoy.getDate() + 14);
+      } else {
+        proxima.setMonth(hoy.getMonth() + 1);
+      }
+      
+      // Ajustar al día de la semana
+      while (proxima.getDay() !== diaSemana) {
+        proxima.setDate(proxima.getDate() + 1);
+      }
+      
+      return proxima.toISOString().split('T')[0];
+    };
+
+    const toggleActivoPedidoRecurrente = async (pr) => {
+      await supabase.from('pedidos_recurrentes').update({ activo: !pr.activo }).eq('id', pr.id);
+      refetchPedidosRecurrentes();
+    };
+
+    const eliminarPedidoRecurrente = async (id) => {
+      if (window.confirm('¿Eliminar este pedido recurrente?')) {
+        await supabase.from('pedidos_recurrentes_items').delete().eq('pedido_recurrente_id', id);
+        await supabase.from('pedidos_recurrentes').delete().eq('id', id);
+        refetchPedidosRecurrentes();
+        refetchPedidosRecurrentesItems();
+      }
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Pedidos</h1>
+            <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{pedidos.length} pedidos • {pedidosRecurrentes.filter(p => p.activo).length} recurrentes activos</p>
+          </div>
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
+            {pedidosTab === 'lista' ? (
+              <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo Pedido</span></Button>
+            ) : (
+              <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} /><span className="hidden sm:inline">Nuevo Recurrente</span></Button>
+            )}
+          </div>
+        </div>
+
+        {/* Pestañas */}
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setPedidosTab('lista')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors ${pedidosTab === 'lista' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <ShoppingCart size={18} className="inline mr-2" />Pedidos
+          </button>
+          <button 
+            onClick={() => setPedidosTab('recurrentes')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${pedidosTab === 'recurrentes' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Repeat size={18} />Recurrentes
+            {pedidosRecurrentes.filter(p => p.activo).length > 0 && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${pedidosTab === 'recurrentes' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
+                {pedidosRecurrentes.filter(p => p.activo).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {pedidosTab === 'lista' ? (
+          <>
+            <Card className={`p-4 flex items-center gap-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <div className="flex-1 relative">
+                <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input type="text" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className={`w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`} />
+              </div>
+              <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className={`px-4 py-2.5 rounded-xl border font-medium ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}>
+                <option value="todos">Todos</option>
+                {Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </Card>
+            <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+              <div className="overflow-x-auto">
+              {hayFiltrosActivos && (
+                <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
+                  <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
+                  <button onClick={() => setFiltrosPedidos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
+                </div>
+              )}
+              {selectedPedidos.length > 0 && (
+                <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
+                  <span className="font-semibold text-blue-700">{selectedPedidos.length} pedido(s) seleccionado(s)</span>
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setSelectedPedidos([])}>Deseleccionar</Button>
+                    <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('pedidos', selectedPedidos, refetchPedidos, setSelectedPedidos)}>
+                      <Trash2 size={14} /> Eliminar
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {/* Botón configurar columnas */}
+              <div className="p-2 border-b flex justify-end">
+                <button onClick={() => setShowColumnConfig('pedidos')} className="text-xs text-neutral-500 hover:text-orange-600 flex items-center gap-1">
+                  <Settings size={14} /> Columnas
+                </button>
+              </div>
+              <table className="w-full min-w-[600px]">
+                <thead className="bg-neutral-900 text-white"><tr>
+                  <th className="px-3 py-3 text-left w-10">
+                    <input type="checkbox" checked={filtered.length > 0 && selectedPedidos.length === filtered.length} onChange={e => setSelectedPedidos(e.target.checked ? filtered.map(p => p.id) : [])} className="w-4 h-4 rounded" />
+                  </th>
+                  {(columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden).map(col => (
+                    <th key={col.id} className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">{col.label}</th>
+                  ))}
+                  <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
+                </tr></thead>
+                <tbody>
+                  {filtered.map(pedido => {
+                    const cliente = clientes.find(c => c.id === pedido.cliente_id);
+                    const config = estadoConfig[pedido.estado];
+                    const Icon = config?.icon || Clock;
+                    const isSelected = selectedPedidos.includes(pedido.id);
+                    const colsVisibles = (columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden);
+                    
+                    return (
+                      <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} ${isSelected ? 'bg-blue-50' : ''}`}>
+                        <td className="px-3 py-3">
+                          <input type="checkbox" checked={isSelected} onChange={e => setSelectedPedidos(e.target.checked ? [...selectedPedidos, pedido.id] : selectedPedidos.filter(id => id !== pedido.id))} className="w-4 h-4 rounded" />
+                        </td>
+                        {colsVisibles.map(col => {
+                          switch(col.id) {
+                            case 'id': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>;
+                            case 'cliente': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>;
+                            case 'concepto': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{pedido.concepto ? <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">{pedido.concepto}</span> : <span className="text-neutral-300">-</span>}</td>;
+                            case 'fecha_entrega': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>;
+                            case 'horario': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-xs">{pedido.horario_entrega ? <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg font-medium">{pedido.horario_entrega}</span> : '-'}</td>;
+                            case 'total': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-bold text-sm ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</td>;
+                            case 'estado': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>;
+                            default: return null;
+                          }
+                        })}
+                        <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              </div>
+              {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
+            </Card>
+
+            {/* Modal configuración columnas */}
+            {showColumnConfig === 'pedidos' && <ColumnConfigModal modulo="pedidos" onClose={() => setShowColumnConfig(null)} />}
+          </>
+        ) : (
+          /* Vista de Pedidos Recurrentes */
+          <div className="space-y-4">
+            {pedidosRecurrentes.length === 0 ? (
+              <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                <Repeat size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className={`text-lg font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>No hay pedidos recurrentes</h3>
+                <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Crea pedidos que se repiten automáticamente cada semana, quincena o mes</p>
+                <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} />Crear Pedido Recurrente</Button>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {pedidosRecurrentes.map(pr => {
+                  const cliente = clientes.find(c => c.id === pr.cliente_id);
+                  const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+                  const totalEstimado = items.reduce((sum, item) => {
+                    const prod = productos.find(p => p.id === item.producto_id);
+                    return sum + ((prod?.precio || 0) * item.cantidad);
+                  }, 0);
+                  const frecConfig = frecuenciaConfig[pr.frecuencia] || frecuenciaConfig.semanal;
+
+                  return (
+                    <Card key={pr.id} className={`overflow-hidden ${!pr.activo ? 'opacity-60' : ''} ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
+                      <div className={`p-4 ${pr.activo ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-neutral-400'} text-white`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Repeat size={20} />
+                            <h3 className="font-bold truncate">{pr.nombre}</h3>
+                          </div>
+                          <Badge className={frecConfig.color}>{frecConfig.label}</Badge>
+                        </div>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <Users size={16} className="text-neutral-400" />
+                          <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{cliente?.nombre || 'Cliente'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar size={16} className="text-neutral-400" />
+                          <span className={`text-sm ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>
+                            {diasSemana[pr.dia_semana] || 'Lunes'} • {frecConfig.label}
+                          </span>
+                        </div>
+                        <div className={`p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
+                          <p className={`text-xs font-medium mb-2 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Productos ({items.length})</p>
+                          {items.slice(0, 3).map(item => {
+                            const prod = productos.find(p => p.id === item.producto_id);
+                            return (
+                              <p key={item.id} className={`text-sm truncate ${darkMode ? 'text-neutral-200' : ''}`}>
+                                • {prod?.nombre || 'Producto'} x{item.cantidad}
+                              </p>
+                            );
+                          })}
+                          {items.length > 3 && <p className="text-xs text-neutral-400">+{items.length - 3} más...</p>}
+                        </div>
+                        <div className="flex items-center justify-between pt-2 border-t border-neutral-200">
+                          <span className={`text-lg font-black ${darkMode ? 'text-white' : ''}`}>{formatCurrency(totalEstimado)}</span>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => toggleActivoPedidoRecurrente(pr)} 
+                              className={`p-2 rounded-lg ${pr.activo ? 'text-green-600 hover:bg-green-50' : 'text-neutral-400 hover:bg-neutral-100'}`}
+                              title={pr.activo ? 'Desactivar' : 'Activar'}
+                            >
+                              {pr.activo ? <CheckCircle size={18} /> : <XCircle size={18} />}
+                            </button>
+                            <button 
+                              onClick={() => ejecutarPedidoRecurrente(pr)} 
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                              title="Ejecutar ahora"
+                            >
+                              <Zap size={18} />
+                            </button>
+                            <button 
+                              onClick={() => { setEditingItem(pr); setShowModal('pedido_recurrente'); }} 
+                              className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg"
+                              title="Editar"
+                            >
+                              <Edit2 size={18} />
+                            </button>
+                            <button 
+                              onClick={() => eliminarPedidoRecurrente(pr.id)} 
+                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                              title="Eliminar"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
   const renderProductos = () => {
     // Helper: calcular €/kg desde un producto
     const calcPrecioKg = (producto) => {
