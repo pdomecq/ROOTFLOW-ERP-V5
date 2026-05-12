@@ -11,9 +11,9 @@ import {
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
   Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
-  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator
+  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles
 } from 'lucide-react';
-import { AreaChart, Area, BarChart, Bar, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 
@@ -1581,6 +1581,9 @@ const MainApp = () => {
   const { data: plantillasTurnosData, refetch: refetchPlantillasTurnos } = useRealtime('plantillas_turnos');
   // V31 - Extractos bancarios
   const { data: extractosBancariosData, refetch: refetchExtractosBancarios } = useRealtime('extractos_bancarios');
+  // V34 - Remesas SEPA
+  const { data: remesasSepaData, refetch: refetchRemesasSepa } = useRealtime('remesas_sepa');
+  const { data: remesasSepaItemsData, refetch: refetchRemesasSepaItems } = useRealtime('remesas_sepa_items');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1668,6 +1671,9 @@ const MainApp = () => {
   const plantillasTurnos = plantillasTurnosData || [];
   // V31 - Extractos bancarios
   const extractosBancarios = extractosBancariosData || [];
+  // V34 - Remesas SEPA
+  const remesasSepa = remesasSepaData || [];
+  const remesasSepaItems = remesasSepaItemsData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -3653,7 +3659,16 @@ const MainApp = () => {
     const initialForm = cliente || { 
       nombre: '', tipo: 'restaurante', contacto: '', email: '', telefono: '', 
       direccion: '', codigo_postal: '', ciudad: 'Madrid', zona: 'centro', 
-      descuento: 0, cif: '', recargo_equivalencia: false, tipo_fiscal: 'empresa' 
+      descuento: 0, cif: '', recargo_equivalencia: false, tipo_fiscal: 'empresa',
+      // V34 - SEPA B2B
+      sepa_activo: false,
+      sepa_iban: '',
+      sepa_bic: '',
+      sepa_titular: '',
+      sepa_mandato_ref: '',
+      sepa_mandato_fecha: '',
+      sepa_tipo: 'B2B',
+      plazo_pago_dias: 30,
     };
     
     const [form, setForm, clearFormStorage] = useFormPersistence(
@@ -3833,6 +3848,170 @@ const MainApp = () => {
           <strong>💡 IVA Alimentos:</strong> Los microbrotes tributan al <strong>4% IVA superreducido</strong>. 
           Si el cliente es autónomo minorista, añade el <strong>0,5% de Recargo de Equivalencia</strong>.
         </p>
+
+        {/* ============ DOMICILIACIÓN SEPA B2B ============ */}
+        <div className="border-2 border-emerald-200 rounded-2xl p-4 bg-emerald-50/50 space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-emerald-200 rounded-lg flex-shrink-0">
+              <Banknote size={20} className="text-emerald-700" />
+            </div>
+            <div className="flex-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={form.sepa_activo} 
+                  onChange={e => setForm({...form, sepa_activo: e.target.checked})} 
+                  className="w-5 h-5 rounded" 
+                />
+                <div>
+                  <span className="font-bold text-emerald-900">Domiciliación SEPA B2B activa</span>
+                  <p className="text-xs text-emerald-700">El cliente tiene firmado mandato y se le cobrará automáticamente cada vencimiento</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {form.sepa_activo && (
+            <div className="space-y-3 pl-4 border-l-2 border-emerald-300">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input 
+                  label="IBAN del cliente" 
+                  value={form.sepa_iban || ''} 
+                  onChange={e => setForm({...form, sepa_iban: e.target.value.toUpperCase().replace(/\s/g, '').replace(/(.{4})/g, '$1 ').trim()})} 
+                  placeholder="ES12 3456 7890 1234 5678 9012"
+                />
+                <Input 
+                  label="BIC / SWIFT (opcional)" 
+                  value={form.sepa_bic || ''} 
+                  onChange={e => setForm({...form, sepa_bic: e.target.value.toUpperCase()})} 
+                  placeholder="BBVAESMMXXX"
+                />
+                <Input 
+                  label="Titular de la cuenta" 
+                  value={form.sepa_titular || ''} 
+                  onChange={e => setForm({...form, sepa_titular: e.target.value})} 
+                  placeholder="(igual que razón social si no se indica)"
+                />
+                <Select 
+                  label="Tipo de mandato" 
+                  value={form.sepa_tipo || 'B2B'} 
+                  onChange={e => setForm({...form, sepa_tipo: e.target.value})} 
+                  options={[
+                    { value: 'B2B', label: 'B2B (recomendado, empresa)' },
+                    { value: 'CORE', label: 'CORE (consumidor)' },
+                  ]}
+                />
+                <Input 
+                  label="Referencia del mandato (UMR)" 
+                  value={form.sepa_mandato_ref || ''} 
+                  onChange={e => setForm({...form, sepa_mandato_ref: e.target.value.toUpperCase()})} 
+                  placeholder="ROOTFLOW-{ID}-{FECHA}"
+                />
+                <Input 
+                  label="Fecha de firma del mandato" 
+                  type="date" 
+                  value={form.sepa_mandato_fecha || ''} 
+                  onChange={e => setForm({...form, sepa_mandato_fecha: e.target.value})} 
+                />
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+                <strong>📋 Recuerda:</strong> Para activar SEPA B2B necesitas el formulario de mandato firmado por el cliente (descargable desde el botón "📄 Generar mandato"). El cliente B2B no puede devolver el recibo unilateralmente como sí ocurre con CORE.
+              </div>
+              {form.sepa_iban && (
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  onClick={() => {
+                    // Generar y descargar mandato PDF / HTML imprimible
+                    const ref = form.sepa_mandato_ref || `RTF-${cliente?.id || 'NEW'}-${Date.now().toString().slice(-6)}`;
+                    const w = window.open('', '_blank');
+                    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Mandato SEPA B2B</title><style>
+                      body{font-family:Arial,sans-serif;max-width:800px;margin:30px auto;padding:30px;color:#222}
+                      h1{text-align:center;color:#2D6A4F;margin-bottom:8px}h2{font-size:14px;text-align:center;color:#666;font-weight:normal;margin-bottom:24px;text-transform:uppercase;letter-spacing:2px}
+                      .box{border:2px solid #2D6A4F;padding:16px;margin:14px 0;border-radius:8px}
+                      .field{padding:8px 0;border-bottom:1px dotted #ccc;display:flex;gap:8px}
+                      .field strong{min-width:180px;color:#555;font-size:12px;text-transform:uppercase}
+                      .firma{margin-top:50px;border-top:1px solid #000;padding-top:8px;text-align:center;font-size:11px;color:#666;width:60%}
+                      .info{background:#f0fdf4;padding:14px;border-radius:8px;font-size:11px;color:#444;margin-top:20px}
+                      @media print{body{margin:0;padding:20px}}
+                    </style></head><body>
+                      <h1>Orden de domiciliación de adeudo directo SEPA B2B</h1>
+                      <h2>SEPA B2B Direct Debit Mandate</h2>
+                      <p style="font-size:13px"><strong>Referencia única del mandato (UMR):</strong> ${ref}</p>
+                      <div class="box">
+                        <p style="font-weight:bold;margin-bottom:10px">ACREEDOR</p>
+                        <div class="field"><strong>Nombre:</strong> ROOTFLOW HYDROPONICS SL</div>
+                        <div class="field"><strong>Identificador:</strong> ES45000B27535137 <span style="font-size:10px;color:#888">(pendiente alta)</span></div>
+                        <div class="field"><strong>Dirección:</strong> C. Nueva, 16, P6, 28231 Las Rozas de Madrid</div>
+                        <div class="field"><strong>País:</strong> España</div>
+                      </div>
+                      <div class="box">
+                        <p style="font-weight:bold;margin-bottom:10px">DEUDOR</p>
+                        <div class="field"><strong>Nombre/Razón social:</strong> ${form.nombre || cliente?.nombre || '___________________________'}</div>
+                        <div class="field"><strong>CIF/NIF:</strong> ${form.cif || cliente?.cif || '___________________________'}</div>
+                        <div class="field"><strong>Dirección:</strong> ${(form.direccion || '') + ', ' + (form.codigo_postal || '') + ' ' + (form.ciudad || '')}</div>
+                        <div class="field"><strong>IBAN cuenta:</strong> ${form.sepa_iban || '___________________________'}</div>
+                        <div class="field"><strong>Titular cuenta:</strong> ${form.sepa_titular || form.nombre || cliente?.nombre || '___________________________'}</div>
+                        <div class="field"><strong>BIC/SWIFT:</strong> ${form.sepa_bic || '___________________________'}</div>
+                      </div>
+                      <p style="font-size:12px;line-height:1.6;text-align:justify;margin:20px 0">
+                        Mediante la firma de este formulario de orden de domiciliación, el deudor autoriza a 
+                        <strong>ROOTFLOW HYDROPONICS SL</strong> a enviar instrucciones a la entidad del deudor para 
+                        adeudar su cuenta y a la entidad para efectuar los adeudos en su cuenta siguiendo las 
+                        instrucciones del acreedor. <strong>Como parte de sus derechos, el deudor está legitimado al 
+                        reembolso por su entidad en los términos y condiciones del contrato suscrito con la misma.</strong>
+                      </p>
+                      <p style="font-size:12px;line-height:1.6;background:#fef3c7;padding:10px;border-radius:6px;border-left:3px solid #f59e0b">
+                        <strong>Esquema B2B:</strong> El presente mandato sólo está destinado a operaciones entre empresas. 
+                        El deudor NO tiene derecho a que su entidad le reembolse una vez que se haya realizado el cargo 
+                        en su cuenta, pero puede solicitar a su entidad que no le efectúe el adeudo en la cuenta hasta 
+                        el día en que el pago sea exigible.
+                      </p>
+                      <p style="font-size:12px;margin-top:20px"><strong>Tipo de pago:</strong> Recurrente</p>
+                      <div style="display:flex;gap:30px;margin-top:50px">
+                        <div class="firma">Localidad y fecha</div>
+                        <div class="firma">Firma y sello del deudor</div>
+                      </div>
+                      <div class="info">
+                        <strong>Conserva una copia firmada de este mandato.</strong> Es la prueba legal del consentimiento del cliente para la domiciliación. 
+                        Referencia única (UMR): <strong>${ref}</strong>. Debe coincidir con la enviada en los ficheros XML pain.008.
+                      </div>
+                    </body></html>`);
+                    w.document.close();
+                    setTimeout(() => w.print(), 500);
+                    // Si no se había escrito ref, escribirla automáticamente
+                    if (!form.sepa_mandato_ref) {
+                      setForm({...form, sepa_mandato_ref: ref});
+                    }
+                  }}
+                >
+                  📄 Generar mandato para firmar
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Plazo de pago */}
+        <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="font-semibold text-neutral-900 text-sm">📅 Plazo de pago</p>
+              <p className="text-xs text-neutral-500">Máximo 30 días para productos perecederos (Ley 15/2010 que modifica Ley 3/2004)</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input 
+                type="number" 
+                min="1" 
+                max="30"
+                value={form.plazo_pago_dias || 30} 
+                onChange={e => setForm({...form, plazo_pago_dias: Math.min(30, Math.max(1, parseInt(e.target.value) || 30))})} 
+                className="w-20 px-3 py-1.5 rounded-lg border border-neutral-300 text-center font-bold"
+              />
+              <span className="text-sm font-semibold text-neutral-700">días</span>
+            </div>
+          </div>
+        </div>
         
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
@@ -6802,51 +6981,164 @@ const MainApp = () => {
 
   // ==================== RENDER SECTIONS ====================
   const renderDashboard = () => {
-    const last7Days = [...Array(7)].map((_, i) => { const d = new Date(); d.setDate(d.getDate() - (6 - i)); return d.toISOString().split('T')[0]; });
-    const ventasData = last7Days.map(fecha => ({ fecha: formatDateShort(fecha), ventas: pedidos.filter(p => p.fecha === fecha && p.estado === 'entregado').reduce((sum, p) => sum + (p.total || 0), 0) }));
-    const gastosPorCategoria = Object.entries(categoriasGasto).map(([key, val]) => ({ name: val.label, value: gastosFiltrados.filter(g => g.categoria === key).reduce((sum, g) => sum + (g.importe || 0), 0) })).filter(g => g.value > 0);
-    const beneficio = ventasPeriodo - gastosPeriodo;
-
-    const periodoLabel = dashboardPeriodo === 'mes_actual' ? 'Este mes' : 
-                         dashboardPeriodo === 'año_actual' ? 'Este año' : 
-                         getMesesDisponibles().find(m => m.value === dashboardPeriodo)?.label || 'Periodo';
-
-    // Alertas
-    const hoy = new Date();
-    const pagosVencidos = pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) < hoy);
-    const muestrasPendientes = muestras.filter(m => m.estado === 'pendiente' && new Date(m.fecha_entrega) <= new Date(hoy.getTime() + 2*24*60*60*1000));
-    const presupuestosExpiran = presupuestos.filter(p => {
-      if (p.estado !== 'pendiente' && p.estado !== 'enviado') return false;
-      const fechaValidez = new Date(p.fecha);
-      fechaValidez.setDate(fechaValidez.getDate() + (p.validez || 15));
-      return fechaValidez <= new Date(hoy.getTime() + 3*24*60*60*1000);
+    // ==================== CÁLCULOS BÁSICOS ====================
+    const hoyStr = new Date().toISOString().split('T')[0];
+    const ahora = new Date();
+    
+    // Filtrar pedidos del periodo
+    const pedidosPeriodo = filtrarPorPeriodo(pedidos, 'fecha', dashboardPeriodo);
+    const gastosPeriodo = filtrarPorPeriodo(gastos, 'fecha', dashboardPeriodo);
+    
+    // KPIs principales
+    const ventasMes = pedidosPeriodo.filter(p => p.estado === 'entregado').reduce((s, p) => s + (p.total || 0), 0);
+    const gastosMes = gastosPeriodo.reduce((s, g) => s + (g.importe || 0), 0);
+    const beneficioMes = ventasMes - gastosMes;
+    const margenPct = ventasMes > 0 ? ((beneficioMes / ventasMes) * 100).toFixed(1) : 0;
+    
+    // Comparativa con mes anterior
+    const mesAnteriorDate = new Date();
+    mesAnteriorDate.setMonth(mesAnteriorDate.getMonth() - 1);
+    const mesAnteriorKey = `${mesAnteriorDate.getFullYear()}-${String(mesAnteriorDate.getMonth() + 1).padStart(2, '0')}`;
+    const pedidosMesAnt = filtrarPorPeriodo(pedidos, 'fecha', mesAnteriorKey);
+    const ventasMesAnt = pedidosMesAnt.filter(p => p.estado === 'entregado').reduce((s, p) => s + (p.total || 0), 0);
+    const variacionVentas = ventasMesAnt > 0 ? ((ventasMes - ventasMesAnt) / ventasMesAnt * 100) : (ventasMes > 0 ? 100 : 0);
+    
+    // Operaciones día actual
+    const turnosHoyD = turnos.filter(t => t.fecha === hoyStr && !t.completado);
+    const tareasHoyD = tareas.filter(t => t.fecha_limite === hoyStr && !t.completada);
+    const tareasAtrasD = tareas.filter(t => !t.completada && t.fecha_limite && t.fecha_limite < hoyStr);
+    const entregasHoy = pedidos.filter(p => p.fecha_entrega === hoyStr && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+    const cosechasHoy = lotes.filter(l => l.fecha_cosecha_prevista === hoyStr && l.estado !== 'cosechado');
+    const totalHoy = turnosHoyD.length + tareasHoyD.length + entregasHoy.length + cosechasHoy.length;
+    
+    // Pedidos pendientes y atrasados
+    const pedidosPendientes = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
+    const pedidosAtrasados = pedidos.filter(p => 
+      ['pendiente', 'confirmado', 'preparando'].includes(p.estado) && 
+      p.fecha_entrega && new Date(p.fecha_entrega) < new Date(hoyStr)
+    );
+    const valorPendiente = pedidosPendientes.reduce((s, p) => s + (p.total || 0), 0);
+    
+    // Stock
+    const productosStockBajo = productos.filter(p => 
+      p.estado_inventario === 'empaquetado' && (p.stock || 0) < (p.stock_minimo || 20) && (p.stock || 0) > 0
+    );
+    const productosSinStock = productos.filter(p => 
+      p.estado_inventario === 'empaquetado' && (p.stock || 0) === 0
+    );
+    
+    // Facturas pendientes de cobro
+    const facturasPendientes = facturas.filter(f => f.estado_pago !== 'pagada' && f.estado_pago !== 'pagado');
+    const valorFacturasPendientes = facturasPendientes.reduce((s, f) => s + (f.total || 0), 0);
+    const facturasVencidas = facturasPendientes.filter(f => 
+      f.fecha_vencimiento && new Date(f.fecha_vencimiento) < new Date(hoyStr)
+    );
+    
+    // Gastos pendientes de pago
+    const gastosPendientes = gastos.filter(g => !g.pagado);
+    const valorGastosPendientes = gastosPendientes.reduce((s, g) => s + (g.importe || 0), 0);
+    
+    // === GRÁFICA: Ventas vs Gastos últimos 6 meses ===
+    const ultimos6Meses = [];
+    for (let i = 5; i >= 0; i--) {
+      const fecha = new Date();
+      fecha.setMonth(fecha.getMonth() - i);
+      const key = `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}`;
+      const nombreMes = fecha.toLocaleDateString('es-ES', { month: 'short' });
+      
+      const vM = pedidos.filter(p => p.estado === 'entregado' && p.fecha?.startsWith(key)).reduce((s, p) => s + (p.total || 0), 0);
+      const gM = gastos.filter(g => g.fecha?.startsWith(key)).reduce((s, g) => s + (g.importe || 0), 0);
+      
+      ultimos6Meses.push({ 
+        mes: nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1),
+        ventas: Math.round(vM),
+        gastos: Math.round(gM),
+        beneficio: Math.round(vM - gM),
+      });
+    }
+    
+    // === Top productos vendidos del periodo ===
+    const ventasPorProducto = {};
+    pedidosPeriodo.filter(p => p.estado === 'entregado').forEach(p => {
+      const items = pedidoItems.filter(i => i.pedido_id === p.id);
+      items.forEach(item => {
+        const prod = productos.find(pr => pr.id === item.producto_id);
+        const variedad = prod ? variedades.find(v => v.id === prod.variedad_id) : null;
+        const nombre = variedad ? `${variedad.nombre}${prod.formato_gramos ? ' ' + prod.formato_gramos + 'g' : ''}` : (prod?.nombre || 'Otros');
+        if (!ventasPorProducto[nombre]) ventasPorProducto[nombre] = { cantidad: 0, importe: 0 };
+        ventasPorProducto[nombre].cantidad += item.cantidad || 0;
+        ventasPorProducto[nombre].importe += (item.cantidad || 0) * (item.precio_unitario || 0);
+      });
     });
-    const totalAlertas = pagosVencidos.length + muestrasPendientes.length + presupuestosExpiran.length;
+    const topProductos = Object.entries(ventasPorProducto)
+      .sort((a, b) => b[1].importe - a[1].importe)
+      .slice(0, 5);
+    
+    // === Top clientes del periodo ===
+    const clientesPorImporte = {};
+    pedidosPeriodo.filter(p => p.estado === 'entregado').forEach(p => {
+      if (!p.cliente_id) return;
+      if (!clientesPorImporte[p.cliente_id]) clientesPorImporte[p.cliente_id] = 0;
+      clientesPorImporte[p.cliente_id] += p.total || 0;
+    });
+    const topClientes = Object.entries(clientesPorImporte)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, imp]) => ({ cliente: clientes.find(c => c.id === parseInt(id)), importe: imp }));
+    
+    // === Próximas cosechas (siguientes 7 días) ===
+    const proximasCosechas = lotes
+      .filter(l => 
+        l.estado !== 'cosechado' && 
+        l.fecha_cosecha_prevista &&
+        new Date(l.fecha_cosecha_prevista) >= new Date(hoyStr) &&
+        new Date(l.fecha_cosecha_prevista) <= new Date(new Date().setDate(new Date().getDate() + 7))
+      )
+      .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
+      .slice(0, 5);
+    
+    // === Próximas entregas (siguientes 7 días) ===
+    const proximasEntregas = pedidos
+      .filter(p => 
+        ['pendiente', 'confirmado', 'preparando'].includes(p.estado) &&
+        p.fecha_entrega &&
+        new Date(p.fecha_entrega) >= new Date(hoyStr) &&
+        new Date(p.fecha_entrega) <= new Date(new Date().setDate(new Date().getDate() + 7))
+      )
+      .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
+      .slice(0, 5);
+    
+    // Saludo dinámico
+    const horaNum = ahora.getHours();
+    const saludo = horaNum < 12 ? 'Buenos días' : horaNum < 20 ? 'Buenas tardes' : 'Buenas noches';
+    const nombreUsuario = userProfile?.nombre?.split(' ')[0] || 'equipo';
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        {/* ============ HEADER ============ */}
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-black text-neutral-900">
-              {(() => {
-                const h = new Date().getHours();
-                const saludo = h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches';
-                return `${saludo}, ${userProfile?.nombre?.split(' ')[0] || 'Usuario'} 👋`;
-              })()}
+            <p className="text-sm text-neutral-500 font-medium capitalize">
+              {ahora.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </p>
+            <h1 className="text-3xl md:text-4xl font-black text-neutral-900 mt-1">
+              {saludo}, {nombreUsuario} <span className="inline-block animate-wiggle">👋</span>
             </h1>
-            <p className="text-neutral-500 mt-1 font-medium text-sm md:text-base">
-              {new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            <p className="text-neutral-600 mt-1">
+              {totalHoy === 0 && tareasAtrasD.length === 0
+                ? '🌟 Día tranquilo, sin urgencias hoy'
+                : `Hoy tienes ${totalHoy} cosa${totalHoy !== 1 ? 's' : ''} pendiente${totalHoy !== 1 ? 's' : ''}${tareasAtrasD.length > 0 ? ` · ⚠️ ${tareasAtrasD.length} atrasada${tareasAtrasD.length !== 1 ? 's' : ''}` : ''}`
+              }
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Calendar size={20} className="text-neutral-400 hidden sm:block" />
+          <div className="flex items-center gap-3">
             <select 
               value={dashboardPeriodo} 
               onChange={e => setDashboardPeriodo(e.target.value)}
-              className="px-3 md:px-4 py-2 rounded-xl border border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none text-sm md:text-base w-full sm:w-auto"
+              className="px-4 py-2.5 rounded-xl border-2 border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none text-sm shadow-sm"
             >
-              <option value="mes_actual">Este mes</option>
-              <option value="año_actual">Año {new Date().getFullYear()}</option>
+              <option value="mes_actual">📅 Este mes</option>
+              <option value="año_actual">📊 Año {new Date().getFullYear()}</option>
               <optgroup label="Meses anteriores">
                 {getMesesDisponibles().slice(1).map(m => (
                   <option key={m.value} value={m.value}>{m.label}</option>
@@ -6856,805 +7148,519 @@ const MainApp = () => {
           </div>
         </div>
 
-        {/* === MI DÍA: vista operativa de hoy === */}
-        {(() => {
-          const hoyStrD = new Date().toISOString().split('T')[0];
-          const turnosHoyD = turnos.filter(t => t.fecha === hoyStrD && !t.completado);
-          const tareasHoyD = tareas.filter(t => t.fecha_limite === hoyStrD && !t.completada);
-          const tareasAtrasD = tareas.filter(t => !t.completada && t.fecha_limite && t.fecha_limite < hoyStrD);
-          const entregasHoy = pedidos.filter(p => p.fecha_entrega === hoyStrD && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
-          const cosechasHoy = lotes.filter(l => l.fecha_cosecha_prevista === hoyStrD && l.estado !== 'cosechado');
-
-          const totalHoy = turnosHoyD.length + tareasHoyD.length + entregasHoy.length + cosechasHoy.length;
-
-          if (totalHoy === 0 && tareasAtrasD.length === 0) {
-            return (
-              <Card className="p-6 bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
-                <div className="flex items-center gap-3">
-                  <div className="text-4xl">🌟</div>
-                  <div>
-                    <h2 className="text-xl font-bold text-green-800">¡Día tranquilo!</h2>
-                    <p className="text-sm text-green-700">No hay nada urgente pendiente para hoy. Buen momento para planificar.</p>
-                  </div>
-                </div>
-              </Card>
-            );
-          }
-
-          return (
-            <Card className="p-5 bg-gradient-to-br from-orange-500 to-orange-600 text-white shadow-xl">
-              <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
+        {/* ============ MI DÍA - CTA CARD ============ */}
+        {(totalHoy > 0 || tareasAtrasD.length > 0) && (
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-orange-500 via-orange-600 to-amber-600 text-white shadow-2xl">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl"></div>
+            <div className="absolute bottom-0 left-0 w-48 h-48 bg-white/10 rounded-full -ml-24 -mb-24 blur-3xl"></div>
+            <div className="relative p-6 md:p-7">
+              <div className="flex items-start justify-between mb-5 flex-wrap gap-2">
                 <div>
-                  <h2 className="text-2xl font-black">📋 Mi día</h2>
-                  <p className="text-sm opacity-90">{totalHoy} cosa{totalHoy !== 1 ? 's' : ''} pendiente{totalHoy !== 1 ? 's' : ''} hoy{tareasAtrasD.length > 0 ? ` · ${tareasAtrasD.length} tarea${tareasAtrasD.length !== 1 ? 's' : ''} atrasada${tareasAtrasD.length !== 1 ? 's' : ''}` : ''}</p>
+                  <div className="text-xs font-bold uppercase tracking-widest opacity-80 mb-1">📋 Mi día</div>
+                  <h2 className="text-2xl md:text-3xl font-black">{totalHoy + tareasAtrasD.length} {totalHoy + tareasAtrasD.length === 1 ? 'cosa' : 'cosas'} para gestionar</h2>
                 </div>
-                <button onClick={() => setActiveSection('calendario')} className="text-xs px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg font-semibold">
-                  Ver calendario →
+                <button onClick={() => setActiveSection('calendario')} className="px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-xl text-sm font-semibold flex items-center gap-2 transition-all hover:scale-105">
+                  Ver calendario <ArrowUpRight size={16} />
                 </button>
               </div>
               
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div onClick={() => setActiveSection('calendario')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
-                  <div className="flex items-center gap-2 mb-1">
-                    <CalendarClock size={18} />
-                    <span className="text-xs uppercase opacity-90">Turnos hoy</span>
+                <button 
+                  onClick={() => setActiveSection('calendario')}
+                  className={`text-left bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 transition-all hover:scale-105 ${turnosHoyD.length === 0 ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <CalendarClock size={20} />
+                    <span className="text-3xl font-black">{turnosHoyD.length}</span>
                   </div>
-                  <p className="text-3xl font-black">{turnosHoyD.length}</p>
-                  {turnosHoyD.length > 0 && <p className="text-xs opacity-80 truncate">{turnosHoyD.slice(0,2).map(t => socios.find(s => s.id === t.socio_id)?.nombre?.split(' ')[0]).join(', ')}</p>}
-                </div>
+                  <p className="text-xs uppercase opacity-90 font-bold tracking-wide">Turnos hoy</p>
+                  {turnosHoyD.length > 0 && (
+                    <p className="text-[11px] opacity-80 mt-1 truncate">
+                      {turnosHoyD.slice(0,2).map(t => socios.find(s => s.id === t.socio_id)?.nombre?.split(' ')[0]).filter(Boolean).join(', ')}
+                    </p>
+                  )}
+                </button>
                 
-                <div onClick={() => setActiveSection('calendario')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
-                  <div className="flex items-center gap-2 mb-1">
-                    <ClipboardList size={18} />
-                    <span className="text-xs uppercase opacity-90">Tareas hoy</span>
+                <button 
+                  onClick={() => setActiveSection('calendario')}
+                  className={`text-left bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 transition-all hover:scale-105 relative ${tareasHoyD.length === 0 && tareasAtrasD.length === 0 ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <ClipboardList size={20} />
+                    <span className="text-3xl font-black">{tareasHoyD.length}</span>
                   </div>
-                  <p className="text-3xl font-black">{tareasHoyD.length}</p>
-                  {tareasAtrasD.length > 0 && <p className="text-xs bg-red-500 inline-block px-1.5 rounded">+{tareasAtrasD.length} atrasadas</p>}
-                </div>
+                  <p className="text-xs uppercase opacity-90 font-bold tracking-wide">Tareas hoy</p>
+                  {tareasAtrasD.length > 0 && (
+                    <p className="text-[10px] bg-red-500/90 inline-block px-2 py-0.5 rounded-full mt-1 font-bold">+{tareasAtrasD.length} atrasadas</p>
+                  )}
+                </button>
                 
-                <div onClick={() => setActiveSection('pedidos')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Truck size={18} />
-                    <span className="text-xs uppercase opacity-90">Entregas hoy</span>
+                <button 
+                  onClick={() => setActiveSection('pedidos')}
+                  className={`text-left bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 transition-all hover:scale-105 ${entregasHoy.length === 0 ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <Truck size={20} />
+                    <span className="text-3xl font-black">{entregasHoy.length}</span>
                   </div>
-                  <p className="text-3xl font-black">{entregasHoy.length}</p>
-                  {entregasHoy.length > 0 && <p className="text-xs opacity-80 truncate">{formatCurrency(entregasHoy.reduce((s, p) => s + (p.total || 0), 0))}</p>}
-                </div>
+                  <p className="text-xs uppercase opacity-90 font-bold tracking-wide">Entregas hoy</p>
+                  {entregasHoy.length > 0 && (
+                    <p className="text-[11px] opacity-80 mt-1 font-bold">{formatCurrency(entregasHoy.reduce((s, p) => s + (p.total || 0), 0))}</p>
+                  )}
+                </button>
                 
-                <div onClick={() => setActiveSection('produccion')} className="bg-white/10 hover:bg-white/20 rounded-xl p-3 cursor-pointer backdrop-blur">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Leaf size={18} />
-                    <span className="text-xs uppercase opacity-90">Cosechas hoy</span>
+                <button 
+                  onClick={() => setActiveSection('produccion')}
+                  className={`text-left bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 transition-all hover:scale-105 ${cosechasHoy.length === 0 ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <Leaf size={20} />
+                    <span className="text-3xl font-black">{cosechasHoy.length}</span>
                   </div>
-                  <p className="text-3xl font-black">{cosechasHoy.length}</p>
-                  {cosechasHoy.length > 0 && <p className="text-xs opacity-80 truncate">{cosechasHoy.reduce((s, l) => s + (l.bandejas || 0), 0)} bandejas</p>}
-                </div>
-              </div>
-            </Card>
-          );
-        })()}
-
-        {/* Alertas importantes */}
-        {totalAlertas > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {pagosVencidos.length > 0 && (
-              <Card className="p-4 bg-red-50 border-red-200 cursor-pointer hover:bg-red-100" onClick={() => setActiveSection('proveedores')}>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-red-100 rounded-lg"><AlertCircle size={20} className="text-red-600" /></div>
-                  <div>
-                    <p className="font-bold text-red-800">⚠️ {pagosVencidos.length} pagos vencidos</p>
-                    <p className="text-sm text-red-600">{formatCurrency(pagosVencidos.reduce((s, p) => s + p.importe, 0))} pendiente</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-            {muestrasPendientes.length > 0 && (
-              <Card className="p-4 bg-purple-50 border-purple-200 cursor-pointer hover:bg-purple-100" onClick={() => setActiveSection('muestras')}>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-purple-100 rounded-lg"><Gift size={20} className="text-purple-600" /></div>
-                  <div>
-                    <p className="font-bold text-purple-800">🎁 {muestrasPendientes.length} muestras pendientes</p>
-                    <p className="text-sm text-purple-600">Entregar pronto</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-            {presupuestosExpiran.length > 0 && (
-              <Card className="p-4 bg-amber-50 border-amber-200 cursor-pointer hover:bg-amber-100" onClick={() => setActiveSection('presupuestos')}>
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-amber-100 rounded-lg"><ClipboardList size={20} className="text-amber-600" /></div>
-                  <div>
-                    <p className="font-bold text-amber-800">⏰ {presupuestosExpiran.length} presupuestos expiran</p>
-                    <p className="text-sm text-amber-600">Hacer seguimiento</p>
-                  </div>
-                </div>
-              </Card>
-            )}
-          </div>
-        )}
-        
-        <Card className="p-3 md:p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200">
-          <p className="text-xs md:text-sm font-medium text-orange-700">📊 Mostrando datos de: <span className="font-bold">{periodoLabel}</span></p>
-        </Card>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 md:gap-4">
-          <StatCard icon={Euro} label="Ventas" value={formatCurrency(ventasPeriodo)} color="bg-green-100 text-green-600" />
-          <StatCard icon={Wallet} label="Gastos" value={formatCurrency(gastosPeriodo)} color="bg-red-100 text-red-600" />
-          <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(beneficio)} color={beneficio >= 0 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"} />
-          <StatCard icon={ShoppingCart} label="Pedidos" value={pedidosPendientes} color="bg-amber-100 text-amber-600" onClick={() => setActiveSection('pedidos')} />
-          <StatCard icon={Target} label="Leads" value={leadsNuevos} color="bg-purple-100 text-purple-600" onClick={() => setActiveSection('leads')} />
-          <StatCard icon={Users} label="Clientes" value={clientes.length} color="bg-blue-100 text-blue-600" onClick={() => setActiveSection('clientes')} />
-          <StatCard icon={AlertCircle} label="Stock Bajo" value={stockBajo} color="bg-red-100 text-red-600" onClick={() => setActiveSection('productos')} />
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Ventas 7 Días</h3><div className="h-64"><ResponsiveContainer><AreaChart data={ventasData}><defs><linearGradient id="colorVentas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#F97316" stopOpacity={0.3}/><stop offset="95%" stopColor="#F97316" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" /><XAxis dataKey="fecha" tick={{ fontSize: 12 }} /><YAxis tick={{ fontSize: 12 }} /><Tooltip formatter={(v) => formatCurrency(v)} /><Area type="monotone" dataKey="ventas" stroke="#F97316" strokeWidth={3} fill="url(#colorVentas)" /></AreaChart></ResponsiveContainer></div></Card>
-          <Card className="p-5"><h3 className="text-lg font-bold text-neutral-900 mb-4">Gastos por Categoría ({periodoLabel})</h3><div className="h-64">{gastosPorCategoria.length > 0 ? <ResponsiveContainer><RechartsPie><Pie data={gastosPorCategoria} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false}>{gastosPorCategoria.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}</Pie><Tooltip formatter={(v) => formatCurrency(v)} /></RechartsPie></ResponsiveContainer> : <div className="h-full flex items-center justify-center text-neutral-400">Sin gastos en este periodo</div>}</div></Card>
-        </div>
-      </div>
-    );
-  };
-
-  const renderClientes = () => {
-    // Aplicar filtros
-    const clientesFiltrados = aplicarFiltros(
-      clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase())),
-      filtrosClientes,
-      {
-        tipo: c => c.tipo,
-        zona: c => c.zona,
-        descuento: c => c.descuento,
-        codigo_postal: c => c.codigo_postal,
-      }
-    );
-    const filtered = clientesFiltrados;
-    const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
-    
-    const tipoOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
-    const zonaOptions = Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }));
-    
-    // Limpiar todos los filtros
-    const limpiarFiltrosClientes = () => setFiltrosClientes({});
-    const hayFiltrosActivos = Object.values(filtrosClientes).some(v => v && v !== '');
-
-    // Vista Grid (tarjetas)
-    const renderGridView = () => (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map(cliente => {
-          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
-          const Icon = config.icon;
-          return (
-            <Card key={cliente.id} className="p-5 hover:shadow-md transition-all">
-              <div className="flex items-start justify-between mb-3">
-                <div className={`p-2.5 rounded-xl ${config.color} border`}><Icon size={20} /></div>
-                <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
-              </div>
-              <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
-              <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
-              {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
-              <div className="flex items-center justify-between pt-3 border-t">
-                <Badge variant="orange">{cliente.descuento}% dto</Badge>
-                <div className="flex gap-1">
-                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-    );
-
-    // Vista Lista
-    const renderListView = () => (
-      <div className="space-y-3">
-        {filtered.map(cliente => {
-          const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
-          const Icon = config.icon;
-          return (
-            <Card key={cliente.id} className="p-4 hover:shadow-md transition-all">
-              <div className="flex items-center gap-4">
-                <div className={`p-3 rounded-xl ${config.color} border flex-shrink-0`}><Icon size={24} /></div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <h3 className="font-bold text-neutral-900">{cliente.nombre}</h3>
-                    <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
-                    <Badge variant="orange">{cliente.descuento}% dto</Badge>
-                  </div>
-                  <div className="flex items-center gap-4 text-sm text-neutral-500 flex-wrap">
-                    {cliente.contacto && <span>{cliente.contacto}</span>}
-                    {cliente.email && <span className="flex items-center gap-1"><Mail size={12} />{cliente.email}</span>}
-                    {cliente.telefono && <span className="flex items-center gap-1"><Phone size={12} />{cliente.telefono}</span>}
-                    {cliente.codigo_postal && <span className="flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal}</span>}
-                  </div>
-                </div>
-                <div className="flex gap-1 flex-shrink-0">
-                  <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={18} /></button>
-                  <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-    );
-
-    // Vista Tabla con filtros
-    const renderTableView = () => (
-      <Card className="overflow-hidden">
-        {hayFiltrosActivos && (
-          <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
-            <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
-            <button onClick={limpiarFiltrosClientes} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
-          </div>
-        )}
-        {selectedClientes.length > 0 && (
-          <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
-            <span className="font-semibold text-blue-700">{selectedClientes.length} cliente(s) seleccionado(s)</span>
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setSelectedClientes([])}>Deseleccionar</Button>
-              <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('clientes', selectedClientes, refetchClientes, setSelectedClientes)}>
-                <Trash2 size={14} /> Eliminar
-              </Button>
-            </div>
-          </div>
-        )}
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[600px]">
-          <thead className="bg-neutral-900 text-white">
-            <tr>
-              <th className="px-3 py-3 text-left w-10">
-                <input type="checkbox" checked={filtered.length > 0 && selectedClientes.length === filtered.length} onChange={e => setSelectedClientes(e.target.checked ? filtered.map(c => c.id) : [])} className="w-4 h-4 rounded" />
-              </th>
-              <FilterableHeader label="Cliente" field="nombre" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
-              <FilterableHeader label="Tipo" field="tipo" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={tipoOptions} />
-              <FilterableHeader label="Zona" field="zona" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="select" options={zonaOptions} />
-              <FilterableHeader label="CP" field="codigo_postal" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="text" />
-              <FilterableHeader label="Dto" field="descuento" filters={filtrosClientes} onFilter={updateFilter(setFiltrosClientes)} type="number" />
-              <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(cliente => {
-              const config = tipoClienteConfig[cliente.tipo] || tipoClienteConfig.restaurante;
-              const isSelected = selectedClientes.includes(cliente.id);
-              return (
-                <tr key={cliente.id} className={`border-b border-neutral-100 hover:bg-neutral-50 ${isSelected ? 'bg-blue-50' : ''}`}>
-                  <td className="px-3 py-3">
-                    <input type="checkbox" checked={isSelected} onChange={e => setSelectedClientes(e.target.checked ? [...selectedClientes, cliente.id] : selectedClientes.filter(id => id !== cliente.id))} className="w-4 h-4 rounded" />
-                  </td>
-                  <td className="px-3 md:px-5 py-3 md:py-4">
-                    <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
-                    <p className="text-xs text-neutral-400">{cliente.cif || cliente.email}</p>
-                  </td>
-                  <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
-                  <td className="px-5 py-4"><Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label || '-'}</Badge></td>
-                  <td className="px-5 py-4 text-sm">{cliente.codigo_postal || '-'}</td>
-                  <td className="px-5 py-4 font-bold text-orange-600">{cliente.descuento}%</td>
-                  <td className="px-5 py-4">
-                    <div className="flex justify-end gap-1">
-                      <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                      <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        </div>
-      </Card>
-    );
-
-    // Vista Mapa
-    if (viewClientes === 'map') return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
-            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
-          </div>
-        </div>
-        <MapView items={clientes} type="clientes" />
-      </div>
-    );
-
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
-            <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
-          </div>
-        </div>
-        <Card className="p-4"><div className="relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar cliente..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div></Card>
-        
-        {viewClientes === 'grid' && renderGridView()}
-        {viewClientes === 'list' && renderListView()}
-        {viewClientes === 'table' && renderTableView()}
-        
-        {filtered.length === 0 && <EmptyState icon={Users} title="No hay clientes" description="Añade tu primer cliente" action={<Button onClick={() => setShowModal('cliente')}><Plus size={16} />Nuevo</Button>} />}
-      </div>
-    );
-  };
-
-  const renderLeads = () => {
-    // Aplicar filtros
-    let filtered = leads.filter(l => { 
-      const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); 
-      const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; 
-      return matchesSearch && matchesFilter; 
-    });
-    
-    // Aplicar filtros de columna
-    filtered = aplicarFiltros(filtered, filtrosLeads, {
-      nombre: l => l.nombre,
-      tipo: l => l.tipo,
-      estado: l => l.estado,
-      origen: l => l.origen,
-      codigo_postal: l => l.codigo_postal,
-      valor_estimado: l => l.valor_estimado,
-    });
-    
-    const hayFiltrosActivos = Object.values(filtrosLeads).some(v => v && v !== '');
-    
-    const exportColumns = [{ header: 'Nombre', accessor: l => l.nombre },{ header: 'Empresa', accessor: l => l.empresa },{ header: 'Tipo', accessor: l => tipoClienteConfig[l.tipo]?.label },{ header: 'CP', accessor: l => l.codigo_postal },{ header: 'Estado', accessor: l => estadoLeadConfig[l.estado]?.label },{ header: 'Origen', accessor: l => origenLeadConfig[l.origen]?.label },{ header: 'Valor', accessor: l => l.valor_estimado },{ header: 'Email', accessor: l => l.email },{ header: 'Teléfono', accessor: l => l.telefono }];
-
-    const estadoOptions = Object.entries(estadoLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
-    const origenOptions = Object.entries(origenLeadConfig).map(([k, v]) => ({ value: k, label: v.label }));
-    const tipoLeadOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
-
-    const handleConvertToClient = async (lead) => {
-      if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
-      const clienteData = { nombre: lead.nombre || lead.empresa, tipo: ['mercamadrid', 'hotel', 'restaurante'].includes(lead.tipo) ? lead.tipo : 'restaurante', contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
-      const { data: newCliente } = await supabase.from('clientes').insert(clienteData).select().single();
-      if (newCliente) { 
-        await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); 
-        refetchClientes();
-        refetchLeads();
-        alert('✅ Lead convertido a cliente'); 
-      }
-    };
-
-    if (viewLeads === 'map') return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
-          <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
-        </div>
-        <MapView items={leads} type="leads" />
-      </div>
-    );
-
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
-          <div className="flex items-center gap-3">
-            <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
-            <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={e => { if (e.target.files[0]) handleImportLeads(e.target.files[0]); e.target.value = ''; }} />
-            <Button variant="secondary" onClick={() => fileInputRef.current?.click()}><Upload size={18} /> Importar Excel</Button>
-            <Button onClick={() => { setEditingItem(null); setShowModal('lead'); }}><Plus size={20} /> Nuevo Lead</Button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-          {Object.entries(estadoLeadConfig).map(([key, config]) => {
-            const count = leads.filter(l => l.estado === key).length;
-            const Icon = config.icon;
-            return <Card key={key} className={`p-4 cursor-pointer hover:shadow-md ${filterEstado === key ? 'ring-2 ring-orange-500' : ''}`} onClick={() => setFilterEstado(filterEstado === key ? 'todos' : key)}>
-              <div className="flex items-center justify-between">
-                <div className={`p-2 rounded-lg ${config.color}`}><Icon size={16} /></div>
-                <span className="text-2xl font-black">{count}</span>
-              </div>
-              <p className="text-sm text-neutral-600 mt-2 font-medium">{config.label}</p>
-            </Card>;
-          })}
-        </div>
-
-        <Card className="p-4 flex items-center gap-4">
-          <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
-          {filterEstado !== 'todos' && <Button variant="ghost" size="sm" onClick={() => setFilterEstado('todos')}><X size={16} /> Limpiar filtro</Button>}
-        </Card>
-
-        <Card className="overflow-hidden">
-          {hayFiltrosActivos && (
-            <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
-              <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
-              <button onClick={() => setFiltrosLeads({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
-            </div>
-          )}
-          <table className="w-full">
-            <thead className="bg-neutral-900 text-white">
-              <tr>
-                <FilterableHeader label="Lead" field="nombre" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
-                <FilterableHeader label="Tipo" field="tipo" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={tipoLeadOptions} />
-                <FilterableHeader label="Contacto" field="email" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
-                <FilterableHeader label="CP" field="codigo_postal" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="text" />
-                <FilterableHeader label="Estado" field="estado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={estadoOptions} />
-                <FilterableHeader label="Origen" field="origen" filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="select" options={origenOptions} />
-                <FilterableHeader label="Valor" field="valor_estimado" sortConfig={sortLeads} onSort={setSortLeads} filters={filtrosLeads} onFilter={updateFilter(setFiltrosLeads)} type="number" />
-                <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortData(filtered, sortLeads).map(lead => {
-                const tipoConfig = tipoClienteConfig[lead.tipo] || tipoClienteConfig.otro;
-                const estadoConf = estadoLeadConfig[lead.estado];
-                const origenConf = origenLeadConfig[lead.origen] || origenLeadConfig.otro;
-                const Icon = estadoConf?.icon || Star;
-                return (
-                  <tr key={lead.id} className="border-b border-neutral-100 hover:bg-neutral-50">
-                    <td className="px-5 py-4"><p className="font-bold text-neutral-900">{lead.nombre}</p><p className="text-xs text-neutral-400">{lead.empresa}</p></td>
-                    <td className="px-5 py-4"><Badge className={tipoConfig.color}>{tipoConfig.label}</Badge></td>
-                    <td className="px-5 py-4"><p className="text-sm">{lead.email}</p><p className="text-xs text-neutral-400">{lead.telefono}</p></td>
-                    <td className="px-5 py-4 text-sm">{lead.codigo_postal || '-'}</td>
-                    <td className="px-5 py-4"><Badge className={estadoConf?.color}><Icon size={12} />{estadoConf?.label}</Badge></td>
-                    <td className="px-5 py-4"><Badge className={origenConf.color}>{origenConf.label}</Badge></td>
-                    <td className="px-5 py-4 font-bold">{formatCurrency(lead.valor_estimado)}</td>
-                    <td className="px-5 py-4">
-                      <div className="flex justify-end gap-1">
-                        {lead.estado !== 'ganado' && lead.estado !== 'perdido' && <button onClick={() => handleConvertToClient(lead)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Convertir a cliente"><UserPlus size={16} /></button>}
-                        <button onClick={() => { setEditingItem(lead); setShowModal('lead'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                        <button onClick={() => handleDelete('leads', lead.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {filtered.length === 0 && <EmptyState icon={Target} title="No hay leads" description="Añade o importa leads" action={<Button onClick={() => setShowModal('lead')}><Plus size={16} />Nuevo</Button>} />}
-        </Card>
-      </div>
-    );
-  };
-
-  // Estado para pestaña de pedidos
-  const [pedidosTab, setPedidosTab] = useState('lista');
-
-  const renderPedidos = () => {
-    // Aplicar filtros
-    let filtered = pedidos.filter(p => { 
-      const cliente = clientes.find(c => c.id === p.cliente_id); 
-      const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); 
-      const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; 
-      return matchesSearch && matchesFilter; 
-    });
-    
-    // Aplicar filtros de columna
-    filtered = aplicarFiltros(filtered, filtrosPedidos, {
-      cliente_id: p => clientes.find(c => c.id === p.cliente_id)?.nombre?.toLowerCase(),
-      estado: p => p.estado,
-      total: p => p.total,
-    });
-    
-    const hayFiltrosActivos = Object.values(filtrosPedidos).some(v => v && v !== '');
-    const estadoOptions = Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }));
-    const clienteOptions = clientes.map(c => ({ value: c.nombre?.toLowerCase(), label: c.nombre }));
-    
-    const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
-    
-    const frecuenciaConfig = {
-      semanal: { label: 'Semanal', color: 'bg-blue-100 text-blue-700' },
-      quincenal: { label: 'Quincenal', color: 'bg-purple-100 text-purple-700' },
-      mensual: { label: 'Mensual', color: 'bg-green-100 text-green-700' }
-    };
-    
-    const diasSemana = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
-
-    // Ejecutar pedido recurrente (crear pedido normal a partir del recurrente)
-    const ejecutarPedidoRecurrente = async (pr) => {
-      const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
-      if (items.length === 0) {
-        alert('Este pedido recurrente no tiene productos');
-        return;
-      }
-      
-      const cliente = clientes.find(c => c.id === pr.cliente_id);
-      let total = 0;
-      const itemsData = items.map(item => {
-        const prod = productos.find(p => p.id === item.producto_id);
-        const subtotal = (prod?.precio || 0) * item.cantidad;
-        total += subtotal;
-        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: prod?.precio || 0, subtotal };
-      });
-
-      // Aplicar descuento del cliente
-      const descuento = cliente?.descuento || 0;
-      total = total * (1 - descuento / 100);
-
-      // Crear pedido
-      const hoy = new Date().toISOString().split('T')[0];
-      const { data: newPedido, error: pedidoError } = await supabase.from('pedidos').insert({
-        cliente_id: pr.cliente_id,
-        fecha: hoy,
-        fecha_entrega: hoy,
-        estado: 'pendiente',
-        notas: `Generado desde pedido recurrente: ${pr.nombre}`,
-        total
-      }).select().single();
-
-      if (pedidoError) {
-        alert('Error al crear pedido: ' + pedidoError.message);
-        return;
-      }
-
-      // Insertar items
-      for (const item of itemsData) {
-        await supabase.from('pedido_items').insert({ pedido_id: newPedido.id, ...item });
-      }
-
-      // Actualizar fecha de última ejecución
-      await supabase.from('pedidos_recurrentes').update({ 
-        ultima_ejecucion: hoy,
-        proxima_ejecucion: calcularProximaEjecucion(pr.frecuencia, pr.dia_semana)
-      }).eq('id', pr.id);
-
-      refetchPedidos();
-      refetchPedidoItems();
-      refetchPedidosRecurrentes();
-      alert(`✅ Pedido #${newPedido.id} creado para ${cliente?.nombre}`);
-    };
-
-    const calcularProximaEjecucion = (frecuencia, diaSemana) => {
-      const hoy = new Date();
-      let proxima = new Date(hoy);
-      
-      if (frecuencia === 'semanal') {
-        proxima.setDate(hoy.getDate() + 7);
-      } else if (frecuencia === 'quincenal') {
-        proxima.setDate(hoy.getDate() + 14);
-      } else {
-        proxima.setMonth(hoy.getMonth() + 1);
-      }
-      
-      // Ajustar al día de la semana
-      while (proxima.getDay() !== diaSemana) {
-        proxima.setDate(proxima.getDate() + 1);
-      }
-      
-      return proxima.toISOString().split('T')[0];
-    };
-
-    const toggleActivoPedidoRecurrente = async (pr) => {
-      await supabase.from('pedidos_recurrentes').update({ activo: !pr.activo }).eq('id', pr.id);
-      refetchPedidosRecurrentes();
-    };
-
-    const eliminarPedidoRecurrente = async (id) => {
-      if (window.confirm('¿Eliminar este pedido recurrente?')) {
-        await supabase.from('pedidos_recurrentes_items').delete().eq('pedido_recurrente_id', id);
-        await supabase.from('pedidos_recurrentes').delete().eq('id', id);
-        refetchPedidosRecurrentes();
-        refetchPedidosRecurrentesItems();
-      }
-    };
-
-    return (
-      <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Pedidos</h1>
-            <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{pedidos.length} pedidos • {pedidosRecurrentes.filter(p => p.activo).length} recurrentes activos</p>
-          </div>
-          <div className="flex items-center gap-2 md:gap-3">
-            <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
-            {pedidosTab === 'lista' ? (
-              <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo Pedido</span></Button>
-            ) : (
-              <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} /><span className="hidden sm:inline">Nuevo Recurrente</span></Button>
-            )}
-          </div>
-        </div>
-
-        {/* Pestañas */}
-        <div className="flex gap-2">
-          <button 
-            onClick={() => setPedidosTab('lista')} 
-            className={`px-4 py-2 rounded-xl font-semibold transition-colors ${pedidosTab === 'lista' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
-          >
-            <ShoppingCart size={18} className="inline mr-2" />Pedidos
-          </button>
-          <button 
-            onClick={() => setPedidosTab('recurrentes')} 
-            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${pedidosTab === 'recurrentes' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
-          >
-            <Repeat size={18} />Recurrentes
-            {pedidosRecurrentes.filter(p => p.activo).length > 0 && (
-              <span className={`text-xs px-2 py-0.5 rounded-full ${pedidosTab === 'recurrentes' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
-                {pedidosRecurrentes.filter(p => p.activo).length}
-              </span>
-            )}
-          </button>
-        </div>
-
-        {pedidosTab === 'lista' ? (
-          <>
-            <Card className={`p-4 flex items-center gap-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
-              <div className="flex-1 relative">
-                <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-                <input type="text" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className={`w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`} />
-              </div>
-              <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)} className={`px-4 py-2.5 rounded-xl border font-medium ${darkMode ? 'bg-neutral-700 border-neutral-600 text-white' : ''}`}>
-                <option value="todos">Todos</option>
-                {Object.entries(estadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
-            </Card>
-            <Card className={`overflow-hidden ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
-              <div className="overflow-x-auto">
-              {hayFiltrosActivos && (
-                <div className="p-3 bg-orange-50 border-b border-orange-200 flex items-center justify-between">
-                  <span className="text-sm text-orange-700">🔍 Filtros activos - {filtered.length} resultados</span>
-                  <button onClick={() => setFiltrosPedidos({})} className="text-xs text-orange-600 hover:text-orange-800 font-medium">Limpiar filtros</button>
-                </div>
-              )}
-              {selectedPedidos.length > 0 && (
-                <div className="p-3 bg-blue-50 border-b border-blue-200 flex items-center justify-between">
-                  <span className="font-semibold text-blue-700">{selectedPedidos.length} pedido(s) seleccionado(s)</span>
-                  <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" onClick={() => setSelectedPedidos([])}>Deseleccionar</Button>
-                    <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('pedidos', selectedPedidos, refetchPedidos, setSelectedPedidos)}>
-                      <Trash2 size={14} /> Eliminar
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {/* Botón configurar columnas */}
-              <div className="p-2 border-b flex justify-end">
-                <button onClick={() => setShowColumnConfig('pedidos')} className="text-xs text-neutral-500 hover:text-orange-600 flex items-center gap-1">
-                  <Settings size={14} /> Columnas
+                  <p className="text-xs uppercase opacity-90 font-bold tracking-wide">Cosechas hoy</p>
+                  {cosechasHoy.length > 0 && (
+                    <p className="text-[11px] opacity-80 mt-1">{cosechasHoy.reduce((s, l) => s + (l.bandejas || 0), 0)} bandejas</p>
+                  )}
                 </button>
               </div>
-              <table className="w-full min-w-[600px]">
-                <thead className="bg-neutral-900 text-white"><tr>
-                  <th className="px-3 py-3 text-left w-10">
-                    <input type="checkbox" checked={filtered.length > 0 && selectedPedidos.length === filtered.length} onChange={e => setSelectedPedidos(e.target.checked ? filtered.map(p => p.id) : [])} className="w-4 h-4 rounded" />
-                  </th>
-                  {(columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden).map(col => (
-                    <th key={col.id} className="text-left px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">{col.label}</th>
-                  ))}
-                  <th className="text-right px-3 md:px-5 py-3 md:py-4 text-xs md:text-sm font-bold">Acc.</th>
-                </tr></thead>
-                <tbody>
-                  {filtered.map(pedido => {
-                    const cliente = clientes.find(c => c.id === pedido.cliente_id);
-                    const config = estadoConfig[pedido.estado];
-                    const Icon = config?.icon || Clock;
-                    const isSelected = selectedPedidos.includes(pedido.id);
-                    const colsVisibles = (columnasVisibles.pedidos || columnasDisponibles.pedidos).filter(c => c.visible).sort((a, b) => a.orden - b.orden);
-                    
-                    return (
-                      <tr key={pedido.id} className={`border-b ${darkMode ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-100 hover:bg-neutral-50'} ${isSelected ? 'bg-blue-50' : ''}`}>
-                        <td className="px-3 py-3">
-                          <input type="checkbox" checked={isSelected} onChange={e => setSelectedPedidos(e.target.checked ? [...selectedPedidos, pedido.id] : selectedPedidos.filter(id => id !== pedido.id))} className="w-4 h-4 rounded" />
-                        </td>
-                        {colsVisibles.map(col => {
-                          switch(col.id) {
-                            case 'id': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>;
-                            case 'cliente': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>;
-                            case 'concepto': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{pedido.concepto ? <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">{pedido.concepto}</span> : <span className="text-neutral-300">-</span>}</td>;
-                            case 'fecha_entrega': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>;
-                            case 'horario': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-xs">{pedido.horario_entrega ? <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg font-medium">{pedido.horario_entrega}</span> : '-'}</td>;
-                            case 'total': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-bold text-sm ${darkMode ? 'text-white' : ''}`}>{formatCurrency(pedido.total)}</td>;
-                            case 'estado': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><Badge className={config?.color}><Icon size={12} /><span className="hidden sm:inline">{config?.label}</span></Badge></td>;
-                            default: return null;
-                          }
-                        })}
-                        <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ============ KPIs FINANCIEROS PRINCIPALES ============ */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Ventas */}
+          <Card className="p-5 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveSection('pedidos')}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="p-2.5 bg-emerald-100 rounded-xl">
+                <TrendingUp size={22} className="text-emerald-600" />
               </div>
-              {filtered.length === 0 && <EmptyState icon={ShoppingCart} title="No hay pedidos" description="Crea tu primer pedido" action={<Button onClick={() => setShowModal('pedido')}><Plus size={16} />Nuevo</Button>} />}
-            </Card>
+              {variacionVentas !== 0 && (
+                <span className={`text-xs font-bold px-2 py-1 rounded-full ${variacionVentas > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  {variacionVentas > 0 ? '↑' : '↓'} {Math.abs(variacionVentas).toFixed(0)}%
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Ventas</p>
+            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(ventasMes)}</p>
+            <p className="text-xs text-neutral-400 mt-1">
+              {pedidosPeriodo.filter(p => p.estado === 'entregado').length} pedidos entregados
+            </p>
+          </Card>
+          
+          {/* Gastos */}
+          <Card className="p-5 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveSection('gastos')}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="p-2.5 bg-red-100 rounded-xl">
+                <TrendingDown size={22} className="text-red-600" />
+              </div>
+              {ventasMes > 0 && (
+                <span className="text-xs font-bold px-2 py-1 rounded-full bg-neutral-100 text-neutral-600">
+                  {((gastosMes / ventasMes) * 100).toFixed(0)}% s/ventas
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Gastos</p>
+            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(gastosMes)}</p>
+            <p className="text-xs text-neutral-400 mt-1">
+              {gastosPeriodo.length} facturas de gasto
+            </p>
+          </Card>
+          
+          {/* Beneficio */}
+          <Card className={`p-5 hover:shadow-lg transition-shadow cursor-pointer ${beneficioMes < 0 ? 'border-red-200 bg-red-50/30' : ''}`}>
+            <div className="flex items-center justify-between mb-3">
+              <div className={`p-2.5 rounded-xl ${beneficioMes >= 0 ? 'bg-blue-100' : 'bg-red-100'}`}>
+                <Banknote size={22} className={beneficioMes >= 0 ? 'text-blue-600' : 'text-red-600'} />
+              </div>
+              <span className={`text-xs font-bold px-2 py-1 rounded-full ${beneficioMes >= 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
+                {margenPct}% margen
+              </span>
+            </div>
+            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Beneficio</p>
+            <p className={`text-2xl md:text-3xl font-black mt-1 ${beneficioMes >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+              {formatCurrency(beneficioMes)}
+            </p>
+            <p className="text-xs text-neutral-400 mt-1">
+              Ventas − Gastos
+            </p>
+          </Card>
+          
+          {/* Pendientes de cobro */}
+          <Card className={`p-5 hover:shadow-lg transition-shadow cursor-pointer ${facturasVencidas.length > 0 ? 'border-amber-300 bg-amber-50/30' : ''}`} onClick={() => setActiveSection('facturacion')}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="p-2.5 bg-purple-100 rounded-xl">
+                <Receipt size={22} className="text-purple-600" />
+              </div>
+              {facturasVencidas.length > 0 && (
+                <span className="text-xs font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                  ⚠️ {facturasVencidas.length} venc.
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Por cobrar</p>
+            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(valorFacturasPendientes)}</p>
+            <p className="text-xs text-neutral-400 mt-1">
+              {facturasPendientes.length} facturas
+            </p>
+          </Card>
+        </div>
 
-            {/* Modal configuración columnas */}
-            {showColumnConfig === 'pedidos' && <ColumnConfigModal modulo="pedidos" onClose={() => setShowColumnConfig(null)} />}
-          </>
-        ) : (
-          /* Vista de Pedidos Recurrentes */
-          <div className="space-y-4">
-            {pedidosRecurrentes.length === 0 ? (
-              <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
-                <Repeat size={48} className="mx-auto text-neutral-300 mb-4" />
-                <h3 className={`text-lg font-bold ${darkMode ? 'text-white' : 'text-neutral-900'}`}>No hay pedidos recurrentes</h3>
-                <p className={`text-sm mb-4 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Crea pedidos que se repiten automáticamente cada semana, quincena o mes</p>
-                <Button onClick={() => setShowModal('pedido_recurrente')}><Repeat size={18} />Crear Pedido Recurrente</Button>
-              </Card>
+        {/* ============ FILA: GRÁFICA + ALERTAS ============ */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Gráfica de evolución 6 meses */}
+          <Card className="p-5 lg:col-span-2">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">Evolución últimos 6 meses</h3>
+                <p className="text-xs text-neutral-500">Ventas (verde) vs Gastos (rojo) vs Beneficio (azul)</p>
+              </div>
+              <BarChart3 size={20} className="text-neutral-400" />
+            </div>
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={ultimos6Meses}>
+                <defs>
+                  <linearGradient id="ventasGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.4}/>
+                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.05}/>
+                  </linearGradient>
+                  <linearGradient id="gastosGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3}/>
+                    <stop offset="100%" stopColor="#ef4444" stopOpacity={0.05}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="mes" axisLine={false} tickLine={false} style={{ fontSize: 12 }} />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  style={{ fontSize: 12 }}
+                  tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k€` : `${v}€`}
+                />
+                <Tooltip 
+                  contentStyle={{ borderRadius: 12, border: '1px solid #e5e5e5', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                  formatter={(v) => formatCurrency(v)}
+                />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="ventas" stroke="#10b981" strokeWidth={3} fill="url(#ventasGrad)" name="Ventas" />
+                <Area type="monotone" dataKey="gastos" stroke="#ef4444" strokeWidth={2} fill="url(#gastosGrad)" name="Gastos" />
+                <Line type="monotone" dataKey="beneficio" stroke="#3b82f6" strokeWidth={3} dot={{ fill: '#3b82f6', r: 4 }} name="Beneficio" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </Card>
+          
+          {/* Alertas críticas */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-neutral-900">⚡ Alertas</h3>
+              <button onClick={() => setShowAlertasPanel(true)} className="text-xs text-orange-600 hover:underline font-semibold">
+                Ver todas
+              </button>
+            </div>
+            <div className="space-y-2.5 max-h-72 overflow-y-auto">
+              {pedidosAtrasados.length > 0 && (
+                <button onClick={() => setActiveSection('pedidos')} className="w-full flex items-center gap-3 p-3 bg-red-50 hover:bg-red-100 rounded-xl text-left transition-colors">
+                  <div className="p-2 bg-red-200 rounded-lg flex-shrink-0">
+                    <AlertTriangle size={16} className="text-red-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-red-900 text-sm">{pedidosAtrasados.length} pedido{pedidosAtrasados.length !== 1 ? 's' : ''} atrasado{pedidosAtrasados.length !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-red-700">Entrega vencida</p>
+                  </div>
+                  <ArrowUpRight size={14} className="text-red-600 flex-shrink-0" />
+                </button>
+              )}
+              
+              {facturasVencidas.length > 0 && (
+                <button onClick={() => setActiveSection('facturacion')} className="w-full flex items-center gap-3 p-3 bg-amber-50 hover:bg-amber-100 rounded-xl text-left transition-colors">
+                  <div className="p-2 bg-amber-200 rounded-lg flex-shrink-0">
+                    <Receipt size={16} className="text-amber-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-amber-900 text-sm">{facturasVencidas.length} factura{facturasVencidas.length !== 1 ? 's' : ''} vencida{facturasVencidas.length !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-amber-700">{formatCurrency(facturasVencidas.reduce((s,f) => s + (f.total || 0), 0))}</p>
+                  </div>
+                  <ArrowUpRight size={14} className="text-amber-600 flex-shrink-0" />
+                </button>
+              )}
+              
+              {productosSinStock.length > 0 && (
+                <button onClick={() => setActiveSection('productos')} className="w-full flex items-center gap-3 p-3 bg-red-50 hover:bg-red-100 rounded-xl text-left transition-colors">
+                  <div className="p-2 bg-red-200 rounded-lg flex-shrink-0">
+                    <Package size={16} className="text-red-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-red-900 text-sm">{productosSinStock.length} sin stock</p>
+                    <p className="text-xs text-red-700 truncate">{productosSinStock.slice(0, 2).map(p => p.nombre).join(', ')}</p>
+                  </div>
+                  <ArrowUpRight size={14} className="text-red-600 flex-shrink-0" />
+                </button>
+              )}
+              
+              {productosStockBajo.length > 0 && (
+                <button onClick={() => setActiveSection('productos')} className="w-full flex items-center gap-3 p-3 bg-orange-50 hover:bg-orange-100 rounded-xl text-left transition-colors">
+                  <div className="p-2 bg-orange-200 rounded-lg flex-shrink-0">
+                    <AlertCircle size={16} className="text-orange-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-orange-900 text-sm">{productosStockBajo.length} con stock bajo</p>
+                    <p className="text-xs text-orange-700">Mínimo no alcanzado</p>
+                  </div>
+                  <ArrowUpRight size={14} className="text-orange-600 flex-shrink-0" />
+                </button>
+              )}
+              
+              {gastosPendientes.length > 0 && (
+                <button onClick={() => setActiveSection('gastos')} className="w-full flex items-center gap-3 p-3 bg-blue-50 hover:bg-blue-100 rounded-xl text-left transition-colors">
+                  <div className="p-2 bg-blue-200 rounded-lg flex-shrink-0">
+                    <Wallet size={16} className="text-blue-700" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-blue-900 text-sm">{gastosPendientes.length} pago{gastosPendientes.length !== 1 ? 's' : ''} pendiente{gastosPendientes.length !== 1 ? 's' : ''}</p>
+                    <p className="text-xs text-blue-700">{formatCurrency(valorGastosPendientes)} a proveedores</p>
+                  </div>
+                  <ArrowUpRight size={14} className="text-blue-600 flex-shrink-0" />
+                </button>
+              )}
+              
+              {pedidosAtrasados.length === 0 && facturasVencidas.length === 0 && productosSinStock.length === 0 && productosStockBajo.length === 0 && gastosPendientes.length === 0 && (
+                <div className="text-center py-8">
+                  <CheckCircle size={40} className="mx-auto text-green-500 mb-2" />
+                  <p className="font-medium text-green-700">¡Todo en orden!</p>
+                  <p className="text-xs text-neutral-500">No hay alertas pendientes</p>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* ============ FILA: TOP PRODUCTOS + TOP CLIENTES ============ */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Top productos */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">🏆 Top productos</h3>
+                <p className="text-xs text-neutral-500">Más vendidos del periodo</p>
+              </div>
+              <button onClick={() => setActiveSection('productos')} className="text-xs text-orange-600 hover:underline font-semibold">
+                Ver todos
+              </button>
+            </div>
+            {topProductos.length === 0 ? (
+              <div className="text-center py-8 text-neutral-400 text-sm">Sin ventas en el periodo</div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {pedidosRecurrentes.map(pr => {
-                  const cliente = clientes.find(c => c.id === pr.cliente_id);
-                  const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
-                  const totalEstimado = items.reduce((sum, item) => {
-                    const prod = productos.find(p => p.id === item.producto_id);
-                    return sum + ((prod?.precio || 0) * item.cantidad);
-                  }, 0);
-                  const frecConfig = frecuenciaConfig[pr.frecuencia] || frecuenciaConfig.semanal;
-
+              <div className="space-y-3">
+                {topProductos.map(([nombre, datos], idx) => {
+                  const maxImporte = topProductos[0][1].importe;
+                  const pctBarra = (datos.importe / maxImporte) * 100;
+                  const medallas = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
                   return (
-                    <Card key={pr.id} className={`overflow-hidden ${!pr.activo ? 'opacity-60' : ''} ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
-                      <div className={`p-4 ${pr.activo ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-neutral-400'} text-white`}>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Repeat size={20} />
-                            <h3 className="font-bold truncate">{pr.nombre}</h3>
-                          </div>
-                          <Badge className={frecConfig.color}>{frecConfig.label}</Badge>
+                    <div key={nombre} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="text-lg flex-shrink-0">{medallas[idx]}</span>
+                          <span className="font-semibold text-sm text-neutral-900 truncate">{nombre}</span>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="font-bold text-sm">{formatCurrency(datos.importe)}</p>
+                          <p className="text-[10px] text-neutral-400">{datos.cantidad} ud</p>
                         </div>
                       </div>
-                      <div className="p-4 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <Users size={16} className="text-neutral-400" />
-                          <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{cliente?.nombre || 'Cliente'}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Calendar size={16} className="text-neutral-400" />
-                          <span className={`text-sm ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>
-                            {diasSemana[pr.dia_semana] || 'Lunes'} • {frecConfig.label}
-                          </span>
-                        </div>
-                        <div className={`p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
-                          <p className={`text-xs font-medium mb-2 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Productos ({items.length})</p>
-                          {items.slice(0, 3).map(item => {
-                            const prod = productos.find(p => p.id === item.producto_id);
-                            return (
-                              <p key={item.id} className={`text-sm truncate ${darkMode ? 'text-neutral-200' : ''}`}>
-                                • {prod?.nombre || 'Producto'} x{item.cantidad}
-                              </p>
-                            );
-                          })}
-                          {items.length > 3 && <p className="text-xs text-neutral-400">+{items.length - 3} más...</p>}
-                        </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-neutral-200">
-                          <span className={`text-lg font-black ${darkMode ? 'text-white' : ''}`}>{formatCurrency(totalEstimado)}</span>
-                          <div className="flex gap-1">
-                            <button 
-                              onClick={() => toggleActivoPedidoRecurrente(pr)} 
-                              className={`p-2 rounded-lg ${pr.activo ? 'text-green-600 hover:bg-green-50' : 'text-neutral-400 hover:bg-neutral-100'}`}
-                              title={pr.activo ? 'Desactivar' : 'Activar'}
-                            >
-                              {pr.activo ? <CheckCircle size={18} /> : <XCircle size={18} />}
-                            </button>
-                            <button 
-                              onClick={() => ejecutarPedidoRecurrente(pr)} 
-                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
-                              title="Ejecutar ahora"
-                            >
-                              <Zap size={18} />
-                            </button>
-                            <button 
-                              onClick={() => { setEditingItem(pr); setShowModal('pedido_recurrente'); }} 
-                              className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg"
-                              title="Editar"
-                            >
-                              <Edit2 size={18} />
-                            </button>
-                            <button 
-                              onClick={() => eliminarPedidoRecurrente(pr.id)} 
-                              className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                              title="Eliminar"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          </div>
-                        </div>
+                      <div className="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-orange-400 to-orange-600 rounded-full transition-all"
+                          style={{ width: `${pctBarra}%` }}
+                        />
                       </div>
-                    </Card>
+                    </div>
                   );
                 })}
               </div>
             )}
+          </Card>
+          
+          {/* Top clientes */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">⭐ Top clientes</h3>
+                <p className="text-xs text-neutral-500">Mayores compradores del periodo</p>
+              </div>
+              <button onClick={() => setActiveSection('clientes')} className="text-xs text-orange-600 hover:underline font-semibold">
+                Ver todos
+              </button>
+            </div>
+            {topClientes.length === 0 ? (
+              <div className="text-center py-8 text-neutral-400 text-sm">Sin ventas en el periodo</div>
+            ) : (
+              <div className="space-y-2">
+                {topClientes.map(({ cliente, importe }, idx) => {
+                  if (!cliente) return null;
+                  const totalPedidos = pedidosPeriodo.filter(p => p.cliente_id === cliente.id && p.estado === 'entregado').length;
+                  return (
+                    <button 
+                      key={cliente.id}
+                      onClick={() => setActiveSection('clientes')}
+                      className="w-full flex items-center gap-3 p-3 bg-neutral-50 hover:bg-orange-50 rounded-xl transition-all text-left group"
+                    >
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 bg-gradient-to-br from-orange-400 to-orange-600">
+                        {cliente.nombre?.charAt(0).toUpperCase() || '?'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm text-neutral-900 truncate group-hover:text-orange-600">{cliente.nombre}</p>
+                        <p className="text-xs text-neutral-500">{totalPedidos} pedido{totalPedidos !== 1 ? 's' : ''}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="font-bold text-sm text-neutral-900">{formatCurrency(importe)}</p>
+                        <p className="text-[10px] text-neutral-400">#{idx + 1}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* ============ FILA: PRÓXIMAS COSECHAS + ENTREGAS ============ */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Próximas cosechas */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">🌱 Próximas cosechas</h3>
+                <p className="text-xs text-neutral-500">Siguientes 7 días</p>
+              </div>
+              <button onClick={() => setActiveSection('produccion')} className="text-xs text-orange-600 hover:underline font-semibold">
+                Ver producción
+              </button>
+            </div>
+            {proximasCosechas.length === 0 ? (
+              <div className="text-center py-8 text-neutral-400 text-sm">
+                <Leaf size={32} className="mx-auto mb-2 opacity-40" />
+                No hay cosechas en los próximos 7 días
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {proximasCosechas.map(lote => {
+                  const variedad = variedades.find(v => v.id === lote.variedad_id);
+                  const dias = Math.ceil((new Date(lote.fecha_cosecha_prevista) - new Date(hoyStr)) / (1000*60*60*24));
+                  const urgente = dias <= 1;
+                  return (
+                    <div 
+                      key={lote.id}
+                      onClick={() => setActiveSection('produccion')}
+                      className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:shadow-sm transition-all ${urgente ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-100'}`}
+                    >
+                      <div className={`p-2 rounded-lg flex-shrink-0 ${urgente ? 'bg-red-200' : 'bg-green-200'}`}>
+                        <Leaf size={16} className={urgente ? 'text-red-700' : 'text-green-700'} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm text-neutral-900 truncate">
+                          {variedad?.nombre || 'Sin variedad'} · {lote.bandejas} bandeja{lote.bandejas !== 1 ? 's' : ''}
+                        </p>
+                        <p className="text-xs text-neutral-500">
+                          {formatDate(lote.fecha_cosecha_prevista)}
+                        </p>
+                      </div>
+                      <Badge className={urgente ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
+                        {dias === 0 ? '¡Hoy!' : dias === 1 ? 'Mañana' : `En ${dias}d`}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+          
+          {/* Próximas entregas */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-neutral-900">🚚 Próximas entregas</h3>
+                <p className="text-xs text-neutral-500">Siguientes 7 días · {formatCurrency(proximasEntregas.reduce((s, p) => s + (p.total || 0), 0))}</p>
+              </div>
+              <button onClick={() => setActiveSection('pedidos')} className="text-xs text-orange-600 hover:underline font-semibold">
+                Ver pedidos
+              </button>
+            </div>
+            {proximasEntregas.length === 0 ? (
+              <div className="text-center py-8 text-neutral-400 text-sm">
+                <Truck size={32} className="mx-auto mb-2 opacity-40" />
+                No hay entregas en los próximos 7 días
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {proximasEntregas.map(p => {
+                  const cliente = clientes.find(c => c.id === p.cliente_id);
+                  const dias = Math.ceil((new Date(p.fecha_entrega) - new Date(hoyStr)) / (1000*60*60*24));
+                  const urgente = dias <= 1;
+                  return (
+                    <div 
+                      key={p.id}
+                      onClick={() => setActiveSection('pedidos')}
+                      className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:shadow-sm transition-all ${urgente ? 'bg-orange-50 border border-orange-200' : 'bg-blue-50 border border-blue-100'}`}
+                    >
+                      <div className={`p-2 rounded-lg flex-shrink-0 ${urgente ? 'bg-orange-200' : 'bg-blue-200'}`}>
+                        <Truck size={16} className={urgente ? 'text-orange-700' : 'text-blue-700'} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm text-neutral-900 truncate">
+                          {cliente?.nombre || 'Sin cliente'}
+                        </p>
+                        <p className="text-xs text-neutral-500">
+                          {formatDate(p.fecha_entrega)} · {formatCurrency(p.total)}
+                        </p>
+                      </div>
+                      <Badge className={urgente ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}>
+                        {dias === 0 ? '¡Hoy!' : dias === 1 ? 'Mañana' : `En ${dias}d`}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* ============ ACCESOS RÁPIDOS ============ */}
+        <Card className="p-5">
+          <h3 className="text-lg font-bold text-neutral-900 mb-4">⚡ Accesos rápidos</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {[
+              { label: 'Nuevo pedido', icon: ShoppingCart, color: 'from-orange-400 to-orange-600', section: 'pedidos', modal: 'pedido' },
+              { label: 'Nueva muestra', icon: Sparkles, color: 'from-amber-400 to-amber-600', section: 'crm', modal: null },
+              { label: 'Registrar gasto', icon: Wallet, color: 'from-red-400 to-red-600', section: 'gastos', modal: 'gasto' },
+              { label: 'Nuevo lote', icon: Leaf, color: 'from-green-400 to-green-600', section: 'produccion', modal: 'lote' },
+              { label: 'Asignar turno', icon: CalendarClock, color: 'from-blue-400 to-blue-600', section: 'calendario', modal: 'turno' },
+              { label: 'Nueva tarea', icon: ClipboardList, color: 'from-purple-400 to-purple-600', section: 'calendario', modal: 'tarea' },
+            ].map(acc => {
+              const Icon = acc.icon;
+              return (
+                <button
+                  key={acc.label}
+                  onClick={() => { 
+                    setActiveSection(acc.section); 
+                    if (acc.modal) {
+                      setEditingItem(null);
+                      setTimeout(() => setShowModal(acc.modal), 100);
+                    }
+                  }}
+                  className="group flex flex-col items-center gap-2 p-4 bg-neutral-50 hover:bg-white border border-neutral-200 hover:border-orange-300 rounded-2xl transition-all hover:shadow-lg hover:scale-105"
+                >
+                  <div className={`p-3 rounded-2xl bg-gradient-to-br ${acc.color} text-white shadow-md group-hover:shadow-lg transition-shadow`}>
+                    <Icon size={22} />
+                  </div>
+                  <span className="text-xs font-semibold text-neutral-700 text-center leading-tight">{acc.label}</span>
+                </button>
+              );
+            })}
           </div>
-        )}
+        </Card>
       </div>
     );
   };
-
   const renderProductos = () => {
     // Helper: calcular €/kg desde un producto
     const calcPrecioKg = (producto) => {
@@ -8112,16 +8118,42 @@ const MainApp = () => {
             <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(factura.total)}</span></div>
           </div>
           
-          <div style="margin-top: 30px; padding: 20px; background: #f0fdf4; border-left: 4px solid #2D6A4F; border-radius: 6px;">
-            <h3 style="font-size: 11px; color: #2D6A4F; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; font-weight: 700;">💳 Datos bancarios para transferencia</h3>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; font-size: 13px; color: #333;">
-              <p><strong>Titular:</strong> ${EMPRESA.nombre}</p>
-              <p><strong>Banco:</strong> ${EMPRESA.banco}</p>
-              <p style="grid-column: 1 / -1;"><strong>IBAN:</strong> <span style="font-family: 'Courier New', monospace; letter-spacing: 1px;">${EMPRESA.iban}</span></p>
-              <p><strong>SWIFT/BIC:</strong> <span style="font-family: 'Courier New', monospace;">${EMPRESA.swift}</span></p>
-              <p><strong>Concepto:</strong> ${factura.id}</p>
+          ${(() => {
+            const cli = clientes.find(c => c.id === factura.cliente_id);
+            const usaSepa = cli?.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
+            const plazo = factura.plazo_pago_dias || cli?.plazo_pago_dias || 30;
+            return `
+            <div style="margin-top: 30px; padding: 20px; background: ${usaSepa ? '#eff6ff' : '#f0fdf4'}; border-left: 4px solid ${usaSepa ? '#3b82f6' : '#2D6A4F'}; border-radius: 6px;">
+              <h3 style="font-size: 11px; color: ${usaSepa ? '#1e40af' : '#2D6A4F'}; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; font-weight: 700;">
+                ${usaSepa ? '🏦 Cobro por domiciliación SEPA B2B' : '💳 Datos para transferencia bancaria'}
+              </h3>
+              ${usaSepa ? `
+                <p style="font-size: 12px; color: #1e3a8a; margin-bottom: 8px;">
+                  Esta factura se cobrará automáticamente el <strong>${formatDate(factura.fecha_vencimiento)}</strong> en la cuenta indicada en el mandato firmado.
+                </p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; font-size: 12px; color: #333;">
+                  <p><strong>Acreedor:</strong> ${EMPRESA.nombre}</p>
+                  <p><strong>Mandato UMR:</strong> ${cli?.sepa_mandato_ref || '—'}</p>
+                  <p style="grid-column: 1/-1;"><strong>IBAN destino:</strong> <span style="font-family: monospace; letter-spacing: 1px;">${cli?.sepa_iban || ''}</span></p>
+                  <p><strong>Tipo:</strong> SEPA B2B (no reembolsable)</p>
+                  <p><strong>Concepto:</strong> ${factura.id}</p>
+                </div>
+              ` : `
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; font-size: 13px; color: #333;">
+                  <p><strong>Titular:</strong> ${EMPRESA.nombre}</p>
+                  <p><strong>Banco:</strong> ${EMPRESA.banco}</p>
+                  <p style="grid-column: 1 / -1;"><strong>IBAN:</strong> <span style="font-family: 'Courier New', monospace; letter-spacing: 1px;">${EMPRESA.iban}</span></p>
+                  <p><strong>SWIFT/BIC:</strong> <span style="font-family: 'Courier New', monospace;">${EMPRESA.swift}</span></p>
+                  <p><strong>Concepto:</strong> ${factura.id}</p>
+                </div>
+              `}
+              <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed ${usaSepa ? '#93c5fd' : '#86efac'}; font-size: 11px; color: #444; line-height: 1.5;">
+                <p style="margin-bottom: 4px;"><strong>Plazo de pago:</strong> ${plazo} días desde la fecha de factura (Ley 15/2010 productos perecederos).</p>
+                <p style="font-style: italic;">El impago en plazo devengará intereses de demora conforme al Art. 7 de la Ley 3/2004, de 29 de diciembre, por la que se establecen medidas de lucha contra la morosidad en las operaciones comerciales.</p>
+              </div>
             </div>
-          </div>
+            `;
+          })()}
           
           <div class="footer">
             <p><strong>${EMPRESA.nombre}</strong> · CIF: ${EMPRESA.cif}</p>
@@ -8212,17 +8244,45 @@ const MainApp = () => {
             </div>
           </div>
           
-          {/* Datos bancarios para transferencia */}
-          <div className="mt-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
-            <h3 className="text-xs font-bold text-emerald-700 uppercase mb-2 tracking-wide">💳 Datos bancarios para transferencia</h3>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-              <p><strong>Titular:</strong> {EMPRESA.nombre}</p>
-              <p><strong>Banco:</strong> {EMPRESA.banco}</p>
-              <p className="col-span-2"><strong>IBAN:</strong> <span className="font-mono">{EMPRESA.iban}</span></p>
-              <p><strong>SWIFT/BIC:</strong> <span className="font-mono">{EMPRESA.swift}</span></p>
-              <p><strong>Concepto:</strong> {factura.id}</p>
-            </div>
-          </div>
+          {/* Datos bancarios para transferencia / SEPA */}
+          {(() => {
+            const cli = clientes.find(c => c.id === factura.cliente_id);
+            const usaSepa = cli?.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
+            const plazo = factura.plazo_pago_dias || cli?.plazo_pago_dias || 30;
+            return (
+              <div className={`mt-6 p-4 ${usaSepa ? 'bg-blue-50 border-blue-200' : 'bg-emerald-50 border-emerald-200'} border rounded-lg`}>
+                <h3 className={`text-xs font-bold ${usaSepa ? 'text-blue-700' : 'text-emerald-700'} uppercase mb-2 tracking-wide`}>
+                  {usaSepa ? '🏦 Cobro por domiciliación SEPA B2B' : '💳 Datos bancarios para transferencia'}
+                </h3>
+                {usaSepa ? (
+                  <>
+                    <p className="text-sm text-blue-900 mb-2">
+                      Esta factura se cobrará automáticamente el <strong>{formatDate(factura.fecha_vencimiento)}</strong> en la cuenta indicada en el mandato firmado.
+                    </p>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                      <p><strong>Acreedor:</strong> {EMPRESA.nombre}</p>
+                      <p><strong>Mandato UMR:</strong> {cli?.sepa_mandato_ref || '—'}</p>
+                      <p className="col-span-2"><strong>IBAN destino:</strong> <span className="font-mono">{cli?.sepa_iban || ''}</span></p>
+                      <p><strong>Tipo:</strong> SEPA B2B</p>
+                      <p><strong>Concepto:</strong> {factura.id}</p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                    <p><strong>Titular:</strong> {EMPRESA.nombre}</p>
+                    <p><strong>Banco:</strong> {EMPRESA.banco}</p>
+                    <p className="col-span-2"><strong>IBAN:</strong> <span className="font-mono">{EMPRESA.iban}</span></p>
+                    <p><strong>SWIFT/BIC:</strong> <span className="font-mono">{EMPRESA.swift}</span></p>
+                    <p><strong>Concepto:</strong> {factura.id}</p>
+                  </div>
+                )}
+                <div className="mt-3 pt-2 border-t border-dashed border-current/30 text-xs text-neutral-700 space-y-1">
+                  <p><strong>Plazo de pago:</strong> {plazo} días desde la fecha de factura (Ley 15/2010, productos perecederos).</p>
+                  <p className="italic text-neutral-600">El impago en plazo devengará intereses de demora conforme al Art. 7 de la Ley 3/2004, de 29 de diciembre, por la que se establecen medidas de lucha contra la morosidad en las operaciones comerciales.</p>
+                </div>
+              </div>
+            );
+          })()}
           
           {/* Acciones */}
           <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
@@ -8305,6 +8365,175 @@ const MainApp = () => {
       exportToExcel(toExport, 'facturas', exportColumns);
     };
 
+    // === GENERAR FICHERO XML SEPA pain.008 ===
+    const generarRemesaSEPA = async (facturasParaRemesa, fechaCobro) => {
+      if (facturasParaRemesa.length === 0) {
+        alert('No hay facturas para incluir en la remesa');
+        return;
+      }
+      
+      // Validar que todas tienen mandato
+      const sinMandato = facturasParaRemesa.filter(f => {
+        const cli = clientes.find(c => c.id === f.cliente_id);
+        return !cli?.sepa_activo || !cli?.sepa_iban || !cli?.sepa_mandato_ref;
+      });
+      
+      if (sinMandato.length > 0) {
+        alert(`❌ ${sinMandato.length} factura(s) no se pueden incluir porque su cliente no tiene mandato SEPA activo:\n\n` +
+              sinMandato.slice(0, 5).map(f => {
+                const cli = clientes.find(c => c.id === f.cliente_id);
+                return `• ${f.id} - ${cli?.nombre}`;
+              }).join('\n'));
+        return;
+      }
+      
+      const ahora = new Date();
+      const refRemesa = `RTF-${ahora.toISOString().slice(0,10).replace(/-/g,'')}-${String(remesasSepa.length + 1).padStart(3, '0')}`;
+      const importeTotal = facturasParaRemesa.reduce((s, f) => s + (f.total || 0), 0);
+      
+      // === Construir XML pain.008.001.02 ===
+      const msgId = refRemesa;
+      const creDtTm = ahora.toISOString().slice(0, 19);
+      const reqColctnDt = fechaCobro;
+      
+      const transacciones = facturasParaRemesa.map((f, idx) => {
+        const cli = clientes.find(c => c.id === f.cliente_id);
+        const ibanLimpio = (cli.sepa_iban || '').replace(/\s/g, '');
+        const importeStr = (f.total || 0).toFixed(2);
+        const endToEndId = `${f.id}-${idx + 1}`.substring(0, 35);
+        return `      <DrctDbtTxInf>
+        <PmtId>
+          <EndToEndId>${endToEndId}</EndToEndId>
+        </PmtId>
+        <InstdAmt Ccy="EUR">${importeStr}</InstdAmt>
+        <DrctDbtTx>
+          <MndtRltdInf>
+            <MndtId>${cli.sepa_mandato_ref}</MndtId>
+            <DtOfSgntr>${cli.sepa_mandato_fecha || ahora.toISOString().slice(0,10)}</DtOfSgntr>
+          </MndtRltdInf>
+        </DrctDbtTx>
+        ${cli.sepa_bic ? `<DbtrAgt><FinInstnId><BIC>${cli.sepa_bic}</BIC></FinInstnId></DbtrAgt>` : '<DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>'}
+        <Dbtr>
+          <Nm>${(cli.sepa_titular || cli.nombre).replace(/[<>&]/g, '').substring(0, 70)}</Nm>
+        </Dbtr>
+        <DbtrAcct>
+          <Id><IBAN>${ibanLimpio}</IBAN></Id>
+        </DbtrAcct>
+        <RmtInf>
+          <Ustrd>Factura ${f.id}</Ustrd>
+        </RmtInf>
+      </DrctDbtTxInf>`;
+      }).join('\n');
+      
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.008.001.02">
+  <CstmrDrctDbtInitn>
+    <GrpHdr>
+      <MsgId>${msgId}</MsgId>
+      <CreDtTm>${creDtTm}</CreDtTm>
+      <NbOfTxs>${facturasParaRemesa.length}</NbOfTxs>
+      <CtrlSum>${importeTotal.toFixed(2)}</CtrlSum>
+      <InitgPty>
+        <Nm>${EMPRESA.nombre}</Nm>
+        <Id>
+          <OrgId>
+            <Othr>
+              <Id>${EMPRESA.cif}</Id>
+            </Othr>
+          </OrgId>
+        </Id>
+      </InitgPty>
+    </GrpHdr>
+    <PmtInf>
+      <PmtInfId>${msgId}-PMT</PmtInfId>
+      <PmtMtd>DD</PmtMtd>
+      <BtchBookg>true</BtchBookg>
+      <NbOfTxs>${facturasParaRemesa.length}</NbOfTxs>
+      <CtrlSum>${importeTotal.toFixed(2)}</CtrlSum>
+      <PmtTpInf>
+        <SvcLvl><Cd>SEPA</Cd></SvcLvl>
+        <LclInstrm><Cd>B2B</Cd></LclInstrm>
+        <SeqTp>RCUR</SeqTp>
+      </PmtTpInf>
+      <ReqdColltnDt>${reqColctnDt}</ReqdColltnDt>
+      <Cdtr>
+        <Nm>${EMPRESA.nombre}</Nm>
+      </Cdtr>
+      <CdtrAcct>
+        <Id><IBAN>${EMPRESA.iban.replace(/\s/g, '')}</IBAN></Id>
+      </CdtrAcct>
+      <CdtrAgt>
+        <FinInstnId><BIC>${EMPRESA.swift}</BIC></FinInstnId>
+      </CdtrAgt>
+      <ChrgBr>SLEV</ChrgBr>
+      <CdtrSchmeId>
+        <Id>
+          <PrvtId>
+            <Othr>
+              <Id>ES45000${EMPRESA.cif}</Id>
+              <SchmeNm><Prtry>SEPA</Prtry></SchmeNm>
+            </Othr>
+          </PrvtId>
+        </Id>
+      </CdtrSchmeId>
+${transacciones}
+    </PmtInf>
+  </CstmrDrctDbtInitn>
+</Document>`;
+      
+      try {
+        // Guardar en BD
+        const { data: nuevaRemesa, error } = await supabase.from('remesas_sepa').insert({
+          referencia: refRemesa,
+          fecha_cobro: fechaCobro,
+          num_facturas: facturasParaRemesa.length,
+          importe_total: importeTotal,
+          estado: 'preparada',
+        }).select().single();
+        
+        if (error) throw error;
+        
+        // Insertar items
+        const items = facturasParaRemesa.map(f => {
+          const cli = clientes.find(c => c.id === f.cliente_id);
+          return {
+            remesa_id: nuevaRemesa.id,
+            factura_id: f.id,
+            cliente_id: f.cliente_id,
+            importe: f.total || 0,
+            iban_deudor: cli?.sepa_iban || '',
+            mandato_ref: cli?.sepa_mandato_ref || '',
+            estado: 'pendiente',
+          };
+        });
+        await supabase.from('remesas_sepa_items').insert(items);
+        
+        refetchRemesasSepa();
+        refetchRemesasSepaItems();
+        
+        // Descargar XML
+        const blob = new Blob([xml], { type: 'application/xml' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${refRemesa}.xml`;
+        link.click();
+        
+        // Notificar Slack si está activo
+        if (notificacionesConfig.slack_activo && notificacionesConfig.notif_factura_vencida) {
+          enviarSlack({
+            titulo: `Remesa SEPA generada: ${refRemesa}`,
+            mensaje: `📤 *${facturasParaRemesa.length} factura${facturasParaRemesa.length !== 1 ? 's' : ''}* por ${formatCurrency(importeTotal)}\nFecha de cobro: ${formatDate(fechaCobro)}\n\nSube el fichero ${refRemesa}.xml a tu banca electrónica para ejecutar el cargo.`,
+            prioridad: 'alta',
+          });
+        }
+        
+        alert(`✅ Remesa SEPA generada\n\nReferencia: ${refRemesa}\nFacturas: ${facturasParaRemesa.length}\nImporte: ${formatCurrency(importeTotal)}\nFecha cobro: ${formatDate(fechaCobro)}\n\n📥 Archivo XML descargado. Súbelo a tu banca electrónica (BBVA Net Cash) para ejecutar el cargo.`);
+      } catch (e) {
+        console.error('Error remesa:', e);
+        alert('❌ Error al crear la remesa: ' + e.message);
+      }
+    };
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
@@ -8337,6 +8566,154 @@ const MainApp = () => {
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
           <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
         </div>
+
+        {/* ============ SECCIÓN SEPA B2B ============ */}
+        {(() => {
+          // Facturas candidatas para remesa: clientes con SEPA activo + estado pendiente + no incluidas ya en otra remesa
+          const idsEnRemesa = new Set(remesasSepaItems.filter(i => i.estado === 'pendiente').map(i => i.factura_id));
+          const candidatasSEPA = facturas.filter(f => {
+            if (f.estado !== 'pendiente') return false;
+            if (idsEnRemesa.has(f.id)) return false;
+            const cli = clientes.find(c => c.id === f.cliente_id);
+            return cli?.sepa_activo && cli?.sepa_iban && cli?.sepa_mandato_ref;
+          });
+          
+          const clientesSinSepa = clientes.filter(c => {
+            // Cliente recurrente = tiene >= 2 facturas
+            const numFact = facturas.filter(f => f.cliente_id === c.id).length;
+            return numFact >= 2 && !c.sepa_activo;
+          });
+          
+          const remesasActivas = remesasSepa.filter(r => ['preparada', 'enviada'].includes(r.estado));
+          
+          if (candidatasSEPA.length === 0 && clientesSinSepa.length === 0 && remesasActivas.length === 0) {
+            return null;
+          }
+          
+          return (
+            <Card className="p-5 border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50">
+              <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-blue-200 rounded-2xl">
+                    <Banknote size={24} className="text-blue-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-blue-900">Domiciliaciones SEPA B2B</h3>
+                    <p className="text-xs text-blue-700">Cobro automático según mandatos firmados</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Candidatas para remesa */}
+                <div className="bg-white rounded-xl p-4 border border-blue-200">
+                  <p className="text-xs font-bold text-blue-700 uppercase tracking-wide mb-1">📤 Listas para cobrar</p>
+                  <p className="text-2xl font-black text-blue-900">{candidatasSEPA.length}</p>
+                  <p className="text-xs text-blue-700 mb-2">facturas · {formatCurrency(candidatasSEPA.reduce((s, f) => s + (f.total || 0), 0))}</p>
+                  {candidatasSEPA.length > 0 && (
+                    <Button 
+                      size="sm" 
+                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      onClick={() => {
+                        const fechaDefault = new Date();
+                        fechaDefault.setDate(fechaDefault.getDate() + 2);
+                        const fechaCobro = prompt(
+                          `Generar remesa SEPA con ${candidatasSEPA.length} facturas (${formatCurrency(candidatasSEPA.reduce((s, f) => s + (f.total || 0), 0))})\n\nFecha de cobro (mínimo 2 días hábiles desde hoy):`,
+                          fechaDefault.toISOString().slice(0, 10)
+                        );
+                        if (!fechaCobro) return;
+                        generarRemesaSEPA(candidatasSEPA, fechaCobro);
+                      }}
+                    >
+                      📤 Generar remesa XML
+                    </Button>
+                  )}
+                </div>
+                
+                {/* Remesas activas */}
+                <div className="bg-white rounded-xl p-4 border border-blue-200">
+                  <p className="text-xs font-bold text-blue-700 uppercase tracking-wide mb-1">🏦 Remesas activas</p>
+                  <p className="text-2xl font-black text-blue-900">{remesasActivas.length}</p>
+                  <p className="text-xs text-blue-700 mb-2">{formatCurrency(remesasActivas.reduce((s, r) => s + (r.importe_total || 0), 0))} en curso</p>
+                  {remesasActivas.length > 0 && (
+                    <div className="text-xs space-y-1 max-h-20 overflow-y-auto">
+                      {remesasActivas.slice(0, 3).map(r => (
+                        <div key={r.id} className="flex justify-between gap-2">
+                          <span className="font-mono text-[10px] truncate">{r.referencia}</span>
+                          <span className="font-semibold">{formatCurrency(r.importe_total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Clientes que podrían firmar mandato */}
+                <div className="bg-white rounded-xl p-4 border border-amber-200">
+                  <p className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-1">📋 Candidatos a mandato</p>
+                  <p className="text-2xl font-black text-amber-900">{clientesSinSepa.length}</p>
+                  <p className="text-xs text-amber-700 mb-2">clientes recurrentes sin SEPA</p>
+                  {clientesSinSepa.length > 0 && (
+                    <Button 
+                      size="sm" 
+                      variant="secondary"
+                      className="w-full"
+                      onClick={() => {
+                        const msg = `Clientes recurrentes que deberían firmar mandato SEPA B2B:\n\n` +
+                          clientesSinSepa.slice(0, 10).map(c => `• ${c.nombre}`).join('\n') +
+                          (clientesSinSepa.length > 10 ? `\n... y ${clientesSinSepa.length - 10} más` : '') +
+                          `\n\n👉 Ve a Clientes → Editar → activa "Domiciliación SEPA B2B"`;
+                        alert(msg);
+                      }}
+                    >
+                      Ver candidatos
+                    </Button>
+                  )}
+                </div>
+              </div>
+              
+              {remesasSepa.length > 0 && (
+                <details className="mt-4 bg-white/70 rounded-xl border border-blue-200">
+                  <summary className="cursor-pointer p-3 text-sm font-semibold text-blue-900">
+                    📜 Historial de remesas ({remesasSepa.length})
+                  </summary>
+                  <div className="p-3 pt-0">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-blue-700 border-b">
+                          <th className="py-1.5">Referencia</th>
+                          <th className="py-1.5">Fecha cobro</th>
+                          <th className="py-1.5">Facturas</th>
+                          <th className="py-1.5">Importe</th>
+                          <th className="py-1.5">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {remesasSepa.sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion)).map(r => (
+                          <tr key={r.id} className="border-b border-blue-100">
+                            <td className="py-1.5 font-mono">{r.referencia}</td>
+                            <td className="py-1.5">{formatDate(r.fecha_cobro)}</td>
+                            <td className="py-1.5">{r.num_facturas}</td>
+                            <td className="py-1.5 font-semibold">{formatCurrency(r.importe_total)}</td>
+                            <td className="py-1.5">
+                              <Badge className={
+                                r.estado === 'cobrada' ? 'bg-green-100 text-green-700' :
+                                r.estado === 'devuelta' ? 'bg-red-100 text-red-700' :
+                                r.estado === 'enviada' ? 'bg-blue-100 text-blue-700' :
+                                'bg-amber-100 text-amber-700'
+                              }>
+                                {r.estado}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
+            </Card>
+          );
+        })()}
 
         {/* Alertas de cobros pendientes/vencidos */}
         {(() => {
@@ -8677,11 +9054,12 @@ const MainApp = () => {
 
         {gastosTab === 'gastos' && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <StatCard icon={Wallet} label="Total" value={formatCurrency(gastosFiltradosPorMes.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
               <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastosFiltradosPorMes.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
               <StatCard icon={Clock} label="Pendientes" value={formatCurrency(gastosFiltradosPorMes.filter(g => !g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-amber-100 text-amber-600" />
-              <StatCard icon={FileText} label="Con Factura" value={gastosFiltradosPorMes.filter(g => g.factura_url).length} color="bg-blue-100 text-blue-600" />
+              <StatCard icon={FileText} label="Con Factura" value={`${gastosFiltradosPorMes.filter(g => g.factura_url).length}/${gastosFiltradosPorMes.length}`} color="bg-blue-100 text-blue-600" />
+              <StatCard icon={Banknote} label="Con Justificante" value={`${gastosFiltradosPorMes.filter(g => g.justificante_pago_url).length}/${gastosFiltradosPorMes.length}`} color="bg-purple-100 text-purple-600" />
             </div>
 
             {selectedGastos.length > 0 && (
@@ -8715,6 +9093,7 @@ const MainApp = () => {
                     <FilterableHeader label="Proveedor" field="proveedor_id" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={proveedores.map(p => ({ value: p.id, label: p.nombre }))} />
                     <FilterableHeader label="Importe" field="importe" sortConfig={sortGastos} onSort={setSortGastos} filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="number" />
                     <th className="text-left px-5 py-4 text-sm font-bold">Factura</th>
+                    <th className="text-left px-5 py-4 text-sm font-bold">Justificante</th>
                     <FilterableHeader label="Estado" field="pagado" filters={filtrosGastos} onFilter={updateFilter(setFiltrosGastos)} type="select" options={[{ value: 'true', label: 'Pagado' }, { value: 'false', label: 'Pendiente' }]} />
                     <th className="text-right px-5 py-4 text-sm font-bold">Acciones</th>
                   </tr>
@@ -8743,6 +9122,16 @@ const MainApp = () => {
                           {gasto.factura_url ? (
                             <a href={gasto.factura_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-green-600 hover:text-green-700">
                               <FileText size={16} />
+                              <span className="text-sm font-medium">Ver</span>
+                            </a>
+                          ) : (
+                            <span className="text-neutral-400 text-sm">-</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {gasto.justificante_pago_url ? (
+                            <a href={gasto.justificante_pago_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-600 hover:text-blue-700">
+                              <Banknote size={16} />
                               <span className="text-sm font-medium">Ver</span>
                             </a>
                           ) : (
