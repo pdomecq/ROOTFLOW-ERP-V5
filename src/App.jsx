@@ -1589,6 +1589,8 @@ const MainApp = () => {
   const { data: remesasSepaItemsData, refetch: refetchRemesasSepaItems } = useRealtime('remesas_sepa_items');
   // V36 - Documentos corporativos
   const { data: documentosCorpData, refetch: refetchDocumentosCorp } = useRealtime('documentos_corporativos');
+  // V38 - Recibos TPV
+  const { data: recibosTpvData, refetch: refetchRecibosTpv } = useRealtime('recibos_tpv');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1681,6 +1683,8 @@ const MainApp = () => {
   const remesasSepaItems = remesasSepaItemsData || [];
   // V36 - Documentos corporativos
   const documentosCorp = documentosCorpData || [];
+  // V38 - Recibos TPV
+  const recibosTpv = recibosTpvData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -9382,6 +9386,117 @@ ${transacciones}
           );
         })()}
 
+        {/* ============ SECCIÓN RECIBOS TPV ============ */}
+        {(() => {
+          const recibosPeriodo = filtrarPorPeriodo(recibosTpv, 'fecha', filtroFacturasMes);
+          const totalTpv = recibosPeriodo.reduce((s, r) => s + (r.importe || 0), 0);
+          const conRecibo = recibosPeriodo.filter(r => r.archivo_url).length;
+          
+          return (
+            <Card className="p-5 border-2 border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50">
+              <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-violet-200 rounded-2xl">
+                    <CreditCard size={24} className="text-violet-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-violet-900">Recibos TPV / Venta directa</h3>
+                    <p className="text-xs text-violet-700">Cobros con datáfono, Bizum o efectivo a personas físicas (sin factura formal)</p>
+                  </div>
+                </div>
+                <Button onClick={() => { setEditingItem(null); setShowModal('reciboTpv'); }} className="bg-violet-600 hover:bg-violet-700">
+                  <Plus size={16} /> Registrar recibo TPV
+                </Button>
+              </div>
+              
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                <div className="bg-white rounded-xl p-4 border border-violet-200">
+                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">Total periodo</p>
+                  <p className="text-2xl font-black text-violet-900">{formatCurrency(totalTpv)}</p>
+                  <p className="text-xs text-violet-700">{recibosPeriodo.length} recibo{recibosPeriodo.length !== 1 ? 's' : ''}</p>
+                </div>
+                <div className="bg-white rounded-xl p-4 border border-violet-200">
+                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">Con justificante</p>
+                  <p className="text-2xl font-black text-violet-900">{conRecibo}/{recibosPeriodo.length}</p>
+                  <p className="text-xs text-violet-700">recibos archivados</p>
+                </div>
+                <div className="bg-white rounded-xl p-4 border border-violet-200">
+                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">IVA repercutido</p>
+                  <p className="text-2xl font-black text-violet-900">{formatCurrency(recibosPeriodo.reduce((s, r) => s + (r.iva_importe || 0), 0))}</p>
+                  <p className="text-xs text-violet-700">a declarar</p>
+                </div>
+              </div>
+
+              {recibosPeriodo.length > 0 && (
+                <div className="bg-white/70 rounded-xl border border-violet-200 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-violet-700 border-b border-violet-200">
+                        <th className="p-2.5">Fecha</th>
+                        <th className="p-2.5">Concepto</th>
+                        <th className="p-2.5">Cliente</th>
+                        <th className="p-2.5">Método</th>
+                        <th className="p-2.5 text-right">Importe</th>
+                        <th className="p-2.5 text-center">Recibo</th>
+                        <th className="p-2.5 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recibosPeriodo.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(r => (
+                        <tr key={r.id} className="border-b border-violet-100 hover:bg-violet-50">
+                          <td className="p-2.5">{formatDate(r.fecha)}</td>
+                          <td className="p-2.5">{r.concepto || '—'}</td>
+                          <td className="p-2.5">{r.cliente_nombre || '—'}</td>
+                          <td className="p-2.5">
+                            <Badge className={
+                              r.metodo === 'tarjeta' ? 'bg-blue-100 text-blue-700' :
+                              r.metodo === 'bizum' ? 'bg-teal-100 text-teal-700' :
+                              'bg-green-100 text-green-700'
+                            }>
+                              {r.metodo === 'tarjeta' ? '💳 Tarjeta' : r.metodo === 'bizum' ? '📱 Bizum' : '💵 Efectivo'}
+                            </Badge>
+                          </td>
+                          <td className="p-2.5 text-right font-semibold">{formatCurrency(r.importe)}</td>
+                          <td className="p-2.5 text-center">
+                            {r.archivo_url ? (
+                              <a href={r.archivo_url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:text-violet-800 inline-flex">
+                                <FileText size={16} />
+                              </a>
+                            ) : (
+                              <span className="text-neutral-300">—</span>
+                            )}
+                          </td>
+                          <td className="p-2.5">
+                            <div className="flex justify-end gap-1">
+                              <button onClick={() => { setEditingItem(r); setShowModal('reciboTpv'); }} className="p-1.5 text-neutral-400 hover:text-violet-600 hover:bg-violet-50 rounded">
+                                <Edit2 size={13} />
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  if (window.confirm(`¿Eliminar el recibo TPV de ${formatCurrency(r.importe)}?`)) {
+                                    await supabase.from('recibos_tpv').delete().eq('id', r.id);
+                                    refetchRecibosTpv();
+                                  }
+                                }} 
+                                className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {recibosPeriodo.length === 0 && (
+                <p className="text-center text-violet-400 text-sm py-4">No hay recibos TPV registrados en este periodo</p>
+              )}
+            </Card>
+          );
+        })()}
+
         {/* Alertas de cobros pendientes/vencidos */}
         {(() => {
           const pendientes = facturasFiltradas.filter(f => f.estado === 'pendiente');
@@ -10264,6 +10379,106 @@ ${transacciones}
     formato: 'zpl'    // 'zpl' o 'html'
   });
 
+  // === Etiqueta ZPL de MUESTRA (nivel componente, accesible desde renderMuestras y renderProduccion) ===
+    const generarZPLMuestra = (muestra, index = 1) => {
+      const nombreVariedad = (muestra.variedad || muestra.nombre || 'MUESTRA').toUpperCase();
+      // Formato fecha dd/mm/aa
+      const fmtFechaCorta = (d) => {
+        if (!d) return '';
+        const dt = new Date(d);
+        const dd = String(dt.getDate()).padStart(2, '0');
+        const mm = String(dt.getMonth() + 1).padStart(2, '0');
+        const aa = String(dt.getFullYear()).slice(-2);
+        return `${dd}/${mm}/${aa}`;
+      };
+      const fechaEntregaStr = fmtFechaCorta(muestra.fecha_entrega);
+      // Fecha consumo: entrega + 5 días
+      const fConsumo = muestra.fecha_entrega ? new Date(muestra.fecha_entrega) : new Date();
+      fConsumo.setDate(fConsumo.getDate() + 5);
+      const fechaConsumoStr = fmtFechaCorta(fConsumo);
+      const empresa = (muestra.empresa || muestra.nombre_contacto || '').substring(0, 28);
+      // Peso de la muestra (configurable, por defecto 30g típico de muestra)
+      const pesoStr = `${muestra.peso_gramos || muestra.formato_gramos || 30}g`;
+      
+      // Configuración fija: 50x40mm @ 203 DPI = 400x320 dots
+      const dpi = 203;
+      const anchoLabel = 400;
+      const altoLabel = 320;
+      
+      // Logo Rootflow (mismo que en lotes)
+      const logoRootflow = `^FO15,15
+^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
+      
+      return `^XA
+^CI28
+^PW${anchoLabel}
+^LL${altoLabel}
+^LH0,0
+^LRN
+^LS0
+
+${logoRootflow}^FS
+
+^FO95,18
+^A0N,38,38
+^FDRootFlow^FS
+
+^FO95,58
+^A0N,16,16
+^FDMICROBROTES PREMIUM^FS
+
+^FO10,90
+^GB380,2,2^FS
+
+^FO10,98
+^A0N,42,42
+^FB380,1,0,C,0
+^FD${nombreVariedad}^FS
+
+^FO10,144
+^A0N,15,15
+^FB380,1,0,C,0
+^FDBrotes tiernos · Cultivado en Madrid^FS
+
+^FO10,168
+^GB380,30,30^FS
+^FO10,176
+^A0N,22,22
+^FB380,1,0,C,0
+^FR^FDMUESTRA - NO PARA VENTA^FS
+
+^FO10,206
+^A0N,17,17
+^FDPeso: ${pesoStr}^FS
+
+^FO210,206
+^A0N,17,17
+^FDPara: ${empresa}^FS
+
+^FO10,228
+^A0N,17,17
+^FDEntrega: ${fechaEntregaStr}^FS
+
+^FO210,228
+^A0N,17,17
+^FDConsumir: ${fechaConsumoStr}^FS
+
+^FO10,252
+^A0N,14,14
+^FB380,2,0,L,0
+^FDProducto de obsequio sin valor comercial. No destinado a la venta. Conservar refrigerado 2-5C.^FS
+
+^FO10,290
+^GB380,1,1^FS
+
+^FO10,297
+^A0N,13,13
+^FB380,1,0,C,0
+^FD694 918 481 · info@rootflow.es · rootflow.es^FS
+
+^XZ`;
+    };
+
   const renderProduccion = () => {
     // Aplicar filtros de columna
     const lotesFiltrados = aplicarFiltros(lotes, filtrosLotes, {
@@ -10304,8 +10519,20 @@ ${transacciones}
       const anchoLabel = 400;
       const altoLabel = 320;
       
-      const fechaCosechaStr = formatDate(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
-      const fechaConsumoStr = formatDate(fechaConsumo.toISOString().split('T')[0]);
+      // Formato de fecha dd/mm/aa
+      const fmtFechaCorta = (d) => {
+        const dt = new Date(d);
+        const dd = String(dt.getDate()).padStart(2, '0');
+        const mm = String(dt.getMonth() + 1).padStart(2, '0');
+        const aa = String(dt.getFullYear()).slice(-2);
+        return `${dd}/${mm}/${aa}`;
+      };
+      const fechaCosechaStr = fmtFechaCorta(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+      const fechaConsumoStr = fmtFechaCorta(fechaConsumo);
+      
+      // Peso real del producto (NO hardcodeado a 100g)
+      const pesoGramos = producto?.formato_gramos || lote.formato_gramos || lote.peso_gramos || 100;
+      const pesoStr = `${pesoGramos}g`;
       
       // === LOGO ROOTFLOW EN ZPL (64x64 dots, ~8mm) ===
       // Diseño de hoja con tallo estilizada
@@ -10356,7 +10583,7 @@ ${logoRootflow}^FS
 
 ^FO230,222
 ^A0N,18,18
-^FDPeso neto: 100g^FS
+^FDPeso neto: ${pesoStr}^FS
 
 ^FO10,246
 ^A0N,18,18
@@ -10375,86 +10602,12 @@ ${logoRootflow}^FS
 
 ^FO10,297
 ^A0N,13,13
-^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 638 161 990^FS
+^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 694 918 481^FS
 
 ^XZ`;
     };
 
     // Generar ZPL para etiqueta de MUESTRA (variante visual)
-    const generarZPLMuestra = (muestra, index = 1) => {
-      const nombreVariedad = muestra.nombre || 'MUESTRA';
-      const fechaEntregaStr = muestra.fecha_entrega ? formatDate(muestra.fecha_entrega) : '';
-      const empresa = (muestra.empresa || '').substring(0, 30);
-      
-      // Configuración fija: 50x40mm @ 203 DPI = 400x320 dots
-      const dpi = 203;
-      const anchoLabel = 400;
-      const altoLabel = 320;
-      
-      // Logo Rootflow (mismo que en lotes)
-      const logoRootflow = `^FO15,15
-^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
-      
-      return `^XA
-^CI28
-^PW${anchoLabel}
-^LL${altoLabel}
-^LH0,0
-^LRN
-^LS0
-
-${logoRootflow}^FS
-
-^FO95,18
-^A0N,38,38
-^FDRootFlow^FS
-
-^FO95,58
-^A0N,16,16
-^FDMUESTRA GRATUITA^FS
-
-^FO10,90
-^GB380,2,2^FS
-
-^FO10,100
-^A0N,42,42
-^FB380,1,0,C,0
-^FD${nombreVariedad.toUpperCase()}^FS
-
-^FO10,150
-^A0N,16,16
-^FB380,1,0,C,0
-^FDBrotes premium · Cultivado en Madrid^FS
-
-^FO10,178
-^GB380,28,28^FS
-^FO10,185
-^A0N,20,20
-^FB380,1,0,C,0
-^FR^FDMUESTRA - NO DESTINADA A VENTA^FS
-
-^FO10,218
-^A0N,18,18
-^FDPara: ${empresa}^FS
-
-^FO10,243
-^A0N,18,18
-^FDEntrega: ${fechaEntregaStr}^FS
-
-^FO10,268
-^A0N,15,15
-^FDConservar refrigerado 2-5°C · Consumir en 5-7 días^FS
-
-^FO10,290
-^GB380,1,1^FS
-
-^FO10,297
-^A0N,13,13
-^FB380,1,0,C,0
-^FD638 161 990 · info@rootflow.es · rootflow.es^FS
-
-^XZ`;
-    };
 
     // Generar ZPL para múltiples etiquetas
     const generarZPLMultiple = (lote) => {
@@ -14443,6 +14596,139 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== RECIBO TPV FORM ====================
+  const ReciboTpvForm = ({ recibo, onSave, onCancel }) => {
+    const initialForm = recibo || {
+      fecha: new Date().toISOString().split('T')[0],
+      concepto: '',
+      cliente_nombre: '',
+      importe: 0,
+      iva_tipo: 'reducido',
+      metodo: 'tarjeta',
+      referencia_tpv: '',
+      archivo_url: '',
+      archivo_nombre: '',
+      notas: '',
+    };
+    const [form, setForm] = useState(initialForm);
+    const [uploading, setUploading] = useState(false);
+
+    // Cálculo IVA: el importe TPV es el total con IVA incluido
+    const tasaIva = form.iva_tipo === 'general' ? 0.21 : form.iva_tipo === 'reducido' ? 0.04 : 0;
+    const baseImponible = form.importe ? form.importe / (1 + tasaIva) : 0;
+    const ivaImporte = form.importe - baseImponible;
+
+    const handleFileUpload = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (file.size > 20 * 1024 * 1024) { alert('❌ Máximo 20 MB'); return; }
+      setUploading(true);
+      try {
+        const ext = file.name.split('.').pop().toLowerCase();
+        const fileName = `recibos-tpv/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+        const { error } = await supabase.storage.from('facturas-gastos').upload(fileName, file);
+        if (error) throw error;
+        const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fileName);
+        setForm({ ...form, archivo_url: urlData.publicUrl, archivo_nombre: file.name });
+        alert('✅ Recibo subido');
+      } catch (err) {
+        if (err.message?.includes('Bucket') || err.message?.includes('not found')) {
+          alert('❌ Falta el bucket "facturas-gastos" en Supabase Storage. Créalo en Storage → New bucket (Public ON).');
+        } else {
+          alert('❌ Error al subir: ' + err.message);
+        }
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha *" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Input label="Importe cobrado (€, IVA incl.) *" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+        </div>
+
+        <Input label="Concepto" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} placeholder="Ej: Venta directa brotes mercado" />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Cliente / Comprador (opcional)" value={form.cliente_nombre} onChange={e => setForm({...form, cliente_nombre: e.target.value})} placeholder="Persona física" />
+          <Select label="Método de cobro" value={form.metodo} onChange={e => setForm({...form, metodo: e.target.value})} options={[
+            { value: 'tarjeta', label: '💳 Tarjeta (TPV/datáfono)' },
+            { value: 'bizum', label: '📱 Bizum' },
+            { value: 'efectivo', label: '💵 Efectivo' },
+          ]} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Tipo de IVA" value={form.iva_tipo} onChange={e => setForm({...form, iva_tipo: e.target.value})} options={[
+            { value: 'reducido', label: 'Superreducido 4% (alimentos)' },
+            { value: 'general', label: 'General 21%' },
+            { value: 'exento', label: 'Exento / sin IVA' },
+          ]} />
+          <Input label="Nº operación TPV (opcional)" value={form.referencia_tpv} onChange={e => setForm({...form, referencia_tpv: e.target.value})} placeholder="Ref. datáfono" />
+        </div>
+
+        {/* Desglose IVA calculado */}
+        <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
+          <div>
+            <p className="text-xs text-violet-600 uppercase font-bold">Base imponible</p>
+            <p className="font-bold text-violet-900">{formatCurrency(baseImponible)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-violet-600 uppercase font-bold">IVA ({(tasaIva*100).toFixed(0)}%)</p>
+            <p className="font-bold text-violet-900">{formatCurrency(ivaImporte)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-violet-600 uppercase font-bold">Total cobrado</p>
+            <p className="font-bold text-violet-900">{formatCurrency(form.importe || 0)}</p>
+          </div>
+        </div>
+
+        {/* Subir recibo */}
+        <div className="border-2 border-dashed border-violet-300 rounded-xl p-4 bg-violet-50/50">
+          <label className="block text-sm font-semibold text-violet-900 mb-2">📎 Recibo / justificante (foto o PDF del ticket TPV)</label>
+          {form.archivo_url ? (
+            <div className="bg-white p-3 rounded-lg border border-violet-200 flex items-center gap-3">
+              <FileText size={22} className="text-violet-600 flex-shrink-0" />
+              <p className="flex-1 text-sm font-medium truncate">{form.archivo_nombre}</p>
+              <button type="button" onClick={() => window.open(form.archivo_url, '_blank')} className="p-2 text-blue-600 hover:bg-blue-50 rounded"><Eye size={16} /></button>
+              <button type="button" onClick={() => setForm({...form, archivo_url: '', archivo_nombre: ''})} className="p-2 text-red-500 hover:bg-red-50 rounded"><Trash2 size={16} /></button>
+            </div>
+          ) : (
+            <div>
+              <input type="file" onChange={handleFileUpload} disabled={uploading} accept=".pdf,.jpg,.jpeg,.png,.webp" className="block w-full text-sm text-neutral-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-violet-500 file:text-white file:font-semibold hover:file:bg-violet-600 file:cursor-pointer" />
+              {uploading && <p className="text-xs text-violet-600 mt-2 font-medium">⏳ Subiendo...</p>}
+              <p className="text-xs text-violet-700 mt-2">Foto del ticket o PDF. Máx 20 MB.</p>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-violet-500 outline-none" rows={2} />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button 
+            className="bg-violet-600 hover:bg-violet-700"
+            onClick={() => {
+              if (!form.importe || form.importe <= 0) { alert('Indica el importe cobrado'); return; }
+              onSave({
+                ...form,
+                base_imponible: Number(baseImponible.toFixed(2)),
+                iva_importe: Number(ivaImporte.toFixed(2)),
+              });
+            }}
+          >
+            {recibo ? 'Guardar cambios' : 'Registrar recibo'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== DOCUMENTO CORP FORM ====================
   const DocumentoCorpForm = ({ documento, onSave, onCancel }) => {
     const initialForm = documento || {
@@ -17295,6 +17581,7 @@ Firma repartidor: _________________
             <table className="w-full">
               <thead className="bg-neutral-50">
                 <tr>
+                  <th className="text-left p-4 text-xs font-semibold text-neutral-500">#</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Contacto / Empresa</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Tipo</th>
                   <th className="text-left p-4 text-xs font-semibold text-neutral-500">Productos</th>
@@ -17306,7 +17593,7 @@ Firma repartidor: _________________
               </thead>
               <tbody>
                 {muestras.length === 0 ? (
-                  <tr><td colSpan={7} className="p-8 text-center text-neutral-500">No hay muestras programadas</td></tr>
+                  <tr><td colSpan={8} className="p-8 text-center text-neutral-500">No hay muestras programadas</td></tr>
                 ) : (
                   muestras.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(muestra => {
                     const config = estadoMuestraConfig[muestra.estado] || estadoMuestraConfig.pendiente;
@@ -17318,6 +17605,10 @@ Firma repartidor: _________________
 
                     return (
                       <tr key={muestra.id} className="border-t hover:bg-neutral-50">
+                        <td className="p-4">
+                          <p className="font-black text-sm text-neutral-900">#{muestra.id}</p>
+                          <p className="text-xs text-neutral-400">{muestra.created_at ? formatDate(muestra.created_at) : ''}</p>
+                        </td>
                         <td className="p-4">
                           <div>
                             <p className="font-semibold">{muestra.empresa || muestra.nombre_contacto}</p>
@@ -17346,36 +17637,45 @@ Firma repartidor: _________________
                             {/* Botón de etiquetas */}
                             <button 
                               onClick={() => {
-                                // Generar etiqueta ZPL para muestra
+                                // Generar etiqueta ZPL currada para cada producto de la muestra
                                 const itemsMuestra = muestraItems.filter(i => i.muestra_id === muestra.id);
-                                const productosEtiqueta = itemsMuestra.map(i => {
-                                  const prod = productos.find(p => p.id === i.producto_id);
-                                  return `${prod?.nombre || '?'} x${i.cantidad}`;
-                                }).join(', ');
                                 
-                                const zpl = [
-                                  '^XA',
-                                  '^CF0,25',
-                                  '^FO20,20^FDMuestra RootFlow^FS',
-                                  '^CF0,20',
-                                  `^FO20,55^FD${muestra.empresa || muestra.nombre_contacto}^FS`,
-                                  '^CF0,16',
-                                  `^FO20,85^FD${productosEtiqueta.substring(0, 40)}^FS`,
-                                  `^FO20,110^FDFecha: ${formatDate(muestra.fecha_entrega)}^FS`,
-                                  '^FO20,135^FDwww.rootflow.es^FS',
-                                  '^XZ'
-                                ].join('\n');
+                                let zplCompleto = '';
+                                if (itemsMuestra.length === 0) {
+                                  // Sin items: una etiqueta genérica
+                                  zplCompleto = generarZPLMuestra({
+                                    ...muestra,
+                                    variedad: muestra.nombre || 'MUESTRA',
+                                    peso_gramos: 30,
+                                  }, 1);
+                                } else {
+                                  // Una etiqueta por cada unidad de cada producto
+                                  itemsMuestra.forEach(item => {
+                                    const prod = productos.find(p => p.id === item.producto_id);
+                                    const variedad = prod ? variedades.find(v => v.id === prod.variedad_id) : null;
+                                    const nombreVar = variedad?.nombre || prod?.nombre || muestra.nombre || 'MUESTRA';
+                                    const peso = prod?.formato_gramos || 30;
+                                    const cantidad = item.cantidad || 1;
+                                    for (let i = 0; i < cantidad; i++) {
+                                      zplCompleto += generarZPLMuestra({
+                                        ...muestra,
+                                        variedad: nombreVar,
+                                        peso_gramos: peso,
+                                      }, i + 1) + '\n';
+                                    }
+                                  });
+                                }
                                 
-                                const blob = new Blob([zpl], { type: 'text/plain' });
+                                const blob = new Blob([zplCompleto], { type: 'text/plain' });
                                 const url = URL.createObjectURL(blob);
                                 const a = document.createElement('a');
                                 a.href = url;
-                                a.download = `muestra-${muestra.id}-etiqueta.zpl`;
+                                a.download = `muestra-${muestra.id}-etiquetas.zpl`;
                                 a.click();
                                 URL.revokeObjectURL(url);
                               }}
                               className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" 
-                              title="Descargar etiqueta ZPL"
+                              title="Descargar etiquetas ZPL (50x40mm, una por producto)"
                             >
                               <Tag size={16} />
                             </button>
@@ -17990,6 +18290,31 @@ Firma repartidor: _________________
               setShowModal(null);
               setEditingItem(null);
               alert(`✅ Documento ${editingItem ? 'actualizado' : 'archivado'} correctamente`);
+            } catch (e) {
+              alert('❌ Error: ' + e.message);
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
+      
+      {/* Modal Recibo TPV */}
+      {showModal === 'reciboTpv' && <Modal title={editingItem ? 'Editar Recibo TPV' : 'Registrar Recibo TPV'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <ReciboTpvForm 
+          recibo={editingItem} 
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                const { error } = await supabase.from('recibos_tpv').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('recibos_tpv').insert(form);
+                if (error) throw error;
+              }
+              refetchRecibosTpv();
+              setShowModal(null);
+              setEditingItem(null);
+              alert(`✅ Recibo TPV ${editingItem ? 'actualizado' : 'registrado'} correctamente`);
             } catch (e) {
               alert('❌ Error: ' + e.message);
             }
