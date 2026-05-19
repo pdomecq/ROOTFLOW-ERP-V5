@@ -749,6 +749,8 @@ const MainApp = () => {
   const [calendarioTab, setCalendarioTab] = useState('eventos'); // 'eventos' | 'turnos'
   // V36 - Documentos corporativos
   const [docFiltroCat, setDocFiltroCat] = useState(null);
+  // V40 - Lead en seguimiento (panel abierto)
+  const [leadSeguimiento, setLeadSeguimiento] = useState(null);
   const [docSearch, setDocSearch] = useState('');
   const [calendarioVista, setCalendarioVista] = useState('mes'); // 'mes' | 'semana'
   const [calendarioSocioFiltro, setCalendarioSocioFiltro] = useState(null); // null = todos
@@ -1591,6 +1593,8 @@ const MainApp = () => {
   const { data: documentosCorpData, refetch: refetchDocumentosCorp } = useRealtime('documentos_corporativos');
   // V38 - Recibos TPV
   const { data: recibosTpvData, refetch: refetchRecibosTpv } = useRealtime('recibos_tpv');
+  // V40 - Seguimiento de leads
+  const { data: leadActividadesData, refetch: refetchLeadActividades } = useRealtime('lead_actividades');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1685,6 +1689,8 @@ const MainApp = () => {
   const documentosCorp = documentosCorpData || [];
   // V38 - Recibos TPV
   const recibosTpv = recibosTpvData || [];
+  // V40 - Seguimiento de leads
+  const leadActividades = leadActividadesData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -7931,6 +7937,49 @@ const MainApp = () => {
           })}
         </div>
 
+        {/* Banner: seguimientos pendientes hoy o atrasados */}
+        {(() => {
+          const hoy = new Date(); hoy.setHours(23,59,59,999);
+          // Próximas acciones pendientes (de la última actividad de cada lead)
+          const pendientes = [];
+          leads.forEach(lead => {
+            if (lead.estado === 'ganado' || lead.estado === 'perdido') return;
+            const acts = leadActividades.filter(a => a.lead_id === lead.id && a.proxima_fecha);
+            if (acts.length === 0) return;
+            // La más reciente con próxima fecha
+            const ultima = acts.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+            if (ultima.proxima_fecha && new Date(ultima.proxima_fecha) <= hoy) {
+              pendientes.push({ lead, actividad: ultima });
+            }
+          });
+          if (pendientes.length === 0) return null;
+          return (
+            <Card className="p-4 bg-red-50 border-red-200">
+              <h3 className="font-bold text-red-800 mb-2 flex items-center gap-2">
+                <Bell size={18} /> {pendientes.length} seguimiento{pendientes.length !== 1 ? 's' : ''} pendiente{pendientes.length !== 1 ? 's' : ''}
+              </h3>
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {pendientes.sort((a,b) => new Date(a.actividad.proxima_fecha) - new Date(b.actividad.proxima_fecha)).map(({ lead, actividad }) => (
+                  <button 
+                    key={lead.id}
+                    onClick={() => setLeadSeguimiento(lead)}
+                    className="w-full flex items-center justify-between gap-3 p-2 bg-white rounded-lg hover:bg-red-100 text-left text-sm"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="font-semibold text-neutral-900">{lead.nombre}</span>
+                      {lead.empresa && <span className="text-neutral-500"> · {lead.empresa}</span>}
+                      {actividad.proximo_paso && <p className="text-xs text-neutral-500 truncate">→ {actividad.proximo_paso}</p>}
+                    </div>
+                    <Badge className="bg-red-100 text-red-700 flex-shrink-0">
+                      {formatDate(actividad.proxima_fecha)}
+                    </Badge>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          );
+        })()}
+
         <Card className="p-4 flex items-center gap-4">
           <div className="flex-1 relative"><Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" /><input type="text" placeholder="Buscar lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 rounded-xl border focus:ring-2 focus:ring-orange-500 outline-none" /></div>
           {filterEstado !== 'todos' && <Button variant="ghost" size="sm" onClick={() => setFilterEstado('todos')}><X size={16} /> Limpiar filtro</Button>}
@@ -7973,6 +8022,26 @@ const MainApp = () => {
                     <td className="px-5 py-4 font-bold">{formatCurrency(lead.valor_estimado)}</td>
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-1">
+                        {(() => {
+                          const acts = leadActividades.filter(a => a.lead_id === lead.id);
+                          const numActs = acts.length;
+                          const proxPend = acts.filter(a => a.proxima_fecha && new Date(a.proxima_fecha) <= new Date() && a.tipo !== 'cambio_estado').length > 0
+                            || (lead.proximo_seguimiento && new Date(lead.proximo_seguimiento) <= new Date());
+                          return (
+                            <button 
+                              onClick={() => setLeadSeguimiento(lead)} 
+                              className={`relative p-2 rounded-lg ${proxPend ? 'text-red-600 bg-red-50 hover:bg-red-100' : numActs > 0 ? 'text-blue-600 hover:bg-blue-50' : 'text-neutral-400 hover:text-blue-600 hover:bg-blue-50'}`}
+                              title="Seguimiento / historial de gestiones"
+                            >
+                              <Phone size={16} />
+                              {numActs > 0 && (
+                                <span className={`absolute -top-1 -right-1 text-[9px] min-w-[16px] h-4 px-1 rounded-full text-white font-bold flex items-center justify-center ${proxPend ? 'bg-red-500' : 'bg-blue-500'}`}>
+                                  {numActs}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })()}
                         {lead.estado !== 'ganado' && lead.estado !== 'perdido' && <button onClick={() => handleConvertToClient(lead)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Convertir a cliente"><UserPlus size={16} /></button>}
                         <button onClick={() => { setEditingItem(lead); setShowModal('lead'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
                         <button onClick={() => handleDelete('leads', lead.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
@@ -14592,6 +14661,252 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== PANEL SEGUIMIENTO DE LEAD ====================
+  const tipoActividadConfig = {
+    llamada: { label: 'Llamada', icon: Phone, color: 'bg-blue-100 text-blue-700' },
+    email: { label: 'Email', icon: FileText, color: 'bg-indigo-100 text-indigo-700' },
+    whatsapp: { label: 'WhatsApp', icon: Phone, color: 'bg-green-100 text-green-700' },
+    reunion: { label: 'Reunión', icon: Users, color: 'bg-purple-100 text-purple-700' },
+    visita: { label: 'Visita', icon: MapPin, color: 'bg-orange-100 text-orange-700' },
+    muestra: { label: 'Muestra enviada', icon: Gift, color: 'bg-pink-100 text-pink-700' },
+    presupuesto: { label: 'Presupuesto', icon: Receipt, color: 'bg-amber-100 text-amber-700' },
+    nota: { label: 'Nota', icon: Edit2, color: 'bg-neutral-100 text-neutral-700' },
+    cambio_estado: { label: 'Cambio de estado', icon: TrendingUp, color: 'bg-cyan-100 text-cyan-700' },
+  };
+
+  const LeadSeguimientoPanel = ({ lead, onClose }) => {
+    const acts = leadActividades
+      .filter(a => a.lead_id === lead.id)
+      .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+    const sociosActivos = socios.filter(s => s.activo !== false);
+
+    const [nuevaAct, setNuevaAct] = useState({
+      tipo: 'llamada',
+      resumen: '',
+      resultado: 'neutro',
+      proximo_paso: '',
+      proxima_fecha: '',
+      socio_id: null,
+    });
+    const [guardando, setGuardando] = useState(false);
+
+    const guardarActividad = async () => {
+      if (!nuevaAct.resumen.trim()) { alert('Escribe un resumen de la interacción'); return; }
+      setGuardando(true);
+      try {
+        const { error } = await supabase.from('lead_actividades').insert({
+          lead_id: lead.id,
+          tipo: nuevaAct.tipo,
+          fecha: new Date().toISOString(),
+          resumen: nuevaAct.resumen.trim(),
+          resultado: nuevaAct.resultado,
+          proximo_paso: nuevaAct.proximo_paso || null,
+          proxima_fecha: nuevaAct.proxima_fecha || null,
+          socio_id: nuevaAct.socio_id,
+        });
+        if (error) throw error;
+
+        // Actualizar lead: última actividad + próximo seguimiento
+        await supabase.from('leads').update({
+          ultima_actividad: new Date().toISOString(),
+          proximo_seguimiento: nuevaAct.proxima_fecha || null,
+        }).eq('id', lead.id);
+
+        refetchLeadActividades();
+        refetchLeads();
+        setNuevaAct({ tipo: 'llamada', resumen: '', resultado: 'neutro', proximo_paso: '', proxima_fecha: '', socio_id: null });
+      } catch (e) {
+        alert('❌ Error: ' + e.message);
+      } finally {
+        setGuardando(false);
+      }
+    };
+
+    const cambiarEstadoLead = async (nuevoEstado) => {
+      const estadoAnterior = lead.estado;
+      if (estadoAnterior === nuevoEstado) return;
+      try {
+        await supabase.from('leads').update({ estado: nuevoEstado }).eq('id', lead.id);
+        await supabase.from('lead_actividades').insert({
+          lead_id: lead.id,
+          tipo: 'cambio_estado',
+          fecha: new Date().toISOString(),
+          resumen: `Estado cambiado: ${estadoLeadConfig[estadoAnterior]?.label || estadoAnterior} → ${estadoLeadConfig[nuevoEstado]?.label || nuevoEstado}`,
+          estado_anterior: estadoAnterior,
+          estado_nuevo: nuevoEstado,
+        });
+        refetchLeadActividades();
+        refetchLeads();
+        onClose();
+      } catch (e) {
+        alert('❌ Error: ' + e.message);
+      }
+    };
+
+    const resultadoColor = (r) => 
+      r === 'positivo' ? 'text-green-600' : 
+      r === 'negativo' ? 'text-red-600' : 
+      r === 'sin_respuesta' ? 'text-neutral-400' : 'text-amber-600';
+    const resultadoLabel = (r) => 
+      r === 'positivo' ? '👍 Positivo' : 
+      r === 'negativo' ? '👎 Negativo' : 
+      r === 'sin_respuesta' ? '🔇 Sin respuesta' : '😐 Neutro';
+
+    return (
+      <Modal title={`Seguimiento · ${lead.nombre}`} onClose={onClose} size="max-w-3xl">
+        <div className="space-y-5 max-h-[78vh] overflow-y-auto pr-1">
+          {/* Cabecera lead */}
+          <div className="flex items-start justify-between gap-3 p-3 bg-neutral-50 rounded-xl flex-wrap">
+            <div className="min-w-0">
+              <p className="font-bold text-neutral-900">{lead.nombre}</p>
+              <p className="text-sm text-neutral-500">{lead.empresa} · {lead.telefono} · {lead.email}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-neutral-500">Estado:</span>
+              <select 
+                value={lead.estado} 
+                onChange={e => cambiarEstadoLead(e.target.value)}
+                className="text-sm px-3 py-1.5 rounded-lg border border-neutral-300 font-semibold"
+              >
+                {Object.entries(estadoLeadConfig).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Registrar nueva interacción */}
+          <div className="border-2 border-orange-200 rounded-xl p-4 bg-orange-50/40">
+            <h3 className="font-bold text-neutral-900 mb-3 flex items-center gap-2">
+              <Plus size={16} className="text-orange-600" /> Registrar interacción
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+              <Select 
+                label="Tipo" 
+                value={nuevaAct.tipo} 
+                onChange={e => setNuevaAct({...nuevaAct, tipo: e.target.value})}
+                options={Object.entries(tipoActividadConfig).filter(([k]) => k !== 'cambio_estado').map(([k, v]) => ({ value: k, label: v.label }))}
+              />
+              <Select 
+                label="Resultado" 
+                value={nuevaAct.resultado} 
+                onChange={e => setNuevaAct({...nuevaAct, resultado: e.target.value})}
+                options={[
+                  { value: 'positivo', label: '👍 Positivo' },
+                  { value: 'neutro', label: '😐 Neutro' },
+                  { value: 'negativo', label: '👎 Negativo' },
+                  { value: 'sin_respuesta', label: '🔇 Sin respuesta' },
+                ]}
+              />
+              <Select 
+                label="Gestionado por" 
+                value={nuevaAct.socio_id || ''} 
+                onChange={e => setNuevaAct({...nuevaAct, socio_id: e.target.value ? parseInt(e.target.value) : null})}
+                options={[{ value: '', label: '—' }, ...sociosActivos.map(s => ({ value: s.id, label: s.nombre.split(' ')[0] }))]}
+              />
+            </div>
+            <div className="mb-3">
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">¿Qué se habló? *</label>
+              <textarea 
+                value={nuevaAct.resumen} 
+                onChange={e => setNuevaAct({...nuevaAct, resumen: e.target.value})}
+                className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+                rows={3}
+                placeholder="Ej: Hablé con el jefe de cocina. Le interesan los microbrotes para emplatado. Pidió muestra de rúcula y mostaza."
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+              <Input 
+                label="Próximo paso" 
+                value={nuevaAct.proximo_paso} 
+                onChange={e => setNuevaAct({...nuevaAct, proximo_paso: e.target.value})}
+                placeholder="Ej: Llevar muestra y enviar tarifa"
+              />
+              <Input 
+                label="Fecha de seguimiento" 
+                type="date"
+                value={nuevaAct.proxima_fecha} 
+                onChange={e => setNuevaAct({...nuevaAct, proxima_fecha: e.target.value})}
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={guardarActividad} disabled={guardando}>
+                {guardando ? 'Guardando...' : 'Registrar'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Timeline de actividades */}
+          <div>
+            <h3 className="font-bold text-neutral-900 mb-3">Historial ({acts.length})</h3>
+            {acts.length === 0 ? (
+              <p className="text-center text-neutral-400 text-sm py-6">
+                Aún no hay interacciones registradas con este lead.<br/>
+                Registra la primera gestión arriba.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {acts.map((a, idx) => {
+                  const cfg = tipoActividadConfig[a.tipo] || tipoActividadConfig.nota;
+                  const Icon = cfg.icon;
+                  const socio = socios.find(s => s.id === a.socio_id);
+                  return (
+                    <div key={a.id} className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className={`p-2 rounded-lg ${cfg.color} flex-shrink-0`}>
+                          <Icon size={14} />
+                        </div>
+                        {idx < acts.length - 1 && <div className="w-0.5 flex-1 bg-neutral-200 my-1" />}
+                      </div>
+                      <div className="flex-1 pb-3 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm">{cfg.label}</span>
+                          {a.tipo !== 'cambio_estado' && (
+                            <span className={`text-xs font-medium ${resultadoColor(a.resultado)}`}>
+                              {resultadoLabel(a.resultado)}
+                            </span>
+                          )}
+                          <span className="text-xs text-neutral-400">
+                            {new Date(a.fecha).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          {socio && <span className="text-xs text-neutral-500">· {socio.nombre.split(' ')[0]}</span>}
+                        </div>
+                        <p className="text-sm text-neutral-700 mt-1">{a.resumen}</p>
+                        {a.proximo_paso && (
+                          <div className="mt-2 flex items-center gap-2 text-xs bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                            <Target size={12} className="text-amber-600 flex-shrink-0" />
+                            <span className="text-amber-800"><strong>Siguiente:</strong> {a.proximo_paso}</span>
+                            {a.proxima_fecha && (
+                              <Badge className={`ml-auto ${new Date(a.proxima_fecha) <= new Date() ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                {formatDate(a.proxima_fecha)}
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                        <button 
+                          onClick={async () => {
+                            if (window.confirm('¿Eliminar esta entrada del historial?')) {
+                              await supabase.from('lead_actividades').delete().eq('id', a.id);
+                              refetchLeadActividades();
+                            }
+                          }}
+                          className="text-xs text-neutral-400 hover:text-red-500 mt-1"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </Modal>
+    );
+  };
+
   // ==================== RECIBO TPV FORM ====================
   const ReciboTpvForm = ({ recibo, onSave, onCancel }) => {
     const initialForm = recibo || {
@@ -18166,6 +18481,9 @@ Firma repartidor: _________________
       {/* Modals */}
       {showModal === 'cliente' && <Modal title={editingItem ? 'Editar Cliente' : 'Nuevo Cliente'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ClienteForm cliente={editingItem} onSave={form => handleSave('clientes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lead' && <Modal title={editingItem ? 'Editar Lead' : 'Nuevo Lead'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LeadForm lead={editingItem} onSave={form => handleSave('leads', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      
+      {/* Panel de seguimiento de lead (prospecting) */}
+      {leadSeguimiento && <LeadSeguimientoPanel lead={leadSeguimiento} onClose={() => setLeadSeguimiento(null)} />}
       {showModal === 'producto' && <Modal title={editingItem ? 'Editar Producto' : 'Nuevo Producto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProductoForm producto={editingItem} onSave={form => handleSave('productos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido' && <Modal title={editingItem ? 'Editar Pedido' : 'Nuevo Pedido'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoForm pedido={editingItem} onSave={handleCreatePedido} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
