@@ -9386,114 +9386,110 @@ ${transacciones}
           );
         })()}
 
-        {/* ============ SECCIÓN RECIBOS TPV ============ */}
+        {/* ============ SECCIÓN RECIBOS TPV (compacta, desplegable) ============ */}
         {(() => {
           const recibosPeriodo = filtrarPorPeriodo(recibosTpv, 'fecha', filtroFacturasMes);
           const totalTpv = recibosPeriodo.reduce((s, r) => s + (r.importe || 0), 0);
           const conRecibo = recibosPeriodo.filter(r => r.archivo_url).length;
           
           return (
-            <Card className="p-5 border-2 border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50">
-              <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-violet-200 rounded-2xl">
-                    <CreditCard size={24} className="text-violet-700" />
+            <details className="group bg-white border border-violet-200 rounded-xl overflow-hidden">
+              <summary className="flex items-center justify-between gap-3 p-3 cursor-pointer hover:bg-violet-50 list-none">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-1.5 bg-violet-100 rounded-lg flex-shrink-0">
+                    <CreditCard size={16} className="text-violet-600" />
                   </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-violet-900">Recibos TPV / Venta directa</h3>
-                    <p className="text-xs text-violet-700">Cobros con datáfono, Bizum o efectivo a personas físicas (sin factura formal)</p>
+                  <div className="min-w-0">
+                    <span className="font-semibold text-sm text-violet-900">Recibos TPV / Venta directa</span>
+                    <span className="text-xs text-neutral-500 ml-2">
+                      {recibosPeriodo.length} recibo{recibosPeriodo.length !== 1 ? 's' : ''} · {formatCurrency(totalTpv)}
+                    </span>
                   </div>
                 </div>
-                <Button onClick={() => { setEditingItem(null); setShowModal('reciboTpv'); }} className="bg-violet-600 hover:bg-violet-700">
-                  <Plus size={16} /> Registrar recibo TPV
-                </Button>
-              </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button 
+                    onClick={(e) => { e.preventDefault(); setEditingItem(null); setShowModal('reciboTpv'); }} 
+                    className="text-xs px-2.5 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg font-medium flex items-center gap-1"
+                  >
+                    <Plus size={13} /> Nuevo
+                  </button>
+                  <ArrowDownRight size={16} className="text-neutral-400 transition-transform group-open:rotate-[-135deg]" />
+                </div>
+              </summary>
               
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-                <div className="bg-white rounded-xl p-4 border border-violet-200">
-                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">Total periodo</p>
-                  <p className="text-2xl font-black text-violet-900">{formatCurrency(totalTpv)}</p>
-                  <p className="text-xs text-violet-700">{recibosPeriodo.length} recibo{recibosPeriodo.length !== 1 ? 's' : ''}</p>
+              <div className="px-3 pb-3 border-t border-violet-100">
+                <div className="grid grid-cols-3 gap-2 my-3">
+                  <div className="bg-violet-50 rounded-lg p-2.5 text-center">
+                    <p className="text-[10px] text-violet-600 uppercase font-bold">Total</p>
+                    <p className="text-sm font-black text-violet-900">{formatCurrency(totalTpv)}</p>
+                  </div>
+                  <div className="bg-violet-50 rounded-lg p-2.5 text-center">
+                    <p className="text-[10px] text-violet-600 uppercase font-bold">Con recibo</p>
+                    <p className="text-sm font-black text-violet-900">{conRecibo}/{recibosPeriodo.length}</p>
+                  </div>
+                  <div className="bg-violet-50 rounded-lg p-2.5 text-center">
+                    <p className="text-[10px] text-violet-600 uppercase font-bold">IVA</p>
+                    <p className="text-sm font-black text-violet-900">{formatCurrency(recibosPeriodo.reduce((s, r) => s + (r.iva_importe || 0), 0))}</p>
+                  </div>
                 </div>
-                <div className="bg-white rounded-xl p-4 border border-violet-200">
-                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">Con justificante</p>
-                  <p className="text-2xl font-black text-violet-900">{conRecibo}/{recibosPeriodo.length}</p>
-                  <p className="text-xs text-violet-700">recibos archivados</p>
-                </div>
-                <div className="bg-white rounded-xl p-4 border border-violet-200">
-                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wide mb-1">IVA repercutido</p>
-                  <p className="text-2xl font-black text-violet-900">{formatCurrency(recibosPeriodo.reduce((s, r) => s + (r.iva_importe || 0), 0))}</p>
-                  <p className="text-xs text-violet-700">a declarar</p>
-                </div>
-              </div>
 
-              {recibosPeriodo.length > 0 && (
-                <div className="bg-white/70 rounded-xl border border-violet-200 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-left text-violet-700 border-b border-violet-200">
-                        <th className="p-2.5">Fecha</th>
-                        <th className="p-2.5">Concepto</th>
-                        <th className="p-2.5">Cliente</th>
-                        <th className="p-2.5">Método</th>
-                        <th className="p-2.5 text-right">Importe</th>
-                        <th className="p-2.5 text-center">Recibo</th>
-                        <th className="p-2.5 text-right">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recibosPeriodo.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(r => (
-                        <tr key={r.id} className="border-b border-violet-100 hover:bg-violet-50">
-                          <td className="p-2.5">{formatDate(r.fecha)}</td>
-                          <td className="p-2.5">{r.concepto || '—'}</td>
-                          <td className="p-2.5">{r.cliente_nombre || '—'}</td>
-                          <td className="p-2.5">
-                            <Badge className={
-                              r.metodo === 'tarjeta' ? 'bg-blue-100 text-blue-700' :
-                              r.metodo === 'bizum' ? 'bg-teal-100 text-teal-700' :
-                              'bg-green-100 text-green-700'
-                            }>
-                              {r.metodo === 'tarjeta' ? '💳 Tarjeta' : r.metodo === 'bizum' ? '📱 Bizum' : '💵 Efectivo'}
-                            </Badge>
-                          </td>
-                          <td className="p-2.5 text-right font-semibold">{formatCurrency(r.importe)}</td>
-                          <td className="p-2.5 text-center">
-                            {r.archivo_url ? (
-                              <a href={r.archivo_url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:text-violet-800 inline-flex">
-                                <FileText size={16} />
-                              </a>
-                            ) : (
-                              <span className="text-neutral-300">—</span>
-                            )}
-                          </td>
-                          <td className="p-2.5">
-                            <div className="flex justify-end gap-1">
-                              <button onClick={() => { setEditingItem(r); setShowModal('reciboTpv'); }} className="p-1.5 text-neutral-400 hover:text-violet-600 hover:bg-violet-50 rounded">
-                                <Edit2 size={13} />
-                              </button>
-                              <button 
-                                onClick={async () => {
-                                  if (window.confirm(`¿Eliminar el recibo TPV de ${formatCurrency(r.importe)}?`)) {
-                                    await supabase.from('recibos_tpv').delete().eq('id', r.id);
-                                    refetchRecibosTpv();
-                                  }
-                                }} 
-                                className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </td>
+                {recibosPeriodo.length > 0 ? (
+                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-white">
+                        <tr className="text-left text-violet-700 border-b border-violet-200">
+                          <th className="p-2">Fecha</th>
+                          <th className="p-2">Concepto</th>
+                          <th className="p-2">Método</th>
+                          <th className="p-2 text-right">Importe</th>
+                          <th className="p-2 text-center">Recibo</th>
+                          <th className="p-2"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {recibosPeriodo.length === 0 && (
-                <p className="text-center text-violet-400 text-sm py-4">No hay recibos TPV registrados en este periodo</p>
-              )}
-            </Card>
+                      </thead>
+                      <tbody>
+                        {recibosPeriodo.sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map(r => (
+                          <tr key={r.id} className="border-b border-violet-50 hover:bg-violet-50">
+                            <td className="p-2 whitespace-nowrap">{formatDate(r.fecha)}</td>
+                            <td className="p-2">{r.concepto || '—'}{r.cliente_nombre ? ` · ${r.cliente_nombre}` : ''}</td>
+                            <td className="p-2 whitespace-nowrap">
+                              {r.metodo === 'tarjeta' ? '💳' : r.metodo === 'bizum' ? '📱' : '💵'} {r.metodo}
+                            </td>
+                            <td className="p-2 text-right font-semibold whitespace-nowrap">{formatCurrency(r.importe)}</td>
+                            <td className="p-2 text-center">
+                              {r.archivo_url ? (
+                                <a href={r.archivo_url} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:text-violet-800 inline-flex">
+                                  <FileText size={14} />
+                                </a>
+                              ) : <span className="text-neutral-300">—</span>}
+                            </td>
+                            <td className="p-2">
+                              <div className="flex justify-end gap-0.5">
+                                <button onClick={() => { setEditingItem(r); setShowModal('reciboTpv'); }} className="p-1 text-neutral-400 hover:text-violet-600 rounded">
+                                  <Edit2 size={12} />
+                                </button>
+                                <button 
+                                  onClick={async () => {
+                                    if (window.confirm(`¿Eliminar el recibo TPV de ${formatCurrency(r.importe)}?`)) {
+                                      await supabase.from('recibos_tpv').delete().eq('id', r.id);
+                                      refetchRecibosTpv();
+                                    }
+                                  }} 
+                                  className="p-1 text-neutral-400 hover:text-red-600 rounded"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-center text-violet-400 text-xs py-3">No hay recibos TPV en este periodo</p>
+                )}
+              </div>
+            </details>
           );
         })()}
 
