@@ -1595,6 +1595,11 @@ const MainApp = () => {
   const { data: recibosTpvData, refetch: refetchRecibosTpv } = useRealtime('recibos_tpv');
   // V40 - Seguimiento de leads
   const { data: leadActividadesData, refetch: refetchLeadActividades } = useRealtime('lead_actividades');
+  // V42 - Eventos personalizados de calendario
+  const { data: eventosCalData, refetch: refetchEventosCal } = useRealtime('eventos_calendario');
+  // V41 - Racks y ubicación de bandejas
+  const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
+  const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
 
   // Función para refrescar todo
   const refetchAll = () => {
@@ -1691,6 +1696,11 @@ const MainApp = () => {
   const recibosTpv = recibosTpvData || [];
   // V40 - Seguimiento de leads
   const leadActividades = leadActividadesData || [];
+  // V42 - Eventos personalizados de calendario
+  const eventosCal = eventosCalData || [];
+  // V41 - Racks y ubicación
+  const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  const loteBandejas = loteBandejasData || [];
 
   // Combinar asientos con sus líneas
   const asientosContables = useMemo(() => {
@@ -4905,6 +4915,323 @@ const MainApp = () => {
     );
   };
 
+  // ==================== FORM CONFIGURACIÓN DE RACK ====================
+  const RackConfigForm = ({ rack, onSave, onCancel }) => {
+    const [form, setForm] = useState(rack || {
+      codigo: '',
+      nombre: '',
+      num_baldas: 4,
+      bandejas_por_balda: 6,
+      tamano_bandeja: '1020',
+      pos_x: 0,
+      pos_y: 0,
+      color: '#22C55E',
+      notas: '',
+      activo: true,
+      orden: racksConfig.length + 1,
+    });
+
+    const colores = ['#22C55E', '#3B82F6', '#F97316', '#8B5CF6', '#EC4899', '#14B8A6', '#EF4444', '#EAB308'];
+    const totalBandejas = (form.num_baldas || 0) * (form.bandejas_por_balda || 0);
+
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Código *" value={form.codigo} onChange={e => setForm({...form, codigo: e.target.value.toUpperCase()})} placeholder="A, B, C1..." />
+          <Input label="Nombre" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Rack A - Germinación" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Nº de baldas (estantes) *</label>
+            <input type="number" min="1" max="20" value={form.num_baldas} onChange={e => setForm({...form, num_baldas: parseInt(e.target.value) || 1})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Bandejas por balda *</label>
+            <input type="number" min="1" max="30" value={form.bandejas_por_balda} onChange={e => setForm({...form, bandejas_por_balda: parseInt(e.target.value) || 1})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300" />
+          </div>
+        </div>
+
+        <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+          <p className="text-sm text-green-700">Este rack tendrá <strong className="text-2xl text-green-800">{totalBandejas}</strong> bandejas en total</p>
+        </div>
+
+        <Select 
+          label="Tamaño de bandeja" 
+          value={form.tamano_bandeja} 
+          onChange={e => setForm({...form, tamano_bandeja: e.target.value})}
+          options={[
+            { value: '1020', label: '1020 estándar (25x50 cm)' },
+            { value: 'medio', label: 'Media bandeja (25x25 cm)' },
+            { value: 'cuarto', label: 'Cuarto de bandeja' },
+            { value: 'grande', label: 'Grande (40x60 cm)' },
+            { value: 'custom', label: 'Otro / personalizado' },
+          ]}
+        />
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Posición en el mapa visual</label>
+          <p className="text-xs text-neutral-500 mb-2">Coordenadas en la rejilla del mapa de ocupación (0 = primera columna/fila)</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-neutral-500">Columna (X)</label>
+              <input type="number" min="0" max="10" value={form.pos_x} onChange={e => setForm({...form, pos_x: parseInt(e.target.value) || 0})} className="w-full px-3 py-2 rounded-lg border border-neutral-300" />
+            </div>
+            <div>
+              <label className="text-xs text-neutral-500">Fila (Y)</label>
+              <input type="number" min="0" max="10" value={form.pos_y} onChange={e => setForm({...form, pos_y: parseInt(e.target.value) || 0})} className="w-full px-3 py-2 rounded-lg border border-neutral-300" />
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Color identificativo</label>
+          <div className="flex gap-2 flex-wrap">
+            {colores.map(c => (
+              <button key={c} type="button" onClick={() => setForm({...form, color: c})} className={`w-9 h-9 rounded-lg transition-all ${form.color === c ? 'ring-2 ring-offset-2 ring-neutral-900 scale-110' : ''}`} style={{ backgroundColor: c }} />
+            ))}
+          </div>
+        </div>
+
+        {/* PREVIEW VISUAL del rack */}
+        <div className="border-2 rounded-xl p-4" style={{ borderColor: form.color }}>
+          <div className="flex items-center justify-between mb-3">
+            <p className="font-bold text-sm" style={{ color: form.color }}>
+              👁️ Vista previa: {form.nombre || (form.codigo ? `Rack ${form.codigo}` : 'Rack sin código')}
+            </p>
+            <span className="text-xs text-neutral-500">{totalBandejas} bandejas</span>
+          </div>
+          <div className="space-y-1.5">
+            {Array.from({ length: Math.min(form.num_baldas || 1, 20) }, (_, bi) => {
+              const balda = (form.num_baldas || 1) - bi;
+              return (
+                <div key={balda} className="flex items-center gap-2">
+                  <span className="text-[10px] text-neutral-400 w-12 flex-shrink-0">Balda {balda}</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {Array.from({ length: Math.min(form.bandejas_por_balda || 1, 30) }, (_, pi) => (
+                      <div 
+                        key={pi}
+                        className="w-7 h-7 rounded text-[8px] flex items-center justify-center font-mono text-white"
+                        style={{ backgroundColor: form.color }}
+                        title={`${form.codigo || '?'}-${balda}-${pi+1}`}
+                      >
+                        {pi + 1}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-neutral-400 mt-3 font-mono">
+            Códigos de bandeja: <strong>{form.codigo || 'X'}-[balda]-[posición]</strong> (ej: {form.codigo || 'X'}-1-1, {form.codigo || 'X'}-2-3...)
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300" rows={2} placeholder="Ubicación física, condiciones, etc." />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.codigo?.trim()) { alert('El código es obligatorio'); return; }
+            onSave(form);
+          }}>{rack ? 'Guardar cambios' : 'Crear rack'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== SELECTOR RÁPIDO POR DESPLEGABLES ====================
+  const QuickRackPicker = ({ racksActivos, ubicaciones, setUbicaciones, loteIdActual, maxBandejas }) => {
+    const [rackSel, setRackSel] = useState(racksActivos[0]?.id || null);
+    const [baldaSel, setBaldaSel] = useState(1);
+    const rack = racksActivos.find(r => r.id === rackSel);
+
+    const ocupadasOtros = {};
+    loteBandejas.forEach(lb => {
+      if (lb.lote_id === loteIdActual) return;
+      ocupadasOtros[`${lb.rack_id}-${lb.balda}-${lb.posicion}`] = lb.lote_id;
+    });
+
+    const addRango = () => {
+      if (!rack) return;
+      const porBalda = rack.bandejas_por_balda || 6;
+      const nuevas = [...ubicaciones];
+      let añadidas = 0;
+      for (let pos = 1; pos <= porBalda; pos++) {
+        const key = `${rack.id}-${baldaSel}-${pos}`;
+        if (ocupadasOtros[key]) continue;
+        if (nuevas.some(s => s.rack_id === rack.id && s.balda === baldaSel && s.posicion === pos)) continue;
+        if (maxBandejas && nuevas.length >= maxBandejas) break;
+        nuevas.push({ rack_id: rack.id, rack_codigo: rack.codigo, balda: baldaSel, posicion: pos, codigo_ubicacion: `${rack.codigo}-${baldaSel}-${pos}` });
+        añadidas++;
+      }
+      setUbicaciones(nuevas);
+      if (añadidas === 0) alert('No quedan bandejas libres en esa balda (o ya alcanzaste el máximo).');
+    };
+
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-2">
+          <Select label="Rack" value={rackSel || ''} onChange={e => setRackSel(parseInt(e.target.value))} options={racksActivos.map(r => ({ value: r.id, label: r.nombre || `Rack ${r.codigo}` }))} />
+          <Select label="Balda" value={baldaSel} onChange={e => setBaldaSel(parseInt(e.target.value))} options={Array.from({ length: rack?.num_baldas || 4 }, (_, i) => ({ value: i + 1, label: `Balda ${i + 1}` }))} />
+          <div className="flex items-end">
+            <Button type="button" size="sm" onClick={addRango} className="w-full">+ Llenar balda</Button>
+          </div>
+        </div>
+        {ubicaciones.length > 0 && (
+          <div className="bg-white border border-green-200 rounded-lg p-2">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-xs font-bold text-green-700">{ubicaciones.length} bandejas</p>
+              <button type="button" onClick={() => setUbicaciones([])} className="text-xs text-red-500 hover:underline">Limpiar todo</button>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {ubicaciones.sort((a,b) => (a.codigo_ubicacion||'').localeCompare(b.codigo_ubicacion||'')).map(s => (
+                <span key={s.codigo_ubicacion} className="text-xs px-1.5 py-0.5 bg-green-50 border border-green-300 rounded font-mono flex items-center gap-1">
+                  {s.codigo_ubicacion}
+                  <button type="button" onClick={() => setUbicaciones(ubicaciones.filter(u => u.codigo_ubicacion !== s.codigo_ubicacion))} className="text-red-400 hover:text-red-600">×</button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ==================== SELECTOR VISUAL DE BANDEJAS EN RACKS ====================
+  // Muestra los racks como rejillas. El usuario hace clic en bandejas libres
+  // para asignarlas al lote. Las ocupadas (por otros lotes) se ven bloqueadas.
+  const RackBandejaSelector = ({ seleccionadas, onChange, loteIdActual, maxBandejas }) => {
+    // seleccionadas = array de objetos { rack_id, rack_codigo, balda, posicion, codigo_ubicacion }
+    const racksActivos = racksConfig.filter(r => r.activo !== false);
+    
+    if (racksActivos.length === 0) {
+      return (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          ⚠️ No hay racks configurados todavía. Ve a <strong>Producción → Racks</strong> para definir tu layout físico (racks, baldas y bandejas), o guarda el lote sin ubicación por ahora.
+        </div>
+      );
+    }
+
+    // Mapa de bandejas ocupadas por OTROS lotes (no el actual)
+    const ocupadasOtros = {};
+    loteBandejas.forEach(lb => {
+      if (lb.lote_id === loteIdActual) return;
+      ocupadasOtros[`${lb.rack_id}-${lb.balda}-${lb.posicion}`] = lb.lote_id;
+    });
+
+    const estaSeleccionada = (rackId, balda, pos) => 
+      seleccionadas.some(s => s.rack_id === rackId && s.balda === balda && s.posicion === pos);
+
+    const toggleBandeja = (rack, balda, pos) => {
+      const key = `${rack.id}-${balda}-${pos}`;
+      if (ocupadasOtros[key]) return; // ocupada por otro, no tocar
+      
+      const yaSel = estaSeleccionada(rack.id, balda, pos);
+      if (yaSel) {
+        onChange(seleccionadas.filter(s => !(s.rack_id === rack.id && s.balda === balda && s.posicion === pos)));
+      } else {
+        if (maxBandejas && seleccionadas.length >= maxBandejas) {
+          alert(`Ya has seleccionado ${maxBandejas} bandeja(s), que es lo que ocupa este lote. Deselecciona alguna si quieres cambiarla.`);
+          return;
+        }
+        onChange([...seleccionadas, {
+          rack_id: rack.id,
+          rack_codigo: rack.codigo,
+          balda,
+          posicion: pos,
+          codigo_ubicacion: `${rack.codigo}-${balda}-${pos}`,
+        }]);
+      }
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-4 text-xs flex-wrap">
+          <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-neutral-100 border border-neutral-300" /> Libre</span>
+          <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-orange-500" /> Esta siembra</span>
+          <span className="flex items-center gap-1.5"><span className="w-4 h-4 rounded bg-red-200 border border-red-300" /> Ocupada (otro lote)</span>
+          {maxBandejas && (
+            <span className="ml-auto font-semibold text-neutral-700">
+              {seleccionadas.length} / {maxBandejas} bandejas asignadas
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-4 max-h-[420px] overflow-y-auto pr-1">
+          {racksActivos.map(rack => {
+            const baldas = rack.num_baldas || 4;
+            const porBalda = rack.bandejas_por_balda || 6;
+            const selEnRack = seleccionadas.filter(s => s.rack_id === rack.id).length;
+            return (
+              <div key={rack.id} className="border-2 rounded-xl p-3" style={{ borderColor: rack.color || '#22C55E' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full" style={{ backgroundColor: rack.color || '#22C55E' }} />
+                    <span className="font-bold text-sm">{rack.nombre || `Rack ${rack.codigo}`}</span>
+                    <span className="text-xs text-neutral-400">({rack.tamano_bandeja})</span>
+                  </div>
+                  {selEnRack > 0 && <Badge className="bg-orange-100 text-orange-700">{selEnRack} aquí</Badge>}
+                </div>
+                <div className="space-y-1.5">
+                  {Array.from({ length: baldas }, (_, bi) => {
+                    const balda = baldas - bi; // mostrar de arriba (balda alta) a abajo
+                    return (
+                      <div key={balda} className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-neutral-400 w-12 flex-shrink-0">Balda {balda}</span>
+                        <div className="flex gap-1.5 flex-wrap">
+                          {Array.from({ length: porBalda }, (_, pi) => {
+                            const pos = pi + 1;
+                            const key = `${rack.id}-${balda}-${pos}`;
+                            const ocupadaOtro = ocupadasOtros[key];
+                            const sel = estaSeleccionada(rack.id, balda, pos);
+                            return (
+                              <button
+                                key={pos}
+                                type="button"
+                                onClick={() => toggleBandeja(rack, balda, pos)}
+                                disabled={!!ocupadaOtro}
+                                title={ocupadaOtro ? `Ocupada por lote #${ocupadaOtro}` : `${rack.codigo}-${balda}-${pos}`}
+                                className={`w-9 h-9 rounded text-[10px] font-bold flex items-center justify-center transition-all ${
+                                  sel ? 'bg-orange-500 text-white shadow-md scale-105' :
+                                  ocupadaOtro ? 'bg-red-200 text-red-400 cursor-not-allowed' :
+                                  'bg-neutral-100 border border-neutral-300 text-neutral-500 hover:bg-orange-100 hover:border-orange-300'
+                                }`}
+                              >
+                                {pos}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {seleccionadas.length > 0 && (
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+            <p className="text-xs font-bold text-orange-700 uppercase mb-1">Ubicaciones seleccionadas</p>
+            <div className="flex flex-wrap gap-1.5">
+              {seleccionadas.sort((a,b) => (a.codigo_ubicacion || '').localeCompare(b.codigo_ubicacion || '')).map(s => (
+                <span key={s.codigo_ubicacion} className="text-xs px-2 py-1 bg-white border border-orange-300 rounded-lg font-mono font-semibold text-orange-800">
+                  {s.codigo_ubicacion}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const LoteForm = ({ lote, onSave, onCancel }) => {
     const initialForm = { 
       variedad_id: lote?.variedad_id || (variedades.length > 0 ? variedades[0].id : null),
@@ -4919,6 +5246,14 @@ const MainApp = () => {
     };
     const [form, setForm, clearFormStorage] = useFormPersistence(`lote_${lote?.id || 'new'}`, initialForm, !lote);
     const [modoCalculo, setModoCalculo] = useState('bandejas'); // 'bandejas' | 'gramos'
+    // V41 - Ubicación física en racks
+    const [ubicaciones, setUbicaciones] = useState(() => {
+      if (!lote?.id) return [];
+      return loteBandejas
+        .filter(lb => lb.lote_id === lote.id)
+        .map(lb => ({ rack_id: lb.rack_id, rack_codigo: lb.rack_codigo, balda: lb.balda, posicion: lb.posicion, codigo_ubicacion: lb.codigo_ubicacion }));
+    });
+    const [modoUbicacion, setModoUbicacion] = useState('visual'); // 'visual' | 'rapido' | 'ninguno'
     
     const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
@@ -5076,6 +5411,53 @@ const MainApp = () => {
 
         <Select label="Estado" value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} options={Object.entries(estadoLoteConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
 
+        {/* ============ UBICACIÓN FÍSICA (TRAZABILIDAD) ============ */}
+        <div className="border-2 border-green-200 rounded-xl p-4 bg-green-50/40">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <MapPin size={18} className="text-green-600" />
+              <span className="font-bold text-neutral-900">Ubicación física</span>
+              {ubicaciones.length > 0 && <Badge className="bg-green-100 text-green-700">{ubicaciones.length} bandeja{ubicaciones.length !== 1 ? 's' : ''}</Badge>}
+            </div>
+            <div className="flex gap-1 p-1 bg-white rounded-lg border">
+              <button type="button" onClick={() => setModoUbicacion('visual')} className={`px-2.5 py-1 rounded text-xs font-medium ${modoUbicacion === 'visual' ? 'bg-green-500 text-white' : 'text-neutral-600'}`}>🗺️ Visual</button>
+              <button type="button" onClick={() => setModoUbicacion('rapido')} className={`px-2.5 py-1 rounded text-xs font-medium ${modoUbicacion === 'rapido' ? 'bg-green-500 text-white' : 'text-neutral-600'}`}>⌨️ Rápido</button>
+              <button type="button" onClick={() => setModoUbicacion('ninguno')} className={`px-2.5 py-1 rounded text-xs font-medium ${modoUbicacion === 'ninguno' ? 'bg-neutral-400 text-white' : 'text-neutral-600'}`}>Sin ubicar</button>
+            </div>
+          </div>
+
+          {modoUbicacion === 'visual' && (
+            <>
+              <p className="text-xs text-neutral-500 mb-3">
+                Haz clic en las bandejas donde vas a sembrar este lote ({form.bandejas} bandeja{form.bandejas !== 1 ? 's' : ''}).
+              </p>
+              <RackBandejaSelector 
+                seleccionadas={ubicaciones} 
+                onChange={setUbicaciones} 
+                loteIdActual={lote?.id}
+                maxBandejas={form.bandejas}
+              />
+            </>
+          )}
+
+          {modoUbicacion === 'rapido' && (
+            <div className="space-y-3">
+              <p className="text-xs text-neutral-500">Selecciona rack y rango de bandejas con desplegables (más rápido para lotes grandes).</p>
+              {(() => {
+                const racksActivos = racksConfig.filter(r => r.activo !== false);
+                if (racksActivos.length === 0) {
+                  return <p className="text-sm text-amber-700">No hay racks configurados. Ve a Producción → Racks.</p>;
+                }
+                return <QuickRackPicker racksActivos={racksActivos} ubicaciones={ubicaciones} setUbicaciones={setUbicaciones} loteIdActual={lote?.id} maxBandejas={form.bandejas} />;
+              })()}
+            </div>
+          )}
+
+          {modoUbicacion === 'ninguno' && (
+            <p className="text-sm text-neutral-500 italic">El lote se guardará sin ubicación física asignada. Podrás asignarla luego editándolo.</p>
+          )}
+        </div>
+
         <div>
           <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
           <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={2} placeholder="Observaciones del cultivo..." />
@@ -5097,6 +5479,16 @@ const MainApp = () => {
             }
             // limpiar campos que no van a BD
             delete dataToSave.gramos_objetivo;
+            // V41 - resumen de ubicación + adjuntar ubicaciones para persistir
+            if (ubicaciones.length > 0) {
+              const codigos = ubicaciones.map(u => u.codigo_ubicacion).sort();
+              dataToSave.ubicacion_resumen = codigos.length <= 3 
+                ? codigos.join(', ') 
+                : `${codigos[0]} … ${codigos[codigos.length-1]} (${codigos.length})`;
+            } else {
+              dataToSave.ubicacion_resumen = null;
+            }
+            dataToSave.__ubicaciones = ubicaciones;
             handleSaveWithClear(dataToSave);
           }}>{lote ? 'Guardar' : 'Sembrar Lote'}</Button>
         </div>
@@ -11008,6 +11400,12 @@ ${logoRootflow}^FS
           >
             <ClipboardList size={18} />Recetas
           </button>
+          <button 
+            onClick={() => setProduccionTab('racks')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'racks' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Building2 size={18} />Racks
+          </button>
         </div>
 
         {produccionTab === 'lotes' && (
@@ -11550,6 +11948,151 @@ ${logoRootflow}^FS
             )}
           </div>
         )}
+
+        {/* ============ PESTAÑA RACKS ============ */}
+        {produccionTab === 'racks' && (
+          <div className="space-y-5">
+            {/* Editor de configuración */}
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">⚙️ Configuración de racks</h3>
+                  <p className="text-xs text-neutral-500">Define tu layout físico: racks, baldas, bandejas por balda y posición en el mapa</p>
+                </div>
+                <Button onClick={() => { setEditingItem(null); setShowModal('rackConfig'); }}>
+                  <Plus size={16} /> Nuevo rack
+                </Button>
+              </div>
+
+              {racksConfig.length === 0 ? (
+                <div className="text-center py-10">
+                  <Building2 size={48} className="mx-auto text-neutral-300 mb-3" />
+                  <p className="text-neutral-500 mb-1 font-medium">No hay racks configurados</p>
+                  <p className="text-xs text-neutral-400 mb-4">Crea tu primer rack para empezar a ubicar bandejas con trazabilidad</p>
+                  <Button onClick={() => { setEditingItem(null); setShowModal('rackConfig'); }}><Plus size={16} /> Crear primer rack</Button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {racksConfig.map(rack => {
+                    const totalBandejas = (rack.num_baldas || 0) * (rack.bandejas_por_balda || 0);
+                    const ocupadas = loteBandejas.filter(lb => lb.rack_id === rack.id).length;
+                    const pct = totalBandejas > 0 ? Math.round((ocupadas / totalBandejas) * 100) : 0;
+                    return (
+                      <div key={rack.id} className="border-2 rounded-xl p-4" style={{ borderColor: rack.color || '#22C55E' }}>
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="w-4 h-4 rounded-full" style={{ backgroundColor: rack.color || '#22C55E' }} />
+                            <div>
+                              <p className="font-bold text-neutral-900">{rack.nombre || `Rack ${rack.codigo}`}</p>
+                              <p className="text-[10px] text-neutral-400 font-mono">Código: {rack.codigo}</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => { setEditingItem(rack); setShowModal('rackConfig'); }} className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded"><Edit2 size={13} /></button>
+                            <button 
+                              onClick={async () => {
+                                if (window.confirm(`¿Eliminar ${rack.nombre || rack.codigo}?\n\nLas bandejas asignadas a lotes quedarán sin rack.`)) {
+                                  await supabase.from('racks_config').delete().eq('id', rack.id);
+                                  refetchRacksConfig();
+                                }
+                              }} 
+                              className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center my-3">
+                          <div className="bg-neutral-50 rounded-lg p-2">
+                            <p className="text-lg font-black text-neutral-900">{rack.num_baldas}</p>
+                            <p className="text-[10px] text-neutral-500 uppercase">Baldas</p>
+                          </div>
+                          <div className="bg-neutral-50 rounded-lg p-2">
+                            <p className="text-lg font-black text-neutral-900">{rack.bandejas_por_balda}</p>
+                            <p className="text-[10px] text-neutral-500 uppercase">x balda</p>
+                          </div>
+                          <div className="bg-neutral-50 rounded-lg p-2">
+                            <p className="text-lg font-black text-neutral-900">{totalBandejas}</p>
+                            <p className="text-[10px] text-neutral-500 uppercase">Total</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-neutral-500 mb-1">Bandeja: <span className="font-semibold">{rack.tamano_bandeja}</span> · Mapa: ({rack.pos_x},{rack.pos_y})</p>
+                        <div className="w-full bg-neutral-100 rounded-full h-2 overflow-hidden mt-2">
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: rack.color || '#22C55E' }} />
+                        </div>
+                        <p className="text-[10px] text-neutral-500 mt-1">{ocupadas}/{totalBandejas} ocupadas ({pct}%)</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            {/* Mapa visual de ocupación */}
+            {racksConfig.length > 0 && (
+              <Card className="p-5">
+                <h3 className="text-lg font-bold text-neutral-900 mb-1">🗺️ Mapa de ocupación en tiempo real</h3>
+                <p className="text-xs text-neutral-500 mb-4">Qué hay sembrado ahora mismo en cada bandeja. Pasa el ratón para ver el lote.</p>
+                
+                <div className="flex items-center gap-4 text-xs mb-4 flex-wrap">
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-neutral-100 border border-neutral-300" /> Libre</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500" /> Ocupada</span>
+                </div>
+
+                <div 
+                  className="grid gap-4"
+                  style={{ gridTemplateColumns: `repeat(${Math.max(...racksConfig.map(r => (r.pos_x || 0) + 1), 1)}, minmax(0, 1fr))` }}
+                >
+                  {racksConfig.map(rack => {
+                    const baldas = rack.num_baldas || 4;
+                    const porBalda = rack.bandejas_por_balda || 6;
+                    return (
+                      <div 
+                        key={rack.id} 
+                        className="border-2 rounded-xl p-3" 
+                        style={{ 
+                          borderColor: rack.color || '#22C55E',
+                          gridColumn: (rack.pos_x || 0) + 1,
+                          gridRow: (rack.pos_y || 0) + 1,
+                        }}
+                      >
+                        <p className="font-bold text-sm mb-2 text-center" style={{ color: rack.color }}>{rack.nombre || `Rack ${rack.codigo}`}</p>
+                        <div className="space-y-1">
+                          {Array.from({ length: baldas }, (_, bi) => {
+                            const balda = baldas - bi;
+                            return (
+                              <div key={balda} className="flex items-center gap-1.5">
+                                <span className="text-[9px] text-neutral-400 w-3 flex-shrink-0">{balda}</span>
+                                <div className="flex gap-1 flex-wrap">
+                                  {Array.from({ length: porBalda }, (_, pi) => {
+                                    const pos = pi + 1;
+                                    const ocup = loteBandejas.find(lb => lb.rack_id === rack.id && lb.balda === balda && lb.posicion === pos);
+                                    const loteOcup = ocup ? lotes.find(l => l.id === ocup.lote_id) : null;
+                                    const variedadOcup = loteOcup ? variedades.find(v => v.id === loteOcup.variedad_id) : null;
+                                    return (
+                                      <div
+                                        key={pos}
+                                        title={ocup ? `${rack.codigo}-${balda}-${pos} · Lote #${ocup.lote_id}${variedadOcup ? ' · ' + variedadOcup.nombre : ''}` : `${rack.codigo}-${balda}-${pos} · Libre`}
+                                        className={`w-6 h-6 rounded text-[8px] flex items-center justify-center font-bold ${ocup ? 'text-white' : 'bg-neutral-100 border border-neutral-200 text-neutral-300'}`}
+                                        style={ocup ? { backgroundColor: variedadOcup ? '#16A34A' : '#22C55E' } : {}}
+                                      >
+                                        {ocup ? (variedadOcup?.nombre?.charAt(0).toUpperCase() || '●') : ''}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -11692,6 +12235,115 @@ ${logoRootflow}^FS
                 }).length
               } color="bg-amber-100 text-amber-600" />
             </div>
+
+            {/* === EVENTOS PERSONALIZADOS (ferias, reuniones, etc.) === */}
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">📌 Eventos y citas</h3>
+                  <p className="text-xs text-neutral-500">Ferias, reuniones, eventos de startups, visitas comerciales...</p>
+                </div>
+                <Button onClick={() => { setEditingItem(null); setShowModal('evento'); }}>
+                  <Plus size={16} /> Nuevo evento
+                </Button>
+              </div>
+
+              {(() => {
+                const hoy = new Date(); hoy.setHours(0,0,0,0);
+                const proximos = eventosCal
+                  .filter(e => new Date(e.fecha_fin || e.fecha_inicio) >= hoy)
+                  .sort((a, b) => new Date(a.fecha_inicio) - new Date(b.fecha_inicio));
+                const pasados = eventosCal
+                  .filter(e => new Date(e.fecha_fin || e.fecha_inicio) < hoy)
+                  .sort((a, b) => new Date(b.fecha_inicio) - new Date(a.fecha_inicio));
+
+                if (eventosCal.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-neutral-400">
+                      <Calendar size={36} className="mx-auto mb-2 opacity-40" />
+                      <p className="text-sm">No hay eventos programados</p>
+                      <p className="text-xs mt-1">Añade ferias, reuniones o eventos de networking</p>
+                    </div>
+                  );
+                }
+
+                const EventoCard = ({ ev, pasado }) => {
+                  const cfg = tipoEventoConfig[ev.tipo] || tipoEventoConfig.general;
+                  const socio = socios.find(s => s.id === ev.socio_id);
+                  const dias = Math.ceil((new Date(ev.fecha_inicio) - hoy) / (1000*60*60*24));
+                  return (
+                    <div className={`flex items-start gap-3 p-3 rounded-xl border ${pasado ? 'bg-neutral-50 border-neutral-200 opacity-60' : 'bg-white border-neutral-200 hover:shadow-sm'}`}>
+                      <div className="w-12 h-12 rounded-xl flex flex-col items-center justify-center text-white flex-shrink-0" style={{ backgroundColor: cfg.color }}>
+                        <span className="text-base leading-none">{cfg.emoji}</span>
+                        <span className="text-[9px] font-bold mt-0.5">{new Date(ev.fecha_inicio).getDate()}/{new Date(ev.fecha_inicio).getMonth()+1}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-sm text-neutral-900">{ev.titulo}</span>
+                          <Badge className="text-[10px]" style={{ backgroundColor: cfg.color + '22', color: cfg.color }}>{cfg.label}</Badge>
+                          {!pasado && dias <= 7 && dias >= 0 && (
+                            <Badge className="bg-orange-100 text-orange-700 text-[10px]">
+                              {dias === 0 ? '¡Hoy!' : dias === 1 ? 'Mañana' : `En ${dias}d`}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-neutral-500 mt-0.5">
+                          {formatDate(ev.fecha_inicio)}
+                          {ev.fecha_fin && ev.fecha_fin !== ev.fecha_inicio && ` → ${formatDate(ev.fecha_fin)}`}
+                          {ev.hora_inicio && !ev.todo_el_dia && ` · ${ev.hora_inicio.substring(0,5)}`}
+                          {ev.ubicacion && ` · 📍 ${ev.ubicacion}`}
+                          {socio && ` · ${socio.nombre.split(' ')[0]}`}
+                        </p>
+                        {ev.descripcion && <p className="text-xs text-neutral-500 mt-1 line-clamp-2">{ev.descripcion}</p>}
+                        <div className="flex gap-2 mt-2 flex-wrap">
+                          <a href={googleCalendarUrl(ev)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2 py-1 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 flex items-center gap-1">
+                            <Calendar size={11} /> Google Calendar
+                          </a>
+                          <button onClick={() => descargarICS(ev)} className="text-[11px] px-2 py-1 bg-neutral-100 text-neutral-600 rounded-md hover:bg-neutral-200 flex items-center gap-1">
+                            <Download size={11} /> .ics
+                          </button>
+                          {ev.url && (
+                            <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2 py-1 bg-neutral-100 text-neutral-600 rounded-md hover:bg-neutral-200">
+                              🔗 Enlace
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 flex-shrink-0">
+                        <button onClick={() => { setEditingItem(ev); setShowModal('evento'); }} className="p-1.5 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded">
+                          <Edit2 size={13} />
+                        </button>
+                        <button onClick={async () => {
+                          if (window.confirm(`¿Eliminar "${ev.titulo}"?`)) {
+                            await supabase.from('eventos_calendario').delete().eq('id', ev.id);
+                            refetchEventosCal();
+                          }
+                        }} className="p-1.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                };
+
+                return (
+                  <div className="space-y-2">
+                    {proximos.map(ev => <EventoCard key={ev.id} ev={ev} pasado={false} />)}
+                    {pasados.length > 0 && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-xs text-neutral-500 font-medium py-2">
+                          Ver eventos pasados ({pasados.length})
+                        </summary>
+                        <div className="space-y-2 mt-2">
+                          {pasados.slice(0, 10).map(ev => <EventoCard key={ev.id} ev={ev} pasado={true} />)}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
+            </Card>
+
 
             <Card className="p-6">
               <div className="flex items-center justify-between mb-6">
@@ -14661,6 +15313,178 @@ Firma repartidor: _________________
     );
   };
 
+  // ==================== EVENTOS CALENDARIO + GOOGLE CALENDAR ====================
+  const tipoEventoConfig = {
+    general: { label: 'General', emoji: '📌', color: '#F97316' },
+    feria: { label: 'Feria / Evento startups', emoji: '🎪', color: '#A855F7' },
+    reunion: { label: 'Reunión', emoji: '🤝', color: '#3B82F6' },
+    comercial: { label: 'Visita comercial', emoji: '💼', color: '#14B8A6' },
+    formacion: { label: 'Formación', emoji: '🎓', color: '#EAB308' },
+    administrativo: { label: 'Administrativo', emoji: '📋', color: '#6B7280' },
+    networking: { label: 'Networking', emoji: '🌐', color: '#EC4899' },
+    personal: { label: 'Personal', emoji: '👤', color: '#22C55E' },
+  };
+
+  // Genera enlace para añadir a Google Calendar directamente
+  const googleCalendarUrl = (ev) => {
+    const fmt = (fecha, hora, esFin) => {
+      if (!fecha) return '';
+      if (ev.todo_el_dia) {
+        const d = new Date(fecha);
+        if (esFin) d.setDate(d.getDate() + 1); // Google: fin exclusivo en all-day
+        return d.toISOString().slice(0, 10).replace(/-/g, '');
+      }
+      const h = hora || (esFin ? '18:00' : '09:00');
+      const dt = new Date(`${fecha}T${h}:00`);
+      return dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+    const inicio = fmt(ev.fecha_inicio, ev.hora_inicio, false);
+    const fin = fmt(ev.fecha_fin || ev.fecha_inicio, ev.hora_fin, true);
+    const params = new URLSearchParams({
+      action: 'TEMPLATE',
+      text: ev.titulo || 'Evento Rootflow',
+      dates: `${inicio}/${fin}`,
+      details: (ev.descripcion || '') + (ev.url ? `\n\nEnlace: ${ev.url}` : ''),
+      location: ev.ubicacion || '',
+    });
+    return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  };
+
+  // Genera y descarga un .ics (Apple Calendar, Outlook, importable a Google)
+  const descargarICS = (ev) => {
+    const fmt = (fecha, hora, esFin) => {
+      if (ev.todo_el_dia) {
+        const d = new Date(fecha);
+        if (esFin) d.setDate(d.getDate() + 1);
+        return ';VALUE=DATE:' + d.toISOString().slice(0, 10).replace(/-/g, '');
+      }
+      const h = hora || (esFin ? '18:00' : '09:00');
+      const dt = new Date(`${fecha}T${h}:00`);
+      return ':' + dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+    const uid = `rootflow-${ev.id || Date.now()}@rootflow.es`;
+    const ics = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Rootflow//ERP//ES',
+      'CALSCALE:GREGORIAN',
+      'BEGIN:VEVENT',
+      `UID:${uid}`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+      `DTSTART${fmt(ev.fecha_inicio, ev.hora_inicio, false)}`,
+      `DTEND${fmt(ev.fecha_fin || ev.fecha_inicio, ev.hora_fin, true)}`,
+      `SUMMARY:${(ev.titulo || 'Evento Rootflow').replace(/\n/g, ' ')}`,
+      ev.descripcion ? `DESCRIPTION:${ev.descripcion.replace(/\n/g, '\\n')}` : '',
+      ev.ubicacion ? `LOCATION:${ev.ubicacion}` : '',
+      ev.url ? `URL:${ev.url}` : '',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].filter(Boolean).join('\r\n');
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(ev.titulo || 'evento').replace(/[^a-zA-Z0-9]/g, '_')}.ics`;
+    a.click();
+  };
+
+  const EventoForm = ({ evento, onSave, onCancel }) => {
+    const initialForm = evento || {
+      titulo: '',
+      descripcion: '',
+      tipo: 'feria',
+      fecha_inicio: new Date().toISOString().split('T')[0],
+      hora_inicio: '',
+      fecha_fin: '',
+      hora_fin: '',
+      todo_el_dia: false,
+      ubicacion: '',
+      url: '',
+      socio_id: null,
+      recordatorio_slack: false,
+      recordatorio_dias_antes: 1,
+      notas: '',
+    };
+    const [form, setForm] = useState(initialForm);
+    const sociosActivos = socios.filter(s => s.activo !== false);
+
+    return (
+      <div className="space-y-4 max-h-[78vh] overflow-y-auto pr-1">
+        <Input label="Título del evento *" value={form.titulo} onChange={e => setForm({...form, titulo: e.target.value})} placeholder="Ej: South Summit Madrid 2026" />
+
+        <Select label="Tipo" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} 
+          options={Object.entries(tipoEventoConfig).map(([k, v]) => ({ value: k, label: `${v.emoji} ${v.label}` }))} />
+
+        <label className="flex items-center gap-2 cursor-pointer p-2 bg-neutral-50 rounded-lg">
+          <input type="checkbox" checked={form.todo_el_dia} onChange={e => setForm({...form, todo_el_dia: e.target.checked})} className="w-4 h-4 rounded" />
+          <span className="text-sm font-medium">Todo el día / varios días</span>
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha inicio *" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value})} />
+          {!form.todo_el_dia && <Input label="Hora inicio" type="time" value={form.hora_inicio || ''} onChange={e => setForm({...form, hora_inicio: e.target.value})} />}
+          <Input label="Fecha fin (opcional)" type="date" value={form.fecha_fin || ''} onChange={e => setForm({...form, fecha_fin: e.target.value})} />
+          {!form.todo_el_dia && <Input label="Hora fin" type="time" value={form.hora_fin || ''} onChange={e => setForm({...form, hora_fin: e.target.value})} />}
+        </div>
+
+        <Input label="Ubicación" value={form.ubicacion} onChange={e => setForm({...form, ubicacion: e.target.value})} placeholder="IFEMA, Madrid / Online / dirección" />
+        <Input label="Enlace (web del evento, Meet...)" value={form.url} onChange={e => setForm({...form, url: e.target.value})} placeholder="https://..." />
+
+        <Select label="Responsable / asiste" value={form.socio_id || ''} 
+          onChange={e => setForm({...form, socio_id: e.target.value ? parseInt(e.target.value) : null})}
+          options={[{ value: '', label: '— Sin asignar —' }, ...sociosActivos.map(s => ({ value: s.id, label: s.nombre }))]} />
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Descripción</label>
+          <textarea value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" rows={3} placeholder="Detalles, agenda, qué llevar, contactos a buscar..." />
+        </div>
+
+        <div className={`p-3 rounded-xl border ${form.recordatorio_slack ? 'bg-purple-50 border-purple-200' : 'bg-neutral-50 border-neutral-200'}`}>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.recordatorio_slack} onChange={e => setForm({...form, recordatorio_slack: e.target.checked})} className="w-4 h-4 rounded" />
+            <span className="text-sm font-medium">💬 Recordatorio por Slack antes del evento</span>
+          </label>
+          {form.recordatorio_slack && (
+            <div className="mt-2 pl-6">
+              <Select label="¿Cuántos días antes?" value={form.recordatorio_dias_antes} onChange={e => setForm({...form, recordatorio_dias_antes: parseInt(e.target.value)})}
+                options={[{value:1,label:'1 día antes'},{value:2,label:'2 días antes'},{value:3,label:'3 días antes'},{value:7,label:'1 semana antes'}]} />
+            </div>
+          )}
+        </div>
+
+        {/* Botones de Google Calendar (solo al editar uno existente o con título+fecha) */}
+        {form.titulo && form.fecha_inicio && (
+          <div className="flex gap-2 flex-wrap p-3 bg-blue-50 border border-blue-200 rounded-xl">
+            <p className="w-full text-xs text-blue-700 font-semibold mb-1">📅 Sincronizar con tu calendario personal:</p>
+            <a 
+              href={googleCalendarUrl(form)} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs px-3 py-2 bg-white border border-blue-300 rounded-lg font-medium text-blue-700 hover:bg-blue-100 flex items-center gap-1.5"
+            >
+              <Calendar size={14} /> Añadir a Google Calendar
+            </a>
+            <button 
+              type="button"
+              onClick={() => descargarICS(form)}
+              className="text-xs px-3 py-2 bg-white border border-blue-300 rounded-lg font-medium text-blue-700 hover:bg-blue-100 flex items-center gap-1.5"
+            >
+              <Download size={14} /> Descargar .ics (Apple/Outlook)
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.titulo?.trim()) { alert('El título es obligatorio'); return; }
+            if (!form.fecha_inicio) { alert('La fecha de inicio es obligatoria'); return; }
+            onSave(form);
+          }}>{evento ? 'Guardar cambios' : 'Crear evento'}</Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== PANEL SEGUIMIENTO DE LEAD ====================
   const tipoActividadConfig = {
     llamada: { label: 'Llamada', icon: Phone, color: 'bg-blue-100 text-blue-700' },
@@ -14906,7 +15730,6 @@ Firma repartidor: _________________
       </Modal>
     );
   };
-
   // ==================== RECIBO TPV FORM ====================
   const ReciboTpvForm = ({ recibo, onSave, onCancel }) => {
     const initialForm = recibo || {
@@ -18487,7 +19310,112 @@ Firma repartidor: _________________
       {showModal === 'producto' && <Modal title={editingItem ? 'Editar Producto' : 'Nuevo Producto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProductoForm producto={editingItem} onSave={form => handleSave('productos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido' && <Modal title={editingItem ? 'Editar Pedido' : 'Nuevo Pedido'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoForm pedido={editingItem} onSave={handleCreatePedido} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
-      {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={form => handleSave('lotes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={async (form) => {
+        const ubicaciones = form.__ubicaciones || [];
+        delete form.__ubicaciones;
+        // Guardar el lote primero
+        let loteId = editingItem?.id;
+        try {
+          if (editingItem?.id) {
+            const { error } = await supabase.from('lotes').update(form).eq('id', editingItem.id);
+            if (error) throw error;
+          } else {
+            const { data, error } = await supabase.from('lotes').insert(form).select().single();
+            if (error) throw error;
+            loteId = data.id;
+          }
+          // Sincronizar ubicaciones en lote_bandejas
+          if (loteId) {
+            // Borrar las anteriores de este lote
+            await supabase.from('lote_bandejas').delete().eq('lote_id', loteId);
+            // Insertar las nuevas
+            if (ubicaciones.length > 0) {
+              const rows = ubicaciones.map(u => ({
+                lote_id: loteId,
+                rack_id: u.rack_id,
+                rack_codigo: u.rack_codigo,
+                balda: u.balda,
+                posicion: u.posicion,
+                codigo_ubicacion: u.codigo_ubicacion,
+              }));
+              const { error: errBand } = await supabase.from('lote_bandejas').insert(rows);
+              if (errBand) {
+                console.error('Error ubicaciones:', errBand);
+                alert('⚠️ El lote se guardó, pero hubo un problema asignando algunas bandejas (puede que alguna ya estuviera ocupada): ' + errBand.message);
+              }
+            }
+            refetchLoteBandejas();
+          }
+          refetchLotes();
+          setShowModal(null);
+          setEditingItem(null);
+        } catch (e) {
+          alert('❌ Error al guardar el lote: ' + e.message);
+        }
+      }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      
+      {/* Modal Evento de Calendario */}
+      {showModal === 'evento' && <Modal title={editingItem ? 'Editar Evento' : 'Nuevo Evento'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-xl">
+        <EventoForm 
+          evento={editingItem} 
+          onSave={async (form) => {
+            try {
+              const esNuevo = !editingItem;
+              if (editingItem?.id) {
+                const { error } = await supabase.from('eventos_calendario').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('eventos_calendario').insert(form);
+                if (error) throw error;
+              }
+              refetchEventosCal();
+              setShowModal(null);
+              setEditingItem(null);
+              // Notificar Slack si procede
+              if (esNuevo && form.recordatorio_slack && notificacionesConfig.slack_activo) {
+                const cfg = tipoEventoConfig[form.tipo] || tipoEventoConfig.general;
+                enviarSlack({
+                  titulo: `Nuevo evento: ${form.titulo}`,
+                  mensaje: `${cfg.emoji} *${form.titulo}*\n📅 ${form.fecha_inicio}${form.hora_inicio ? ' a las ' + form.hora_inicio : ''}\n${form.ubicacion ? '📍 ' + form.ubicacion : ''}\n\n_Recibirás recordatorio ${form.recordatorio_dias_antes} día(s) antes._`,
+                  prioridad: 'media',
+                });
+              }
+              alert(`✅ Evento ${editingItem ? 'actualizado' : 'creado'} correctamente`);
+            } catch (e) {
+              if (e.message?.includes('does not exist') || e.code === '42P01') {
+                alert('❌ Falta ejecutar el SQL V42 en Supabase (tabla eventos_calendario no existe).');
+              } else {
+                alert('❌ Error: ' + e.message);
+              }
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
+      
+      {/* Modal Configuración de Rack */}
+      {showModal === 'rackConfig' && <Modal title={editingItem ? 'Editar Rack' : 'Nuevo Rack'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-xl">
+        <RackConfigForm 
+          rack={editingItem} 
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                const { error } = await supabase.from('racks_config').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('racks_config').insert(form);
+                if (error) throw error;
+              }
+              refetchRacksConfig();
+              setShowModal(null);
+              setEditingItem(null);
+            } catch (e) {
+              alert('❌ Error: ' + e.message);
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
       {showModal === 'proveedor' && <Modal title={editingItem ? 'Editar Proveedor' : 'Nuevo Proveedor'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProveedorForm proveedor={editingItem} onSave={form => handleSave('proveedores', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'extractoBancario' && <Modal title={editingItem ? 'Editar Extracto Bancario' : 'Subir Extracto Bancario'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
         <ExtractoBancarioForm 
@@ -18606,6 +19534,35 @@ Firma repartidor: _________________
               alert(`✅ Documento ${editingItem ? 'actualizado' : 'archivado'} correctamente`);
             } catch (e) {
               alert('❌ Error: ' + e.message);
+            }
+          }} 
+          onCancel={() => { setShowModal(null); setEditingItem(null); }} 
+        />
+      </Modal>}
+      
+      {/* Modal Configuración de Rack */}
+      {showModal === 'rackConfig' && <Modal title={editingItem ? 'Editar Rack' : 'Nuevo Rack'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <RackConfigForm 
+          rack={editingItem} 
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                const { error } = await supabase.from('racks_config').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('racks_config').insert(form);
+                if (error) throw error;
+              }
+              refetchRacksConfig();
+              setShowModal(null);
+              setEditingItem(null);
+              alert(`✅ Rack ${editingItem ? 'actualizado' : 'creado'} correctamente`);
+            } catch (e) {
+              if (e.message?.includes('does not exist') || e.code === '42P01') {
+                alert('❌ Falta ejecutar el SQL V41 en Supabase (tabla racks_config no existe).');
+              } else {
+                alert('❌ Error: ' + e.message);
+              }
             }
           }} 
           onCancel={() => { setShowModal(null); setEditingItem(null); }} 
