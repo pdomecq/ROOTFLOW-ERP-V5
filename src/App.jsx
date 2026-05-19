@@ -15327,16 +15327,27 @@ Firma repartidor: _________________
 
   // Genera enlace para añadir a Google Calendar directamente
   const googleCalendarUrl = (ev) => {
+    if (!ev || !ev.fecha_inicio) return '#';
+    // Normaliza hora: Postgres TIME puede venir "09:00:00", queremos "09:00"
+    const limpiarHora = (h, def) => {
+      if (!h) return def;
+      const m = String(h).match(/^(\d{1,2}):(\d{2})/);
+      return m ? `${m[1].padStart(2,'0')}:${m[2]}` : def;
+    };
     const fmt = (fecha, hora, esFin) => {
       if (!fecha) return '';
-      if (ev.todo_el_dia) {
-        const d = new Date(fecha);
-        if (esFin) d.setDate(d.getDate() + 1); // Google: fin exclusivo en all-day
-        return d.toISOString().slice(0, 10).replace(/-/g, '');
-      }
-      const h = hora || (esFin ? '18:00' : '09:00');
-      const dt = new Date(`${fecha}T${h}:00`);
-      return dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      try {
+        if (ev.todo_el_dia) {
+          const d = new Date(fecha + 'T00:00:00');
+          if (isNaN(d)) return '';
+          if (esFin) d.setDate(d.getDate() + 1);
+          return d.toISOString().slice(0, 10).replace(/-/g, '');
+        }
+        const h = limpiarHora(hora, esFin ? '18:00' : '09:00');
+        const dt = new Date(`${fecha}T${h}:00`);
+        if (isNaN(dt)) return '';
+        return dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      } catch { return ''; }
     };
     const inicio = fmt(ev.fecha_inicio, ev.hora_inicio, false);
     const fin = fmt(ev.fecha_fin || ev.fecha_inicio, ev.hora_fin, true);
@@ -15352,15 +15363,27 @@ Firma repartidor: _________________
 
   // Genera y descarga un .ics (Apple Calendar, Outlook, importable a Google)
   const descargarICS = (ev) => {
+    if (!ev || !ev.fecha_inicio) { alert('El evento no tiene fecha válida'); return; }
+    const limpiarHora = (h, def) => {
+      if (!h) return def;
+      const m = String(h).match(/^(\d{1,2}):(\d{2})/);
+      return m ? `${m[1].padStart(2,'0')}:${m[2]}` : def;
+    };
     const fmt = (fecha, hora, esFin) => {
-      if (ev.todo_el_dia) {
-        const d = new Date(fecha);
-        if (esFin) d.setDate(d.getDate() + 1);
-        return ';VALUE=DATE:' + d.toISOString().slice(0, 10).replace(/-/g, '');
+      try {
+        if (ev.todo_el_dia) {
+          const d = new Date(fecha + 'T00:00:00');
+          if (isNaN(d)) return ':' + new Date().toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+          if (esFin) d.setDate(d.getDate() + 1);
+          return ';VALUE=DATE:' + d.toISOString().slice(0, 10).replace(/-/g, '');
+        }
+        const h = limpiarHora(hora, esFin ? '18:00' : '09:00');
+        const dt = new Date(`${fecha}T${h}:00`);
+        if (isNaN(dt)) return ':' + new Date().toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+        return ':' + dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      } catch {
+        return ':' + new Date().toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
       }
-      const h = hora || (esFin ? '18:00' : '09:00');
-      const dt = new Date(`${fecha}T${h}:00`);
-      return ':' + dt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
     };
     const uid = `rootflow-${ev.id || Date.now()}@rootflow.es`;
     const ics = [
