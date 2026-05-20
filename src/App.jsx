@@ -1599,6 +1599,8 @@ const MainApp = () => {
   const { data: eventosCalData, refetch: refetchEventosCal } = useRealtime('eventos_calendario');
   // V44 - Movimientos de lotes entre racks (germinación → crecimiento)
   const { data: loteMovimientosData, refetch: refetchLoteMovimientos } = useRealtime('lote_movimientos');
+  // V47 - Reembolsos a socios (saldar deuda 551)
+  const { data: reembolsosSociosData, refetch: refetchReembolsosSocios } = useRealtime('reembolsos_socios');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1702,6 +1704,8 @@ const MainApp = () => {
   const eventosCal = eventosCalData || [];
   // V44 - Movimientos de lotes (traslados germinación → crecimiento)
   const loteMovimientos = loteMovimientosData || [];
+  // V47 - Reembolsos a socios
+  const reembolsosSocios = reembolsosSociosData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -10536,6 +10540,19 @@ ${transacciones}
           >
             📦 Exportar masivo
           </button>
+          <button 
+            onClick={() => setGastosTab('deuda_socios')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'deuda_socios' ? 'border-amber-500 text-amber-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            {(() => {
+              const totalDeuda = gastos
+                .filter(g => (g.forma_pago || '').startsWith('socio_'))
+                .reduce((s, g) => s + (g.importe || 0), 0);
+              const totalReemb = (reembolsosSociosData || []).reduce((s, r) => s + (r.importe || 0), 0);
+              const pendiente = totalDeuda - totalReemb;
+              return `💸 Deuda Socios${pendiente > 0 ? ` (${formatCurrency(pendiente)})` : ''}`;
+            })()}
+          </button>
         </div>
 
         {gastosTab === 'gastos' && (
@@ -11060,6 +11077,212 @@ ${transacciones}
                     </div>
                   </Card>
                 </div>
+              );
+            })()}
+          </>
+        )}
+
+        {/* ============ PESTAÑA DEUDA SOCIOS V47 ============ */}
+        {gastosTab === 'deuda_socios' && (
+          <>
+            {(() => {
+              // Calcular deuda por socio
+              const socioConfig = {
+                socio_nico: { nombre: 'Nicolás Bustamante', alias: 'Nico', color: '#3B82F6', emoji: '🔵' },
+                socio_peri: { nombre: 'Pedro Domecq (Peri)', alias: 'Peri', color: '#F97316', emoji: '🟠' },
+                socio_guzman: { nombre: 'Domingo de Guzmán', alias: 'Guzmán', color: '#22C55E', emoji: '🟢' },
+              };
+              
+              const datosPorSocio = Object.entries(socioConfig).map(([clave, cfg]) => {
+                const gastosSocio = gastos.filter(g => g.forma_pago === clave);
+                const totalPagado = gastosSocio.reduce((s, g) => s + (g.importe || 0), 0);
+                const numGastos = gastosSocio.length;
+                
+                const reembolsosSocio = reembolsosSocios.filter(r => r.socio_clave === clave);
+                const totalReembolsado = reembolsosSocio.reduce((s, r) => s + (r.importe || 0), 0);
+                
+                const saldoPendiente = totalPagado - totalReembolsado;
+                
+                return {
+                  clave, cfg,
+                  gastos: gastosSocio,
+                  totalPagado,
+                  numGastos,
+                  reembolsos: reembolsosSocio,
+                  totalReembolsado,
+                  saldoPendiente,
+                };
+              });
+              
+              const totalGlobal = datosPorSocio.reduce((s, d) => s + d.totalPagado, 0);
+              const reembolsadoGlobal = datosPorSocio.reduce((s, d) => s + d.totalReembolsado, 0);
+              const pendienteGlobal = totalGlobal - reembolsadoGlobal;
+              
+              return (
+                <>
+                  {/* Cabecera explicativa */}
+                  <Card className="p-5 bg-amber-50 border-amber-200">
+                    <div className="flex items-start gap-3">
+                      <div className="text-3xl">💸</div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-amber-900 mb-1">Deuda con socios (cuenta contable 551)</h3>
+                        <p className="text-xs text-amber-800">
+                          Estos son los gastos de la empresa que cada socio ha pagado de su bolsillo y la sociedad todavía no le ha devuelto. 
+                          Cuando la empresa tenga caja, registra cada transferencia como "Reembolso" para saldar la deuda.
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+
+                  {/* KPIs globales */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Card className="p-4">
+                      <p className="text-xs text-neutral-500 uppercase font-bold mb-1">Total adelantado</p>
+                      <p className="text-2xl font-black">{formatCurrency(totalGlobal)}</p>
+                      <p className="text-xs text-neutral-500">por todos los socios</p>
+                    </Card>
+                    <Card className="p-4 bg-green-50 border-green-200">
+                      <p className="text-xs text-green-700 uppercase font-bold mb-1">Ya reembolsado</p>
+                      <p className="text-2xl font-black text-green-900">{formatCurrency(reembolsadoGlobal)}</p>
+                      <p className="text-xs text-green-700">devuelto desde caja</p>
+                    </Card>
+                    <Card className={`p-4 ${pendienteGlobal > 0 ? 'bg-amber-50 border-amber-300' : 'bg-neutral-50'}`}>
+                      <p className={`text-xs uppercase font-bold mb-1 ${pendienteGlobal > 0 ? 'text-amber-700' : 'text-neutral-500'}`}>Pendiente de pagar</p>
+                      <p className={`text-2xl font-black ${pendienteGlobal > 0 ? 'text-amber-900' : 'text-neutral-900'}`}>{formatCurrency(pendienteGlobal)}</p>
+                      <p className="text-xs text-neutral-500">deuda viva</p>
+                    </Card>
+                  </div>
+
+                  {/* Saldo por socio */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {datosPorSocio.map(d => (
+                      <Card key={d.clave} className="p-5" style={{ borderTopWidth: '4px', borderTopColor: d.cfg.color }}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base mb-2" style={{ backgroundColor: d.cfg.color }}>
+                              {d.cfg.alias.charAt(0)}
+                            </div>
+                            <p className="font-bold text-neutral-900">{d.cfg.alias}</p>
+                            <p className="text-[10px] text-neutral-500">{d.cfg.nombre}</p>
+                          </div>
+                          {d.saldoPendiente > 0 && (
+                            <Button size="sm" onClick={() => { setEditingItem({ socio_clave: d.clave, importe: d.saldoPendiente }); setShowModal('reembolso'); }} className="bg-green-600 hover:bg-green-700">
+                              <Plus size={14}/> Pagar
+                            </Button>
+                          )}
+                        </div>
+                        
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-neutral-600">Total adelantado:</span>
+                            <span className="font-bold">{formatCurrency(d.totalPagado)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-neutral-600">Reembolsado:</span>
+                            <span className="font-bold text-green-700">−{formatCurrency(d.totalReembolsado)}</span>
+                          </div>
+                          <div className="flex justify-between border-t pt-2 mt-2">
+                            <span className="font-bold">Saldo a favor:</span>
+                            <span className={`text-xl font-black ${d.saldoPendiente > 0 ? 'text-amber-600' : 'text-neutral-400'}`}>
+                              {formatCurrency(d.saldoPendiente)}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <p className="text-[10px] text-neutral-400 mt-3">{d.numGastos} gastos · {d.reembolsos.length} reembolsos</p>
+                      </Card>
+                    ))}
+                  </div>
+
+                  {/* Historial detallado por socio (desplegable) */}
+                  {datosPorSocio.map(d => (
+                    (d.gastos.length > 0 || d.reembolsos.length > 0) && (
+                      <details key={d.clave} className="bg-white border rounded-xl">
+                        <summary className="cursor-pointer p-4 font-semibold flex items-center justify-between gap-3 hover:bg-neutral-50">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: d.cfg.color }}>
+                              {d.cfg.alias.charAt(0)}
+                            </div>
+                            <span>Detalle de {d.cfg.alias}</span>
+                            <span className="text-xs text-neutral-500">({d.gastos.length} gastos · {d.reembolsos.length} reembolsos)</span>
+                          </div>
+                          <span className={`text-sm font-bold ${d.saldoPendiente > 0 ? 'text-amber-700' : 'text-green-700'}`}>
+                            {d.saldoPendiente > 0 ? formatCurrency(d.saldoPendiente) + ' pendiente' : '✓ Saldado'}
+                          </span>
+                        </summary>
+                        <div className="px-4 pb-4 space-y-4">
+                          {/* Reembolsos */}
+                          {d.reembolsos.length > 0 && (
+                            <div>
+                              <p className="text-xs font-bold text-green-700 uppercase mb-2">✓ Reembolsos hechos</p>
+                              <div className="space-y-1">
+                                {d.reembolsos.sort((a,b) => new Date(b.fecha) - new Date(a.fecha)).map(r => (
+                                  <div key={r.id} className="flex items-center justify-between p-2 bg-green-50 rounded-lg text-sm">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-medium">{formatDate(r.fecha)}</span>
+                                        <Badge className="bg-green-100 text-green-700 text-[10px]">
+                                          {r.metodo === 'transferencia' ? '🏦 Transfer.' : r.metodo === 'bizum' ? '📱 Bizum' : '💵 Efectivo'}
+                                        </Badge>
+                                        {r.concepto && <span className="text-xs text-neutral-500 truncate">· {r.concepto}</span>}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-green-700">−{formatCurrency(r.importe)}</span>
+                                      {r.archivo_url && (
+                                        <a href={r.archivo_url} target="_blank" rel="noopener noreferrer" className="text-green-600 hover:text-green-800">
+                                          <FileText size={14} />
+                                        </a>
+                                      )}
+                                      <button onClick={() => { setEditingItem(r); setShowModal('reembolso'); }} className="text-neutral-400 hover:text-orange-600">
+                                        <Edit2 size={12} />
+                                      </button>
+                                      <button onClick={async () => {
+                                        if (window.confirm(`¿Eliminar reembolso de ${formatCurrency(r.importe)}?`)) {
+                                          await supabase.from('reembolsos_socios').delete().eq('id', r.id);
+                                          refetchReembolsosSocios();
+                                        }
+                                      }} className="text-neutral-400 hover:text-red-600">
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Gastos pagados */}
+                          {d.gastos.length > 0 && (
+                            <div>
+                              <p className="text-xs font-bold text-neutral-700 uppercase mb-2">📋 Gastos adelantados ({d.gastos.length})</p>
+                              <div className="space-y-1 max-h-72 overflow-y-auto">
+                                {d.gastos.sort((a,b) => new Date(b.fecha) - new Date(a.fecha)).map(g => (
+                                  <div key={g.id} className="flex items-center justify-between p-2 bg-neutral-50 rounded-lg text-sm">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-medium">{formatDate(g.fecha)}</span>
+                                        <span className="text-xs text-neutral-600 truncate">{g.concepto || '(sin concepto)'}</span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      <span className="font-bold">{formatCurrency(g.importe)}</span>
+                                      {g.factura_url && (
+                                        <a href={g.factura_url} target="_blank" rel="noopener noreferrer" className="text-blue-600">
+                                          <FileText size={12} />
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )
+                  ))}
+                </>
               );
             })()}
           </>
@@ -16652,6 +16875,180 @@ Firma repartidor: _________________
       </Modal>
     );
   };
+  // ==================== REEMBOLSO SOCIO FORM V47 ====================
+  const ReembolsoSocioForm = ({ reembolso, onSave, onCancel }) => {
+    const socioConfig = {
+      socio_nico: { nombre: 'Nicolás Bustamante', alias: 'Nico', color: '#3B82F6' },
+      socio_peri: { nombre: 'Pedro Domecq (Peri)', alias: 'Peri', color: '#F97316' },
+      socio_guzman: { nombre: 'Domingo de Guzmán', alias: 'Guzmán', color: '#22C55E' },
+    };
+
+    const initialForm = reembolso || {
+      socio_clave: 'socio_peri',
+      fecha: new Date().toISOString().split('T')[0],
+      importe: 0,
+      concepto: 'Reembolso deuda a socio',
+      metodo: 'transferencia',
+      referencia: '',
+      notas: '',
+      archivo_url: '',
+      archivo_nombre: '',
+    };
+    const [form, setForm] = useState(initialForm);
+    const [uploading, setUploading] = useState(false);
+
+    // Calcular saldo actual del socio elegido
+    const gastosSocio = gastos.filter(g => g.forma_pago === form.socio_clave);
+    const totalPagado = gastosSocio.reduce((s, g) => s + (g.importe || 0), 0);
+    const otrosReembolsos = reembolsosSocios.filter(r => r.socio_clave === form.socio_clave && r.id !== reembolso?.id);
+    const totalReembolsadoAntes = otrosReembolsos.reduce((s, r) => s + (r.importe || 0), 0);
+    const saldoActual = totalPagado - totalReembolsadoAntes;
+    const saldoTrasReembolso = saldoActual - (form.importe || 0);
+
+    const handleFileUpload = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 20 * 1024 * 1024) { alert('❌ Máximo 20 MB'); return; }
+      setUploading(true);
+      try {
+        const fileName = `reembolsos-socios/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+        const { error } = await supabase.storage.from('facturas-gastos').upload(fileName, file);
+        if (error) throw error;
+        const { data: urlData } = supabase.storage.from('facturas-gastos').getPublicUrl(fileName);
+        setForm({ ...form, archivo_url: urlData.publicUrl, archivo_nombre: file.name });
+      } catch (err) {
+        alert('❌ Error al subir: ' + err.message);
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        {/* Selector de socio */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">¿A qué socio se le paga?</label>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(socioConfig).map(([clave, cfg]) => {
+              const gst = gastos.filter(g => g.forma_pago === clave);
+              const totPag = gst.reduce((s,g) => s+(g.importe||0), 0);
+              const reembs = reembolsosSocios.filter(r => r.socio_clave === clave && r.id !== reembolso?.id);
+              const reemb = reembs.reduce((s,r) => s+(r.importe||0), 0);
+              const saldo = totPag - reemb;
+              const seleccionado = form.socio_clave === clave;
+              return (
+                <button
+                  key={clave} type="button"
+                  onClick={() => setForm({...form, socio_clave: clave})}
+                  className={`p-3 rounded-xl border-2 text-left transition-all ${seleccionado ? 'shadow-md' : 'hover:shadow-sm'}`}
+                  style={{ borderColor: seleccionado ? cfg.color : '#E5E7EB', backgroundColor: seleccionado ? cfg.color + '15' : 'white' }}
+                >
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-white font-bold text-xs mb-2" style={{ backgroundColor: cfg.color }}>
+                    {cfg.alias.charAt(0)}
+                  </div>
+                  <p className="font-bold text-sm">{cfg.alias}</p>
+                  <p className="text-[10px] text-neutral-500 mb-1">{cfg.nombre.split(' ')[0]}</p>
+                  <p className={`text-xs font-bold ${saldo > 0 ? 'text-amber-700' : 'text-green-700'}`}>
+                    Saldo: {formatCurrency(saldo)}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Resumen del estado actual */}
+        <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 grid grid-cols-3 gap-2 text-sm">
+          <div>
+            <p className="text-[10px] text-neutral-500 uppercase font-bold">Total adelantado</p>
+            <p className="font-bold">{formatCurrency(totalPagado)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-neutral-500 uppercase font-bold">Saldo actual</p>
+            <p className="font-bold text-amber-700">{formatCurrency(saldoActual)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-neutral-500 uppercase font-bold">Tras este reembolso</p>
+            <p className={`font-bold ${saldoTrasReembolso > 0 ? 'text-amber-700' : saldoTrasReembolso === 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {formatCurrency(saldoTrasReembolso)}
+            </p>
+          </div>
+        </div>
+
+        {saldoTrasReembolso < 0 && (
+          <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+            ⚠️ El importe supera el saldo pendiente. ¿Seguro que quieres pagar de más?
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha *" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Input label="Importe (€) *" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+        </div>
+
+        <Input label="Concepto" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} placeholder="Ej: Reembolso adelantos enero" />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Select label="Método" value={form.metodo} onChange={e => setForm({...form, metodo: e.target.value})}
+            options={[
+              { value: 'transferencia', label: '🏦 Transferencia BBVA' },
+              { value: 'bizum', label: '📱 Bizum' },
+              { value: 'efectivo', label: '💵 Efectivo' },
+            ]} />
+          <Input label="Referencia (nº operación)" value={form.referencia} onChange={e => setForm({...form, referencia: e.target.value})} placeholder="Opcional" />
+        </div>
+
+        {/* Botones de saldo total */}
+        {saldoActual > 0 && (
+          <div className="flex gap-2 flex-wrap">
+            <button type="button" onClick={() => setForm({...form, importe: saldoActual})} className="text-xs px-3 py-1.5 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg font-medium">
+              Saldar todo ({formatCurrency(saldoActual)})
+            </button>
+            <button type="button" onClick={() => setForm({...form, importe: Math.round(saldoActual / 2 * 100) / 100})} className="text-xs px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-700 rounded-lg font-medium">
+              50% ({formatCurrency(saldoActual / 2)})
+            </button>
+          </div>
+        )}
+
+        {/* Subida justificante */}
+        <div className="border-2 border-dashed border-green-300 rounded-xl p-3 bg-green-50/50">
+          <label className="block text-sm font-semibold text-green-900 mb-2">📎 Justificante de la transferencia (opcional)</label>
+          {form.archivo_url ? (
+            <div className="bg-white p-2 rounded-lg border border-green-200 flex items-center gap-2">
+              <FileText size={18} className="text-green-600 flex-shrink-0" />
+              <p className="flex-1 text-sm font-medium truncate">{form.archivo_nombre}</p>
+              <button type="button" onClick={() => window.open(form.archivo_url, '_blank')} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Eye size={14} /></button>
+              <button type="button" onClick={() => setForm({...form, archivo_url: '', archivo_nombre: ''})} className="p-1.5 text-red-500 hover:bg-red-50 rounded"><Trash2 size={14} /></button>
+            </div>
+          ) : (
+            <div>
+              <input type="file" onChange={handleFileUpload} disabled={uploading} accept=".pdf,.jpg,.jpeg,.png,.webp" className="block w-full text-sm text-neutral-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-500 file:text-white file:font-semibold hover:file:bg-green-600 file:cursor-pointer" />
+              {uploading && <p className="text-xs text-green-600 mt-2">⏳ Subiendo...</p>}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Notas</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-neutral-300" rows={2} />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button 
+            className="bg-green-600 hover:bg-green-700"
+            onClick={() => {
+              if (!form.importe || form.importe <= 0) { alert('Indica el importe del reembolso'); return; }
+              onSave(form);
+            }}
+          >
+            {reembolso ? 'Guardar cambios' : 'Registrar reembolso'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== RECIBO TPV FORM ====================
   const ReciboTpvForm = ({ recibo, onSave, onCancel }) => {
     const initialForm = recibo || {
@@ -20492,6 +20889,35 @@ Firma repartidor: _________________
       </Modal>}
       
       {/* Modal Recibo TPV */}
+      {/* Modal Reembolso a Socio V47 */}
+      {showModal === 'reembolso' && <Modal title={editingItem?.id ? 'Editar Reembolso' : 'Registrar Reembolso a Socio'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+        <ReembolsoSocioForm 
+          reembolso={editingItem?.id ? editingItem : null}
+          onSave={async (form) => {
+            try {
+              if (editingItem?.id) {
+                const { error } = await supabase.from('reembolsos_socios').update(form).eq('id', editingItem.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('reembolsos_socios').insert(form);
+                if (error) throw error;
+              }
+              refetchReembolsosSocios();
+              setShowModal(null);
+              setEditingItem(null);
+              alert(`✅ Reembolso ${editingItem?.id ? 'actualizado' : 'registrado'} correctamente`);
+            } catch (e) {
+              if (e.message?.includes('does not exist') || e.code === '42P01') {
+                alert('❌ Falta ejecutar el SQL V47 en Supabase (tabla reembolsos_socios no existe).');
+              } else {
+                alert('❌ Error: ' + e.message);
+              }
+            }
+          }}
+          onCancel={() => { setShowModal(null); setEditingItem(null); }}
+        />
+      </Modal>}
+      
       {showModal === 'reciboTpv' && <Modal title={editingItem ? 'Editar Recibo TPV' : 'Registrar Recibo TPV'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
         <ReciboTpvForm 
           recibo={editingItem} 
