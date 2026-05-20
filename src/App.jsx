@@ -4981,7 +4981,7 @@ const MainApp = () => {
           <Input label="Nombre" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Rack A - Germinación" />
         </div>
 
-        {/* V44: Tipo de rack según fase productiva */}
+        {/* V44/V45: Tipo de rack según fase productiva */}
         <Select 
           label="Tipo de rack (fase productiva) *" 
           value={form.tipo || 'crecimiento'}
@@ -4989,7 +4989,8 @@ const MainApp = () => {
           options={[
             { value: 'germinacion', label: '🌱 Germinación (invernadero, fase oscura)' },
             { value: 'crecimiento', label: '☀️ Crecimiento (con luz, hasta cosecha)' },
-            { value: 'mixto', label: '🔄 Mixto (sirve para ambas fases)' },
+            { value: 'nevera', label: '❄️ Nevera (cámara fría, empaquetado listo)' },
+            { value: 'mixto', label: '🔄 Mixto (germinación + crecimiento)' },
           ]}
         />
 
@@ -12117,30 +12118,78 @@ ${logoRootflow}^FS
 
         )}
 
-        {/* ============ PESTAÑA FASES PRODUCTIVAS ============ */}
+        {/* ============ PESTAÑA FASES PRODUCTIVAS V45 ============ */}
         {produccionTab === 'fases' && (
           <div className="space-y-5">
             {(() => {
               const hoy = new Date(); hoy.setHours(0,0,0,0);
-              const activos = lotes.filter(l => ['sembrado','creciendo'].includes(l.estado));
-              const enGerminacion = activos.filter(l => (l.fase || 'crecimiento') === 'germinacion');
-              const enCrecimiento = activos.filter(l => (l.fase || 'crecimiento') !== 'germinacion');
+              const hoyStr = hoy.toISOString().slice(0,10);
+              
+              // Clasificar lotes por fase
+              const lotesActivos = lotes.filter(l => l.estado !== 'descartado');
+              const enGerminacion = lotesActivos.filter(l => (l.fase || '') === 'germinacion' || (!l.fase && l.estado === 'sembrado'));
+              const enCrecimiento = lotesActivos.filter(l => l.fase === 'crecimiento' || (!l.fase && l.estado === 'creciendo'));
+              const enGranel = lotesActivos.filter(l => l.fase === 'granel');
+              const enNevera = lotesActivos.filter(l => l.fase === 'nevera');
               
               // Racks por tipo
               const racksGerm = racksConfig.filter(r => r.activo !== false && (r.tipo === 'germinacion' || r.tipo === 'mixto'));
               const racksCrec = racksConfig.filter(r => r.activo !== false && (r.tipo === 'crecimiento' || r.tipo === 'mixto'));
+              const racksNevera = racksConfig.filter(r => r.activo !== false && r.tipo === 'nevera');
               
-              // Capacidad total
+              // Capacidades y ocupaciones
               const capacidadGerm = racksGerm.reduce((s, r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
               const capacidadCrec = racksCrec.reduce((s, r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
+              const capacidadNevera = racksNevera.reduce((s, r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
               
-              // Ocupación: contar bandejas únicas de cada fase
               const bandejasGerm = loteBandejas.filter(lb => enGerminacion.some(l => l.id === lb.lote_id)).length;
               const bandejasCrec = loteBandejas.filter(lb => enCrecimiento.some(l => l.id === lb.lote_id)).length;
+              // Para nevera: contar unidades empaquetadas en productos con stock > 0
+              const stockNevera = productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock || 0) > 0).reduce((s, p) => s + (p.stock || 0), 0);
+              
               const pctGerm = capacidadGerm > 0 ? Math.round(bandejasGerm * 100 / capacidadGerm) : 0;
               const pctCrec = capacidadCrec > 0 ? Math.round(bandejasCrec * 100 / capacidadCrec) : 0;
               
-              // Listos para trasladar (días germinación cumplidos)
+              // Productos cerca de caducar en nevera (>= 4 días tras empaquetado)
+              const productosNeveraVencen = productos.filter(p => {
+                if (p.estado_inventario !== 'empaquetado' || (p.stock || 0) <= 0) return false;
+                // Ver movimientos: cuando fue su último empaquetado_in
+                const movs = movimientosStock.filter(m => m.producto_id === p.id && m.tipo === 'empaquetado_in')
+                  .sort((a, b) => new Date(b.created_at || b.fecha) - new Date(a.created_at || a.fecha));
+                if (movs.length === 0) return false;
+                const ultimo = new Date(movs[0].created_at || movs[0].fecha);
+                const dias = (hoy - ultimo) / (1000*60*60*24);
+                return dias >= 4; // perecedero: alertar a partir del día 4
+              });
+              
+              // === VISTA POR DÍA: cosechas de los próximos 7 días ===
+              const cosechasPorDia = [];
+              for (let d = 0; d <= 7; d++) {
+                const fecha = new Date(hoy);
+                fecha.setDate(fecha.getDate() + d);
+                const fechaStr = fecha.toISOString().slice(0,10);
+                
+                const lotesEseDia = enCrecimiento.filter(l => {
+                  if (!l.fecha_cosecha_prevista) return false;
+                  return l.fecha_cosecha_prevista.slice(0,10) === fechaStr;
+                });
+                
+                const bandejasEseDia = lotesEseDia.reduce((s, l) => s + (l.bandejas || 0), 0);
+                
+                cosechasPorDia.push({
+                  fecha,
+                  fechaStr,
+                  esHoy: d === 0,
+                  esMañana: d === 1,
+                  diaSemana: fecha.toLocaleDateString('es-ES', { weekday: 'short' }),
+                  numero: fecha.getDate(),
+                  mes: fecha.toLocaleDateString('es-ES', { month: 'short' }),
+                  lotes: lotesEseDia,
+                  bandejas: bandejasEseDia,
+                });
+              }
+              
+              // Listos para trasladar (germinación → crecimiento)
               const listosParaTraslado = enGerminacion.filter(l => {
                 if (!l.fecha_germinacion_inicio && !l.fecha_siembra) return false;
                 const inicio = new Date(l.fecha_germinacion_inicio || l.fecha_siembra);
@@ -12150,125 +12199,153 @@ ${logoRootflow}^FS
                 return objetivo <= hoy;
               });
               
-              // Próximos a cosechar (en crecimiento, días cumplidos)
-              const proximosCosecha = enCrecimiento.filter(l => {
-                if (!l.fecha_cosecha_prevista) return false;
-                const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
-                return dias <= 2;
-              });
-              
-              // Estimar huecos liberados en próximos 7 días
-              const huecosProximaSemana = enCrecimiento.filter(l => {
-                if (!l.fecha_cosecha_prevista) return false;
-                const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
-                return dias >= 0 && dias <= 7;
-              }).reduce((s, l) => s + (l.bandejas || 0), 0);
-              
-              const trasladarFase = async (lote) => {
-                const ubicNuevas = window.prompt(`Trasladar lote "${lote.codigo || lote.id}" de germinación a crecimiento.\n\nIndica las ubicaciones de destino en racks de crecimiento, separadas por coma (ej: B-1-1,B-1-2,B-2-3):`, '');
-                if (ubicNuevas === null) return;
-                const ubicArr = ubicNuevas.split(',').map(s => s.trim()).filter(Boolean);
-                if (ubicArr.length === 0) {
-                  if (!window.confirm('No has indicado ubicaciones. ¿Trasladar igualmente sin asignar bandejas físicas?')) return;
-                }
+              const cambiarFase = async (lote, nuevaFase, extra = {}) => {
                 try {
-                  // Actualizar lote
-                  await supabase.from('lotes').update({
-                    fase: 'crecimiento',
-                    fecha_traslado_crecimiento: hoy.toISOString().slice(0,10),
-                  }).eq('id', lote.id);
-                  
-                  // Borrar ubicaciones antiguas
-                  if (ubicArr.length > 0) {
-                    await supabase.from('lote_bandejas').delete().eq('lote_id', lote.id);
-                    // Insertar nuevas
-                    const rows = ubicArr.map(codigo => {
-                      const partes = codigo.split('-');
-                      const rackCod = partes[0];
-                      const rack = racksConfig.find(r => r.codigo === rackCod);
-                      return {
-                        lote_id: lote.id,
-                        rack_id: rack?.id || null,
-                        balda: parseInt(partes[1]) || 1,
-                        posicion: parseInt(partes[2]) || 1,
-                        codigo: codigo,
-                      };
-                    });
-                    await supabase.from('lote_bandejas').insert(rows);
-                  }
-                  
-                  // Registrar movimiento
+                  const updates = { fase: nuevaFase, ...extra };
+                  if (nuevaFase === 'crecimiento') updates.fecha_traslado_crecimiento = hoyStr;
+                  if (nuevaFase === 'nevera') updates.fecha_entrada_nevera = hoyStr;
+                  await supabase.from('lotes').update(updates).eq('id', lote.id);
                   await supabase.from('lote_movimientos').insert({
                     lote_id: lote.id,
-                    tipo: 'traslado',
-                    fase_anterior: 'germinacion',
-                    fase_nueva: 'crecimiento',
-                    ubicaciones_destino: ubicArr,
-                    bandejas_afectadas: lote.bandejas || ubicArr.length,
-                    notas: 'Traslado de germinación a crecimiento',
+                    tipo: 'cambio_fase',
+                    fase_anterior: lote.fase || 'desconocida',
+                    fase_nueva: nuevaFase,
+                    notas: `Cambio a fase ${nuevaFase}`,
                   });
-                  
                   refetchLotes();
-                  refetchLoteBandejas();
                   refetchLoteMovimientos();
-                  alert('✅ Lote trasladado a crecimiento');
                 } catch (e) {
-                  console.error(e);
                   alert('❌ Error: ' + e.message);
                 }
               };
               
               return (
                 <>
-                  {/* KPIs */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {/* 4 KPIs principales de fases */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <Card className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
                       <div className="flex items-center gap-3">
                         <div className="text-3xl">🌱</div>
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <p className="text-xs text-amber-700 uppercase font-bold tracking-wide">Germinación</p>
                           <p className="text-2xl font-black text-amber-900">{enGerminacion.length}</p>
-                          <p className="text-xs text-amber-700">{bandejasGerm} bandejas · {pctGerm}% ocupado</p>
+                          <p className="text-xs text-amber-700">{bandejasGerm}b · {pctGerm}% ocup.</p>
                         </div>
                       </div>
                     </Card>
                     <Card className="p-4 bg-gradient-to-br from-green-50 to-emerald-50 border-green-200">
                       <div className="flex items-center gap-3">
                         <div className="text-3xl">☀️</div>
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <p className="text-xs text-green-700 uppercase font-bold tracking-wide">Crecimiento</p>
                           <p className="text-2xl font-black text-green-900">{enCrecimiento.length}</p>
-                          <p className="text-xs text-green-700">{bandejasCrec} bandejas · {pctCrec}% ocupado</p>
+                          <p className="text-xs text-green-700">{bandejasCrec}b · {pctCrec}% ocup.</p>
                         </div>
                       </div>
                     </Card>
-                    <Card className={`p-4 ${listosParaTraslado.length > 0 ? 'bg-orange-50 border-orange-300' : ''}`}>
+                    <Card className="p-4 bg-gradient-to-br from-yellow-50 to-amber-50 border-yellow-200">
                       <div className="flex items-center gap-3">
-                        <div className="text-3xl">{listosParaTraslado.length > 0 ? '🚚' : '⏳'}</div>
-                        <div>
-                          <p className="text-xs uppercase font-bold tracking-wide" style={{color: listosParaTraslado.length > 0 ? '#C2410C' : '#737373'}}>A trasladar</p>
-                          <p className={`text-2xl font-black ${listosParaTraslado.length > 0 ? 'text-orange-900' : 'text-neutral-900'}`}>{listosParaTraslado.length}</p>
-                          <p className="text-xs text-neutral-500">germinación completa</p>
+                        <div className="text-3xl">📦</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-yellow-700 uppercase font-bold tracking-wide">Granel</p>
+                          <p className="text-2xl font-black text-yellow-900">
+                            {(productos.filter(p => p.estado_inventario === 'listo_sin_empaquetar').reduce((s, p) => s + (p.gramos_disponibles || p.stock || 0), 0) / 1000).toFixed(1)}
+                            <span className="text-sm">kg</span>
+                          </p>
+                          <p className="text-xs text-yellow-700">cosechado sin empaquetar</p>
                         </div>
                       </div>
                     </Card>
-                    <Card className="p-4 bg-gradient-to-br from-blue-50 to-cyan-50 border-blue-200">
+                    <Card className={`p-4 ${productosNeveraVencen.length > 0 ? 'bg-red-50 border-red-300' : 'bg-gradient-to-br from-cyan-50 to-blue-50 border-cyan-200'}`}>
                       <div className="flex items-center gap-3">
-                        <div className="text-3xl">📅</div>
-                        <div>
-                          <p className="text-xs text-blue-700 uppercase font-bold tracking-wide">Huecos 7d</p>
-                          <p className="text-2xl font-black text-blue-900">{huecosProximaSemana}</p>
-                          <p className="text-xs text-blue-700">bandejas se liberarán</p>
+                        <div className="text-3xl">❄️</div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs uppercase font-bold tracking-wide ${productosNeveraVencen.length > 0 ? 'text-red-700' : 'text-cyan-700'}`}>Nevera</p>
+                          <p className={`text-2xl font-black ${productosNeveraVencen.length > 0 ? 'text-red-900' : 'text-cyan-900'}`}>{stockNevera}</p>
+                          <p className={`text-xs ${productosNeveraVencen.length > 0 ? 'text-red-700 font-bold' : 'text-cyan-700'}`}>
+                            {productosNeveraVencen.length > 0 ? `⚠️ ${productosNeveraVencen.length} a punto de caducar` : 'unidades empaquetadas'}
+                          </p>
                         </div>
                       </div>
                     </Card>
                   </div>
 
+                  {/* === COSECHAS PRÓXIMAS — VISTA POR DÍA === */}
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-neutral-900">🌾 Cosechas próximos 7 días</h3>
+                        <p className="text-xs text-neutral-500">Bandejas que se cosecharán cada día (y huecos que se liberan)</p>
+                      </div>
+                      <span className="text-xs text-neutral-500">
+                        Total: <strong>{cosechasPorDia.reduce((s, d) => s + d.bandejas, 0)}</strong> bandejas
+                      </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+                      {cosechasPorDia.map((dia) => {
+                        const max = Math.max(1, ...cosechasPorDia.map(d => d.bandejas));
+                        const altura = dia.bandejas > 0 ? Math.max(20, (dia.bandejas / max) * 100) : 8;
+                        const colorBg = dia.esHoy ? 'bg-red-500' : dia.esMañana ? 'bg-orange-500' : dia.bandejas > 0 ? 'bg-green-500' : 'bg-neutral-200';
+                        const colorText = dia.esHoy ? 'text-red-700' : dia.esMañana ? 'text-orange-700' : 'text-neutral-700';
+                        return (
+                          <div key={dia.fechaStr} className={`flex flex-col items-center p-2 rounded-xl border-2 ${dia.esHoy ? 'border-red-300 bg-red-50' : dia.esMañana ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-white'}`}>
+                            <p className={`text-[10px] uppercase font-bold ${colorText}`}>
+                              {dia.esHoy ? 'HOY' : dia.esMañana ? 'MAÑANA' : dia.diaSemana}
+                            </p>
+                            <p className={`text-base font-black ${colorText}`}>{dia.numero}</p>
+                            <p className="text-[10px] text-neutral-400 mb-2">{dia.mes}</p>
+                            <div className="flex items-end h-20 w-full justify-center mb-1">
+                              <div 
+                                className={`w-8 rounded-t transition-all ${colorBg}`} 
+                                style={{ height: `${altura}%`, minHeight: dia.bandejas > 0 ? '20px' : '4px' }}
+                                title={`${dia.bandejas} bandejas`}
+                              ></div>
+                            </div>
+                            <p className={`text-sm font-bold ${colorText}`}>{dia.bandejas}</p>
+                            <p className="text-[9px] text-neutral-500">bandeja{dia.bandejas !== 1 ? 's' : ''}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Detalle por día expandible */}
+                    {cosechasPorDia.some(d => d.lotes.length > 0) && (
+                      <details className="mt-4 border-t pt-3">
+                        <summary className="cursor-pointer text-sm font-semibold text-neutral-700 hover:text-orange-600">
+                          📋 Ver detalle: qué lote toca cada día
+                        </summary>
+                        <div className="space-y-3 mt-3">
+                          {cosechasPorDia.filter(d => d.lotes.length > 0).map(dia => (
+                            <div key={dia.fechaStr}>
+                              <p className={`text-xs font-bold uppercase mb-2 ${dia.esHoy ? 'text-red-700' : dia.esMañana ? 'text-orange-700' : 'text-neutral-700'}`}>
+                                {dia.esHoy ? '🔴 HOY' : dia.esMañana ? '🟠 Mañana' : `${dia.diaSemana} ${dia.numero}`} — {dia.bandejas} bandejas
+                              </p>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-3">
+                                {dia.lotes.map(l => {
+                                  const variedad = variedades.find(v => v.id === l.variedad_id);
+                                  return (
+                                    <div key={l.id} className="flex items-center justify-between p-2 bg-neutral-50 rounded-lg text-sm">
+                                      <span>
+                                        <strong>{variedad?.nombre || 'Sin variedad'}</strong> · {l.bandejas}b
+                                      </span>
+                                      <span className="text-xs text-neutral-500">Lote {l.codigo || '#'+l.id}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </Card>
+
                   {/* Lotes listos para trasladar */}
                   {listosParaTraslado.length > 0 && (
                     <Card className="p-5 border-2 border-orange-300 bg-orange-50/50">
                       <h3 className="text-lg font-bold text-orange-900 mb-3 flex items-center gap-2">
-                        🚚 Lotes listos para trasladar a crecimiento ({listosParaTraslado.length})
+                        🚚 Listos para trasladar a crecimiento ({listosParaTraslado.length})
                       </h3>
                       <div className="space-y-2">
                         {listosParaTraslado.map(l => {
@@ -12281,7 +12358,7 @@ ${logoRootflow}^FS
                                 <p className="font-bold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas} bandejas</p>
                                 <p className="text-xs text-neutral-500">Lote {l.codigo || '#'+l.id} · En germinación {diasReales} días</p>
                               </div>
-                              <Button onClick={() => trasladarFase(l)} className="bg-orange-600 hover:bg-orange-700">
+                              <Button onClick={() => cambiarFase(l, 'crecimiento')} className="bg-orange-600 hover:bg-orange-700">
                                 Trasladar →
                               </Button>
                             </div>
@@ -12291,40 +12368,35 @@ ${logoRootflow}^FS
                     </Card>
                   )}
 
-                  {/* Próximas cosechas */}
-                  {proximosCosecha.length > 0 && (
-                    <Card className="p-5 border-2 border-blue-300 bg-blue-50/50">
-                      <h3 className="text-lg font-bold text-blue-900 mb-3 flex items-center gap-2">
-                        🌾 Próximas cosechas (≤ 2 días)
-                      </h3>
-                      <div className="space-y-2">
-                        {proximosCosecha.map(l => {
-                          const variedad = variedades.find(v => v.id === l.variedad_id);
-                          const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
-                          return (
-                            <div key={l.id} className="flex items-center justify-between gap-3 p-3 bg-white rounded-xl border border-blue-200">
-                              <div className="flex-1">
-                                <p className="font-bold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas} bandejas</p>
-                                <p className="text-xs text-neutral-500">Lote {l.codigo || '#'+l.id} · Cosecha {formatDate(l.fecha_cosecha_prevista)}</p>
-                              </div>
-                              <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}>
-                                {dias <= 0 ? '¡Hoy!' : dias === 1 ? 'Mañana' : `En ${dias}d`}
-                              </Badge>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </Card>
-                  )}
+                  {/* === FLUJO COMPLETO 6 FASES === */}
+                  <Card className="p-5">
+                    <h3 className="text-lg font-bold text-neutral-900 mb-4">🔄 Flujo productivo completo</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                      {[
+                        { fase: 'germinacion', icon: '🌱', label: 'Germinación', count: enGerminacion.length, color: 'bg-amber-100 border-amber-300 text-amber-900' },
+                        { fase: 'crecimiento', icon: '☀️', label: 'Crecimiento', count: enCrecimiento.length, color: 'bg-green-100 border-green-300 text-green-900' },
+                        { fase: 'granel', icon: '📦', label: 'Granel', count: productos.filter(p => p.estado_inventario === 'listo_sin_empaquetar' && (p.gramos_disponibles||p.stock||0) > 0).length, color: 'bg-yellow-100 border-yellow-300 text-yellow-900' },
+                        { fase: 'empaquetado', icon: '🏷️', label: 'Empaquetado', count: productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock||0) > 0).length, color: 'bg-blue-100 border-blue-300 text-blue-900' },
+                        { fase: 'nevera', icon: '❄️', label: 'Nevera', count: stockNevera, color: 'bg-cyan-100 border-cyan-300 text-cyan-900' },
+                        { fase: 'enviado', icon: '🚚', label: 'Enviado', count: pedidos.filter(p => p.estado === 'entregado' && p.fecha_entrega === hoyStr).length, color: 'bg-purple-100 border-purple-300 text-purple-900' },
+                      ].map((f, idx, arr) => (
+                        <div key={f.fase} className="flex items-center">
+                          <div className={`flex-1 p-3 rounded-xl border-2 text-center ${f.color}`}>
+                            <div className="text-2xl mb-1">{f.icon}</div>
+                            <p className="text-[10px] uppercase font-bold tracking-wide">{f.label}</p>
+                            <p className="text-xl font-black mt-1">{f.count}</p>
+                          </div>
+                          {idx < arr.length - 1 && <ArrowUpRight size={14} className="hidden lg:block mx-0.5 text-neutral-400 rotate-45" />}
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
 
-                  {/* Bloques por fase */}
+                  {/* === DOS COLUMNAS: Germinación + Crecimiento === */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {/* Germinación */}
                     <Card className="p-5">
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-amber-900 flex items-center gap-2">
-                          🌱 En germinación ({enGerminacion.length})
-                        </h3>
+                        <h3 className="font-bold text-amber-900 flex items-center gap-2">🌱 En germinación ({enGerminacion.length})</h3>
                         <span className="text-xs text-neutral-500">{pctGerm}% capacidad</span>
                       </div>
                       <div className="space-y-2 max-h-80 overflow-y-auto">
@@ -12351,69 +12423,136 @@ ${logoRootflow}^FS
                       </div>
                     </Card>
 
-                    {/* Crecimiento */}
                     <Card className="p-5">
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-green-900 flex items-center gap-2">
-                          ☀️ En crecimiento ({enCrecimiento.length})
-                        </h3>
+                        <h3 className="font-bold text-green-900 flex items-center gap-2">☀️ En crecimiento ({enCrecimiento.length})</h3>
                         <span className="text-xs text-neutral-500">{pctCrec}% capacidad</span>
                       </div>
                       <div className="space-y-2 max-h-80 overflow-y-auto">
                         {enCrecimiento.length === 0 ? (
                           <p className="text-sm text-neutral-400 text-center py-6">No hay lotes en crecimiento</p>
-                        ) : enCrecimiento.map(l => {
-                          const variedad = variedades.find(v => v.id === l.variedad_id);
-                          const inicio = new Date(l.fecha_traslado_crecimiento || l.fecha_siembra || hoy);
-                          const fin = new Date(l.fecha_cosecha_prevista || hoy);
-                          const totalDias = Math.max(1, Math.ceil((fin - inicio) / (1000*60*60*24)));
-                          const diasReales = Math.max(0, Math.floor((hoy - inicio) / (1000*60*60*24)));
-                          const pctProg = Math.min(100, Math.round(diasReales * 100 / totalDias));
-                          return (
-                            <div key={l.id} className="p-3 bg-green-50 border border-green-200 rounded-xl">
-                              <div className="flex justify-between items-start mb-1">
-                                <span className="font-semibold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas}b</span>
-                                <Badge className="bg-green-100 text-green-700 text-[10px]">Día {diasReales}/{totalDias}</Badge>
+                        ) : enCrecimiento
+                          .sort((a, b) => new Date(a.fecha_cosecha_prevista || '9999-12-31') - new Date(b.fecha_cosecha_prevista || '9999-12-31'))
+                          .map(l => {
+                            const variedad = variedades.find(v => v.id === l.variedad_id);
+                            const inicio = new Date(l.fecha_traslado_crecimiento || l.fecha_siembra || hoy);
+                            const fin = new Date(l.fecha_cosecha_prevista || hoy);
+                            const totalDias = Math.max(1, Math.ceil((fin - inicio) / (1000*60*60*24)));
+                            const diasReales = Math.max(0, Math.floor((hoy - inicio) / (1000*60*60*24)));
+                            const pctProg = Math.min(100, Math.round(diasReales * 100 / totalDias));
+                            const diasACosecha = Math.ceil((fin - hoy) / (1000*60*60*24));
+                            const urgente = diasACosecha <= 1;
+                            return (
+                              <div key={l.id} className={`p-3 rounded-xl border ${urgente ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="font-semibold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas}b</span>
+                                  <Badge className={urgente ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
+                                    {diasACosecha <= 0 ? '¡HOY!' : diasACosecha === 1 ? 'Mañana' : `${diasACosecha}d`}
+                                  </Badge>
+                                </div>
+                                <div className={`w-full rounded-full h-1.5 ${urgente ? 'bg-red-200' : 'bg-green-200'}`}>
+                                  <div className={`h-1.5 rounded-full ${urgente ? 'bg-red-600' : 'bg-green-600'}`} style={{ width: pctProg + '%' }}></div>
+                                </div>
+                                <p className="text-[10px] text-neutral-500 mt-1">Cosecha: {formatDate(l.fecha_cosecha_prevista)}</p>
                               </div>
-                              <div className="w-full bg-green-200 rounded-full h-1.5">
-                                <div className="h-1.5 bg-green-600 rounded-full" style={{ width: pctProg + '%' }}></div>
-                              </div>
-                              <p className="text-[10px] text-green-700 mt-1">Cosecha: {formatDate(l.fecha_cosecha_prevista)}</p>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
                       </div>
                     </Card>
                   </div>
 
-                  {/* Capacidad por tipo de rack */}
+                  {/* === NEVERA: stock empaquetado + alertas de caducidad === */}
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-bold text-cyan-900 flex items-center gap-2">❄️ Stock en nevera</h3>
+                      <span className="text-xs text-neutral-500">{stockNevera} unidades en {productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock || 0) > 0).length} formatos</span>
+                    </div>
+                    
+                    {productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock || 0) > 0).length === 0 ? (
+                      <p className="text-sm text-neutral-400 text-center py-6">No hay producto empaquetado en nevera</p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock || 0) > 0).map(p => {
+                          const variedad = variedades.find(v => v.id === p.variedad_id);
+                          // Último empaquetado_in
+                          const movs = movimientosStock.filter(m => m.producto_id === p.id && m.tipo === 'empaquetado_in')
+                            .sort((a, b) => new Date(b.created_at || b.fecha) - new Date(a.created_at || a.fecha));
+                          const ultimoEmp = movs[0] ? new Date(movs[0].created_at || movs[0].fecha) : null;
+                          const diasEnNevera = ultimoEmp ? Math.floor((hoy - ultimoEmp) / (1000*60*60*24)) : null;
+                          const caducidadDias = 5; // típico microbrotes
+                          const diasRestantes = diasEnNevera !== null ? caducidadDias - diasEnNevera : null;
+                          const urgente = diasRestantes !== null && diasRestantes <= 1;
+                          const ok = diasRestantes !== null && diasRestantes > 2;
+                          return (
+                            <div key={p.id} className={`p-3 rounded-xl border ${urgente ? 'bg-red-50 border-red-300' : ok ? 'bg-cyan-50 border-cyan-200' : 'bg-amber-50 border-amber-200'}`}>
+                              <div className="flex justify-between items-start mb-1">
+                                <span className="font-semibold text-sm">{variedad?.nombre || p.nombre}{p.formato_gramos ? ` · ${p.formato_gramos}g` : ''}</span>
+                                <Badge className={urgente ? 'bg-red-100 text-red-700' : ok ? 'bg-cyan-100 text-cyan-700' : 'bg-amber-100 text-amber-700'}>
+                                  {p.stock} ud
+                                </Badge>
+                              </div>
+                              {diasEnNevera !== null && (
+                                <p className={`text-[11px] ${urgente ? 'text-red-700 font-bold' : ok ? 'text-cyan-700' : 'text-amber-700'}`}>
+                                  {urgente 
+                                    ? `⚠️ Día ${diasEnNevera} (caduca ${diasRestantes <= 0 ? 'HOY' : 'en ' + diasRestantes + 'd'})`
+                                    : `📅 Día ${diasEnNevera}/${caducidadDias} (quedan ${diasRestantes}d)`}
+                                </p>
+                              )}
+                              {diasEnNevera === null && <p className="text-[11px] text-neutral-500">Sin fecha registrada</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    
+                    {capacidadNevera > 0 && (
+                      <div className="mt-3 pt-3 border-t">
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="font-semibold text-cyan-700">Huecos físicos nevera</span>
+                          <span className="text-neutral-500">{racksNevera.length} racks · {capacidadNevera} huecos</span>
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+
+                  {/* === CAPACIDAD POR TIPO === */}
                   <Card className="p-5">
                     <h3 className="font-bold text-neutral-900 mb-3">📊 Capacidad por tipo de rack</h3>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div>
                         <div className="flex justify-between text-sm mb-1">
-                          <span className="font-semibold">🌱 Racks de germinación ({racksGerm.length})</span>
+                          <span className="font-semibold">🌱 Germinación ({racksGerm.length})</span>
                           <span className="text-neutral-500">{bandejasGerm}/{capacidadGerm}</span>
                         </div>
                         <div className="w-full bg-neutral-100 rounded-full h-3">
                           <div className="h-3 rounded-full bg-amber-500" style={{ width: pctGerm + '%' }}></div>
                         </div>
-                        <p className="text-[10px] text-neutral-500 mt-1">Quedan libres {Math.max(0, capacidadGerm - bandejasGerm)} bandejas</p>
+                        <p className="text-[10px] text-neutral-500 mt-1">Libres: {Math.max(0, capacidadGerm - bandejasGerm)}</p>
                       </div>
                       <div>
                         <div className="flex justify-between text-sm mb-1">
-                          <span className="font-semibold">☀️ Racks de crecimiento ({racksCrec.length})</span>
+                          <span className="font-semibold">☀️ Crecimiento ({racksCrec.length})</span>
                           <span className="text-neutral-500">{bandejasCrec}/{capacidadCrec}</span>
                         </div>
                         <div className="w-full bg-neutral-100 rounded-full h-3">
                           <div className="h-3 rounded-full bg-green-500" style={{ width: pctCrec + '%' }}></div>
                         </div>
-                        <p className="text-[10px] text-neutral-500 mt-1">Quedan libres {Math.max(0, capacidadCrec - bandejasCrec)} bandejas</p>
+                        <p className="text-[10px] text-neutral-500 mt-1">Libres: {Math.max(0, capacidadCrec - bandejasCrec)}</p>
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-semibold">❄️ Nevera ({racksNevera.length})</span>
+                          <span className="text-neutral-500">— / {capacidadNevera}</span>
+                        </div>
+                        <div className="w-full bg-neutral-100 rounded-full h-3">
+                          <div className="h-3 rounded-full bg-cyan-500" style={{ width: '0%' }}></div>
+                        </div>
+                        <p className="text-[10px] text-neutral-500 mt-1">{capacidadNevera === 0 ? '⚠️ Sin racks de nevera configurados' : 'Capacidad disponible'}</p>
                       </div>
                     </div>
-                    {capacidadGerm === 0 && (
+                    {(capacidadGerm === 0 || capacidadNevera === 0) && (
                       <p className="text-xs text-amber-700 mt-3 bg-amber-50 p-2 rounded">
-                        ⚠️ No tienes ningún rack marcado como tipo "germinación". Ve a la pestaña Racks y configura el tipo de cada uno.
+                        💡 Ve a la pestaña Racks y marca el tipo de cada uno (germinación, crecimiento o nevera).
                       </p>
                     )}
                   </Card>
