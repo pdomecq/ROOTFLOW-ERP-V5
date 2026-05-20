@@ -1597,6 +1597,8 @@ const MainApp = () => {
   const { data: leadActividadesData, refetch: refetchLeadActividades } = useRealtime('lead_actividades');
   // V42 - Eventos personalizados de calendario
   const { data: eventosCalData, refetch: refetchEventosCal } = useRealtime('eventos_calendario');
+  // V44 - Movimientos de lotes entre racks (germinación → crecimiento)
+  const { data: loteMovimientosData, refetch: refetchLoteMovimientos } = useRealtime('lote_movimientos');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1698,6 +1700,8 @@ const MainApp = () => {
   const leadActividades = leadActividadesData || [];
   // V42 - Eventos personalizados de calendario
   const eventosCal = eventosCalData || [];
+  // V44 - Movimientos de lotes (traslados germinación → crecimiento)
+  const loteMovimientos = loteMovimientosData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -3488,7 +3492,42 @@ const MainApp = () => {
       
       refetchProductos();
       refetchMovimientosStock();
-      alert(`✅ Empaquetado correctamente\n\n+${unidades} × ${formatoProd.nombre}\n−${gramosNecesarios}g del granel (quedan ${granelNuevo}g)`);
+      
+      // V44: Ofrecer imprimir etiquetas para las unidades recién empaquetadas
+      const queremos = window.confirm(`✅ Empaquetado correctamente\n\n+${unidades} × ${formatoProd.nombre}\n−${gramosNecesarios}g del granel (quedan ${granelNuevo}g)\n\n¿Quieres descargar AHORA las ${unidades} etiqueta${unidades !== 1 ? 's' : ''} ZPL para imprimirlas?`);
+      if (queremos) {
+        // Generar ZPL para N etiquetas usando el producto empaquetado (no un lote)
+        const variedadProd = variedades.find(v => v.id === formatoProd.variedad_id);
+        const nombreProducto = (variedadProd?.nombre || formatoProd.nombre || 'Brotes').toUpperCase();
+        const peso = formatoProd.formato_gramos || 100;
+        const hoyD = new Date();
+        const consumo = new Date(hoyD); consumo.setDate(consumo.getDate() + 7);
+        const fmtFecha = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(-2)}`;
+        
+        // "lote sintético" para alimentar generarZPL
+        const loteFake = {
+          id: 'EMP-' + Date.now(),
+          codigo: `EMP-${hoyD.toISOString().slice(0,10).replace(/-/g,'')}`,
+          variedad_id: formatoProd.variedad_id,
+          producto_id: formatoProd.id,
+          fecha_cosecha_real: hoyD.toISOString().slice(0,10),
+          fecha_cosecha_prevista: hoyD.toISOString().slice(0,10),
+          formato_gramos: peso,
+        };
+        let zplCompleto = '';
+        for (let i = 0; i < unidades; i++) {
+          zplCompleto += (typeof generarZPLProducto === 'function' 
+            ? generarZPLProducto(loteFake, i + 1) 
+            : '') + '\n';
+        }
+        if (zplCompleto.trim()) {
+          const blob = new Blob([zplCompleto], { type: 'text/plain' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `etiquetas-${formatoProd.nombre.replace(/[^a-zA-Z0-9]/g,'_')}-${unidades}u.zpl`;
+          a.click();
+        }
+      }
     } catch (e) {
       console.error('Error empaquetando:', e);
       alert('❌ Error al empaquetar: ' + e.message);
@@ -4923,6 +4962,7 @@ const MainApp = () => {
       num_baldas: 4,
       bandejas_por_balda: 6,
       tamano_bandeja: '1020',
+      tipo: 'crecimiento', // V44
       pos_x: 0,
       pos_y: 0,
       color: '#22C55E',
@@ -4940,6 +4980,18 @@ const MainApp = () => {
           <Input label="Código *" value={form.codigo} onChange={e => setForm({...form, codigo: e.target.value.toUpperCase()})} placeholder="A, B, C1..." />
           <Input label="Nombre" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Rack A - Germinación" />
         </div>
+
+        {/* V44: Tipo de rack según fase productiva */}
+        <Select 
+          label="Tipo de rack (fase productiva) *" 
+          value={form.tipo || 'crecimiento'}
+          onChange={e => setForm({...form, tipo: e.target.value})}
+          options={[
+            { value: 'germinacion', label: '🌱 Germinación (invernadero, fase oscura)' },
+            { value: 'crecimiento', label: '☀️ Crecimiento (con luz, hasta cosecha)' },
+            { value: 'mixto', label: '🔄 Mixto (sirve para ambas fases)' },
+          ]}
+        />
 
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -10837,8 +10889,111 @@ ${transacciones}
   });
 
   // === Etiqueta ZPL de MUESTRA (nivel componente, accesible desde renderMuestras y renderProduccion) ===
+
+  // === Etiqueta ZPL DE PRODUCTO (nivel componente, accesible desde handleEmpaquetar) ===
+  const generarZPLProducto = (lote, index = 1) => {
+    const variedad = variedades.find(v => v.id === lote.variedad_id);
+    const producto = productos.find(p => p.id === lote.producto_id);
+    const nombreProducto = (variedad?.nombre || producto?.nombre || 'Brotes').toUpperCase();
+    const fechaCosecha = new Date(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+    const fechaConsumo = new Date(fechaCosecha);
+    fechaConsumo.setDate(fechaConsumo.getDate() + 7);
+    
+    // Configuración fija: 50x40mm @ 203 DPI = 400x320 dots
+    const dpi = 203;
+    const anchoLabel = 400;
+    const altoLabel = 320;
+    
+    // Formato de fecha dd/mm/aa
+    const fmtFechaCorta = (d) => {
+      const dt = new Date(d);
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      const aa = String(dt.getFullYear()).slice(-2);
+      return `${dd}/${mm}/${aa}`;
+    };
+    const fechaCosechaStr = fmtFechaCorta(lote.fecha_cosecha_real || lote.fecha_cosecha_prevista);
+    const fechaConsumoStr = fmtFechaCorta(fechaConsumo);
+    
+    // Peso real del producto (NO hardcodeado a 100g)
+    const pesoGramos = producto?.formato_gramos || lote.formato_gramos || lote.peso_gramos || 100;
+    const pesoStr = `${pesoGramos}g`;
+    
+    // === LOGO ROOTFLOW EN ZPL (64x64 dots, ~8mm) ===
+    // Diseño de hoja con tallo estilizada
+    const logoRootflow = `^FO15,15
+^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
+    
+    return `^XA
+^CI28
+^PW${anchoLabel}
+^LL${altoLabel}
+^LH0,0
+^LRN
+^LS0
+
+${logoRootflow}^FS
+
+^FO95,18
+^A0N,38,38
+^FDRootFlow^FS
+
+^FO95,58
+^A0N,18,18
+^FDMICROBROTES PREMIUM^FS
+
+^FO10,90
+^GB380,2,2^FS
+
+^FO10,100
+^A0N,48,48
+^FB380,1,0,C,0
+^FD${nombreProducto}^FS
+
+^FO10,155
+^A0N,18,18
+^FB380,1,0,C,0
+^FDBrotes tiernos · Cultivado en Madrid^FS
+
+^FO10,182
+^GB380,28,28^FS
+^FO10,189
+^A0N,20,20
+^FB380,1,0,C,0
+^FR^FDLAVAR ANTES DE CONSUMIR^FS
+
+^FO10,222
+^A0N,18,18
+^FDLote: ${lote.codigo || 'L-'+lote.id}^FS
+
+^FO230,222
+^A0N,18,18
+^FDPeso neto: ${pesoStr}^FS
+
+^FO10,246
+^A0N,18,18
+^FDCosecha: ${fechaCosechaStr}^FS
+
+^FO230,246
+^A0N,18,18
+^FDConsumir: ${fechaConsumoStr}^FS
+
+^FO10,270
+^A0N,15,15
+^FDConservar refrigerado 2-5°C^FS
+
+^FO10,290
+^GB380,1,1^FS
+
+^FO10,297
+^A0N,13,13
+^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 694 918 481^FS
+
+^XZ`;
+  };
     const generarZPLMuestra = (muestra, index = 1) => {
-      const nombreVariedad = (muestra.variedad || muestra.nombre || 'MUESTRA').toUpperCase();
+      // V44: Priorizar SIEMPRE el nombre del producto/variedad sobre el genérico
+      const nombreProducto = (muestra.variedad || muestra.producto_nombre || 'BROTES FRESCOS').toUpperCase();
       // Formato fecha dd/mm/aa
       const fmtFechaCorta = (d) => {
         if (!d) return '';
@@ -10890,7 +11045,7 @@ ${logoRootflow}^FS
 ^FO10,98
 ^A0N,42,42
 ^FB380,1,0,C,0
-^FD${nombreVariedad}^FS
+^FD${nombreProducto}^FS
 
 ^FO10,144
 ^A0N,15,15
@@ -11405,6 +11560,17 @@ ${logoRootflow}^FS
             className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'racks' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
           >
             <Building2 size={18} />Racks
+          </button>
+          <button 
+            onClick={() => setProduccionTab('fases')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'fases' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <Layers size={18} />Fases
+            {(() => {
+              const activos = lotes.filter(l => ['sembrado','creciendo'].includes(l.estado));
+              const enGerm = activos.filter(l => (l.fase || 'crecimiento') === 'germinacion').length;
+              return enGerm > 0 ? <span className={`text-xs px-2 py-0.5 rounded-full ${produccionTab === 'fases' ? 'bg-white/20' : 'bg-amber-500 text-white'}`}>{enGerm}</span> : null;
+            })()}
           </button>
         </div>
 
@@ -11946,6 +12112,314 @@ ${logoRootflow}^FS
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        )}
+
+        {/* ============ PESTAÑA FASES PRODUCTIVAS ============ */}
+        {produccionTab === 'fases' && (
+          <div className="space-y-5">
+            {(() => {
+              const hoy = new Date(); hoy.setHours(0,0,0,0);
+              const activos = lotes.filter(l => ['sembrado','creciendo'].includes(l.estado));
+              const enGerminacion = activos.filter(l => (l.fase || 'crecimiento') === 'germinacion');
+              const enCrecimiento = activos.filter(l => (l.fase || 'crecimiento') !== 'germinacion');
+              
+              // Racks por tipo
+              const racksGerm = racksConfig.filter(r => r.activo !== false && (r.tipo === 'germinacion' || r.tipo === 'mixto'));
+              const racksCrec = racksConfig.filter(r => r.activo !== false && (r.tipo === 'crecimiento' || r.tipo === 'mixto'));
+              
+              // Capacidad total
+              const capacidadGerm = racksGerm.reduce((s, r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
+              const capacidadCrec = racksCrec.reduce((s, r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
+              
+              // Ocupación: contar bandejas únicas de cada fase
+              const bandejasGerm = loteBandejas.filter(lb => enGerminacion.some(l => l.id === lb.lote_id)).length;
+              const bandejasCrec = loteBandejas.filter(lb => enCrecimiento.some(l => l.id === lb.lote_id)).length;
+              const pctGerm = capacidadGerm > 0 ? Math.round(bandejasGerm * 100 / capacidadGerm) : 0;
+              const pctCrec = capacidadCrec > 0 ? Math.round(bandejasCrec * 100 / capacidadCrec) : 0;
+              
+              // Listos para trasladar (días germinación cumplidos)
+              const listosParaTraslado = enGerminacion.filter(l => {
+                if (!l.fecha_germinacion_inicio && !l.fecha_siembra) return false;
+                const inicio = new Date(l.fecha_germinacion_inicio || l.fecha_siembra);
+                const variedad = variedades.find(v => v.id === l.variedad_id);
+                const diasGerm = l.dias_germinacion || variedad?.dias_germinacion || 3;
+                const objetivo = new Date(inicio); objetivo.setDate(objetivo.getDate() + diasGerm);
+                return objetivo <= hoy;
+              });
+              
+              // Próximos a cosechar (en crecimiento, días cumplidos)
+              const proximosCosecha = enCrecimiento.filter(l => {
+                if (!l.fecha_cosecha_prevista) return false;
+                const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
+                return dias <= 2;
+              });
+              
+              // Estimar huecos liberados en próximos 7 días
+              const huecosProximaSemana = enCrecimiento.filter(l => {
+                if (!l.fecha_cosecha_prevista) return false;
+                const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
+                return dias >= 0 && dias <= 7;
+              }).reduce((s, l) => s + (l.bandejas || 0), 0);
+              
+              const trasladarFase = async (lote) => {
+                const ubicNuevas = window.prompt(`Trasladar lote "${lote.codigo || lote.id}" de germinación a crecimiento.\n\nIndica las ubicaciones de destino en racks de crecimiento, separadas por coma (ej: B-1-1,B-1-2,B-2-3):`, '');
+                if (ubicNuevas === null) return;
+                const ubicArr = ubicNuevas.split(',').map(s => s.trim()).filter(Boolean);
+                if (ubicArr.length === 0) {
+                  if (!window.confirm('No has indicado ubicaciones. ¿Trasladar igualmente sin asignar bandejas físicas?')) return;
+                }
+                try {
+                  // Actualizar lote
+                  await supabase.from('lotes').update({
+                    fase: 'crecimiento',
+                    fecha_traslado_crecimiento: hoy.toISOString().slice(0,10),
+                  }).eq('id', lote.id);
+                  
+                  // Borrar ubicaciones antiguas
+                  if (ubicArr.length > 0) {
+                    await supabase.from('lote_bandejas').delete().eq('lote_id', lote.id);
+                    // Insertar nuevas
+                    const rows = ubicArr.map(codigo => {
+                      const partes = codigo.split('-');
+                      const rackCod = partes[0];
+                      const rack = racksConfig.find(r => r.codigo === rackCod);
+                      return {
+                        lote_id: lote.id,
+                        rack_id: rack?.id || null,
+                        balda: parseInt(partes[1]) || 1,
+                        posicion: parseInt(partes[2]) || 1,
+                        codigo: codigo,
+                      };
+                    });
+                    await supabase.from('lote_bandejas').insert(rows);
+                  }
+                  
+                  // Registrar movimiento
+                  await supabase.from('lote_movimientos').insert({
+                    lote_id: lote.id,
+                    tipo: 'traslado',
+                    fase_anterior: 'germinacion',
+                    fase_nueva: 'crecimiento',
+                    ubicaciones_destino: ubicArr,
+                    bandejas_afectadas: lote.bandejas || ubicArr.length,
+                    notas: 'Traslado de germinación a crecimiento',
+                  });
+                  
+                  refetchLotes();
+                  refetchLoteBandejas();
+                  refetchLoteMovimientos();
+                  alert('✅ Lote trasladado a crecimiento');
+                } catch (e) {
+                  console.error(e);
+                  alert('❌ Error: ' + e.message);
+                }
+              };
+              
+              return (
+                <>
+                  {/* KPIs */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <Card className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200">
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">🌱</div>
+                        <div>
+                          <p className="text-xs text-amber-700 uppercase font-bold tracking-wide">Germinación</p>
+                          <p className="text-2xl font-black text-amber-900">{enGerminacion.length}</p>
+                          <p className="text-xs text-amber-700">{bandejasGerm} bandejas · {pctGerm}% ocupado</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className="p-4 bg-gradient-to-br from-green-50 to-emerald-50 border-green-200">
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">☀️</div>
+                        <div>
+                          <p className="text-xs text-green-700 uppercase font-bold tracking-wide">Crecimiento</p>
+                          <p className="text-2xl font-black text-green-900">{enCrecimiento.length}</p>
+                          <p className="text-xs text-green-700">{bandejasCrec} bandejas · {pctCrec}% ocupado</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className={`p-4 ${listosParaTraslado.length > 0 ? 'bg-orange-50 border-orange-300' : ''}`}>
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">{listosParaTraslado.length > 0 ? '🚚' : '⏳'}</div>
+                        <div>
+                          <p className="text-xs uppercase font-bold tracking-wide" style={{color: listosParaTraslado.length > 0 ? '#C2410C' : '#737373'}}>A trasladar</p>
+                          <p className={`text-2xl font-black ${listosParaTraslado.length > 0 ? 'text-orange-900' : 'text-neutral-900'}`}>{listosParaTraslado.length}</p>
+                          <p className="text-xs text-neutral-500">germinación completa</p>
+                        </div>
+                      </div>
+                    </Card>
+                    <Card className="p-4 bg-gradient-to-br from-blue-50 to-cyan-50 border-blue-200">
+                      <div className="flex items-center gap-3">
+                        <div className="text-3xl">📅</div>
+                        <div>
+                          <p className="text-xs text-blue-700 uppercase font-bold tracking-wide">Huecos 7d</p>
+                          <p className="text-2xl font-black text-blue-900">{huecosProximaSemana}</p>
+                          <p className="text-xs text-blue-700">bandejas se liberarán</p>
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Lotes listos para trasladar */}
+                  {listosParaTraslado.length > 0 && (
+                    <Card className="p-5 border-2 border-orange-300 bg-orange-50/50">
+                      <h3 className="text-lg font-bold text-orange-900 mb-3 flex items-center gap-2">
+                        🚚 Lotes listos para trasladar a crecimiento ({listosParaTraslado.length})
+                      </h3>
+                      <div className="space-y-2">
+                        {listosParaTraslado.map(l => {
+                          const variedad = variedades.find(v => v.id === l.variedad_id);
+                          const inicio = new Date(l.fecha_germinacion_inicio || l.fecha_siembra);
+                          const diasReales = Math.floor((hoy - inicio) / (1000*60*60*24));
+                          return (
+                            <div key={l.id} className="flex items-center justify-between gap-3 p-3 bg-white rounded-xl border border-orange-200">
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas} bandejas</p>
+                                <p className="text-xs text-neutral-500">Lote {l.codigo || '#'+l.id} · En germinación {diasReales} días</p>
+                              </div>
+                              <Button onClick={() => trasladarFase(l)} className="bg-orange-600 hover:bg-orange-700">
+                                Trasladar →
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  )}
+
+                  {/* Próximas cosechas */}
+                  {proximosCosecha.length > 0 && (
+                    <Card className="p-5 border-2 border-blue-300 bg-blue-50/50">
+                      <h3 className="text-lg font-bold text-blue-900 mb-3 flex items-center gap-2">
+                        🌾 Próximas cosechas (≤ 2 días)
+                      </h3>
+                      <div className="space-y-2">
+                        {proximosCosecha.map(l => {
+                          const variedad = variedades.find(v => v.id === l.variedad_id);
+                          const dias = Math.ceil((new Date(l.fecha_cosecha_prevista) - hoy) / (1000*60*60*24));
+                          return (
+                            <div key={l.id} className="flex items-center justify-between gap-3 p-3 bg-white rounded-xl border border-blue-200">
+                              <div className="flex-1">
+                                <p className="font-bold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas} bandejas</p>
+                                <p className="text-xs text-neutral-500">Lote {l.codigo || '#'+l.id} · Cosecha {formatDate(l.fecha_cosecha_prevista)}</p>
+                              </div>
+                              <Badge className={dias <= 0 ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}>
+                                {dias <= 0 ? '¡Hoy!' : dias === 1 ? 'Mañana' : `En ${dias}d`}
+                              </Badge>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  )}
+
+                  {/* Bloques por fase */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Germinación */}
+                    <Card className="p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-amber-900 flex items-center gap-2">
+                          🌱 En germinación ({enGerminacion.length})
+                        </h3>
+                        <span className="text-xs text-neutral-500">{pctGerm}% capacidad</span>
+                      </div>
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {enGerminacion.length === 0 ? (
+                          <p className="text-sm text-neutral-400 text-center py-6">No hay lotes en germinación</p>
+                        ) : enGerminacion.map(l => {
+                          const variedad = variedades.find(v => v.id === l.variedad_id);
+                          const inicio = new Date(l.fecha_germinacion_inicio || l.fecha_siembra || hoy);
+                          const diasGerm = l.dias_germinacion || variedad?.dias_germinacion || 3;
+                          const diasReales = Math.floor((hoy - inicio) / (1000*60*60*24));
+                          const pctProg = Math.min(100, Math.round(diasReales * 100 / diasGerm));
+                          return (
+                            <div key={l.id} className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                              <div className="flex justify-between items-start mb-1">
+                                <span className="font-semibold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas}b</span>
+                                <Badge className="bg-amber-100 text-amber-700 text-[10px]">Día {diasReales}/{diasGerm}</Badge>
+                              </div>
+                              <div className="w-full bg-amber-200 rounded-full h-1.5">
+                                <div className="h-1.5 bg-amber-600 rounded-full" style={{ width: pctProg + '%' }}></div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+
+                    {/* Crecimiento */}
+                    <Card className="p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-green-900 flex items-center gap-2">
+                          ☀️ En crecimiento ({enCrecimiento.length})
+                        </h3>
+                        <span className="text-xs text-neutral-500">{pctCrec}% capacidad</span>
+                      </div>
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {enCrecimiento.length === 0 ? (
+                          <p className="text-sm text-neutral-400 text-center py-6">No hay lotes en crecimiento</p>
+                        ) : enCrecimiento.map(l => {
+                          const variedad = variedades.find(v => v.id === l.variedad_id);
+                          const inicio = new Date(l.fecha_traslado_crecimiento || l.fecha_siembra || hoy);
+                          const fin = new Date(l.fecha_cosecha_prevista || hoy);
+                          const totalDias = Math.max(1, Math.ceil((fin - inicio) / (1000*60*60*24)));
+                          const diasReales = Math.max(0, Math.floor((hoy - inicio) / (1000*60*60*24)));
+                          const pctProg = Math.min(100, Math.round(diasReales * 100 / totalDias));
+                          return (
+                            <div key={l.id} className="p-3 bg-green-50 border border-green-200 rounded-xl">
+                              <div className="flex justify-between items-start mb-1">
+                                <span className="font-semibold text-sm">{variedad?.nombre || 'Sin variedad'} · {l.bandejas}b</span>
+                                <Badge className="bg-green-100 text-green-700 text-[10px]">Día {diasReales}/{totalDias}</Badge>
+                              </div>
+                              <div className="w-full bg-green-200 rounded-full h-1.5">
+                                <div className="h-1.5 bg-green-600 rounded-full" style={{ width: pctProg + '%' }}></div>
+                              </div>
+                              <p className="text-[10px] text-green-700 mt-1">Cosecha: {formatDate(l.fecha_cosecha_prevista)}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Capacidad por tipo de rack */}
+                  <Card className="p-5">
+                    <h3 className="font-bold text-neutral-900 mb-3">📊 Capacidad por tipo de rack</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-semibold">🌱 Racks de germinación ({racksGerm.length})</span>
+                          <span className="text-neutral-500">{bandejasGerm}/{capacidadGerm}</span>
+                        </div>
+                        <div className="w-full bg-neutral-100 rounded-full h-3">
+                          <div className="h-3 rounded-full bg-amber-500" style={{ width: pctGerm + '%' }}></div>
+                        </div>
+                        <p className="text-[10px] text-neutral-500 mt-1">Quedan libres {Math.max(0, capacidadGerm - bandejasGerm)} bandejas</p>
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="font-semibold">☀️ Racks de crecimiento ({racksCrec.length})</span>
+                          <span className="text-neutral-500">{bandejasCrec}/{capacidadCrec}</span>
+                        </div>
+                        <div className="w-full bg-neutral-100 rounded-full h-3">
+                          <div className="h-3 rounded-full bg-green-500" style={{ width: pctCrec + '%' }}></div>
+                        </div>
+                        <p className="text-[10px] text-neutral-500 mt-1">Quedan libres {Math.max(0, capacidadCrec - bandejasCrec)} bandejas</p>
+                      </div>
+                    </div>
+                    {capacidadGerm === 0 && (
+                      <p className="text-xs text-amber-700 mt-3 bg-amber-50 p-2 rounded">
+                        ⚠️ No tienes ningún rack marcado como tipo "germinación". Ve a la pestaña Racks y configura el tipo de cada uno.
+                      </p>
+                    )}
+                  </Card>
+                </>
+              );
+            })()}
           </div>
         )}
 
