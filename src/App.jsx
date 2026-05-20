@@ -8086,6 +8086,200 @@ const MainApp = () => {
           </Card>
         </div>
 
+        {/* ============ WIDGET PRODUCCIÓN INTERACTIVO V46 ============ */}
+        {(() => {
+          const hoyD = new Date(); hoyD.setHours(0,0,0,0);
+          
+          // Clasificar lotes por fase
+          const lotesActivos = lotes.filter(l => ['sembrado','creciendo'].includes(l.estado));
+          const enGerm = lotesActivos.filter(l => (l.fase || '') === 'germinacion' || (!l.fase && l.estado === 'sembrado'));
+          const enCrec = lotesActivos.filter(l => l.fase === 'crecimiento' || (!l.fase && l.estado === 'creciendo'));
+          const stockEmpaq = productos.filter(p => p.estado_inventario === 'empaquetado' && (p.stock||0)>0).reduce((s,p) => s+(p.stock||0), 0);
+          const granelKg = (productos.filter(p => p.estado_inventario === 'listo_sin_empaquetar').reduce((s,p) => s + (p.gramos_disponibles||p.stock||0), 0) / 1000).toFixed(1);
+          
+          // Capacidad y ocupación
+          const racksGerm = racksConfig.filter(r => r.activo !== false && (r.tipo === 'germinacion' || r.tipo === 'mixto'));
+          const racksCrec = racksConfig.filter(r => r.activo !== false && (r.tipo === 'crecimiento' || r.tipo === 'mixto'));
+          const capGerm = racksGerm.reduce((s,r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
+          const capCrec = racksCrec.reduce((s,r) => s + (r.num_baldas * r.bandejas_por_balda), 0);
+          const bandejasGermAct = loteBandejas.filter(lb => enGerm.some(l => l.id === lb.lote_id)).length;
+          const bandejasCrecAct = loteBandejas.filter(lb => enCrec.some(l => l.id === lb.lote_id)).length;
+          
+          // Cosechas próximas (hoy a 5 días)
+          const cosechasPorDia = [];
+          for (let d = 0; d <= 5; d++) {
+            const fecha = new Date(hoyD); fecha.setDate(fecha.getDate() + d);
+            const fStr = fecha.toISOString().slice(0,10);
+            const lotesEseDia = enCrec.filter(l => l.fecha_cosecha_prevista?.slice(0,10) === fStr);
+            cosechasPorDia.push({
+              d, fecha,
+              esHoy: d === 0, esMañana: d === 1,
+              dia: fecha.toLocaleDateString('es-ES', { weekday: 'short' }),
+              num: fecha.getDate(),
+              bandejas: lotesEseDia.reduce((s,l) => s + (l.bandejas||0), 0),
+              lotes: lotesEseDia,
+            });
+          }
+          
+          // Listos para trasladar
+          const listosTraslado = enGerm.filter(l => {
+            if (!l.fecha_germinacion_inicio && !l.fecha_siembra) return false;
+            const inicio = new Date(l.fecha_germinacion_inicio || l.fecha_siembra);
+            const variedad = variedades.find(v => v.id === l.variedad_id);
+            const diasGerm = l.dias_germinacion || variedad?.dias_germinacion || 3;
+            const objetivo = new Date(inicio); objetivo.setDate(objetivo.getDate() + diasGerm);
+            return objetivo <= hoyD;
+          });
+          
+          // Producto en nevera caducando pronto (≥4 días desde empaquetado)
+          const neveraVencen = productos.filter(p => {
+            if (p.estado_inventario !== 'empaquetado' || (p.stock||0) <= 0) return false;
+            const movs = movimientosStock.filter(m => m.producto_id === p.id && m.tipo === 'empaquetado_in')
+              .sort((a,b) => new Date(b.created_at||b.fecha) - new Date(a.created_at||a.fecha));
+            if (movs.length === 0) return false;
+            const dias = (hoyD - new Date(movs[0].created_at || movs[0].fecha)) / (1000*60*60*24);
+            return dias >= 4;
+          });
+          
+          // Si no hay nada productivo, no mostrar
+          if (lotesActivos.length === 0 && stockEmpaq === 0 && parseFloat(granelKg) === 0) {
+            return null;
+          }
+          
+          return (
+            <Card className="p-5 overflow-hidden">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900 flex items-center gap-2">
+                    🌱 Producción en tiempo real
+                  </h3>
+                  <p className="text-xs text-neutral-500">Vista general del ciclo productivo · Click en cualquier fase para ir al detalle</p>
+                </div>
+                <button onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }} className="text-xs px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg font-semibold flex items-center gap-1">
+                  Ver fases <ArrowUpRight size={12} />
+                </button>
+              </div>
+
+              {/* Flujo 5 fases clickable */}
+              <div className="grid grid-cols-5 gap-2 mb-5">
+                <button 
+                  onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }}
+                  className="p-3 rounded-xl bg-amber-50 border-2 border-amber-200 hover:border-amber-400 hover:shadow-md transition-all text-center group"
+                >
+                  <div className="text-2xl mb-1 group-hover:scale-110 transition-transform">🌱</div>
+                  <p className="text-[10px] uppercase font-bold text-amber-700 tracking-wide">Germinación</p>
+                  <p className="text-2xl font-black text-amber-900">{enGerm.length}</p>
+                  <p className="text-[10px] text-amber-700">{bandejasGermAct}/{capGerm}b</p>
+                </button>
+                
+                <button 
+                  onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }}
+                  className="p-3 rounded-xl bg-green-50 border-2 border-green-200 hover:border-green-400 hover:shadow-md transition-all text-center group"
+                >
+                  <div className="text-2xl mb-1 group-hover:scale-110 transition-transform">☀️</div>
+                  <p className="text-[10px] uppercase font-bold text-green-700 tracking-wide">Crecimiento</p>
+                  <p className="text-2xl font-black text-green-900">{enCrec.length}</p>
+                  <p className="text-[10px] text-green-700">{bandejasCrecAct}/{capCrec}b</p>
+                </button>
+                
+                <button 
+                  onClick={() => { setActiveSection('produccion'); setProduccionTab('empaquetado'); }}
+                  className="p-3 rounded-xl bg-yellow-50 border-2 border-yellow-200 hover:border-yellow-400 hover:shadow-md transition-all text-center group"
+                >
+                  <div className="text-2xl mb-1 group-hover:scale-110 transition-transform">📦</div>
+                  <p className="text-[10px] uppercase font-bold text-yellow-700 tracking-wide">Granel</p>
+                  <p className="text-2xl font-black text-yellow-900">{granelKg}</p>
+                  <p className="text-[10px] text-yellow-700">kg sin empaquetar</p>
+                </button>
+                
+                <button 
+                  onClick={() => { setActiveSection('productos'); }}
+                  className={`p-3 rounded-xl border-2 hover:shadow-md transition-all text-center group ${neveraVencen.length > 0 ? 'bg-red-50 border-red-300 hover:border-red-500' : 'bg-cyan-50 border-cyan-200 hover:border-cyan-400'}`}
+                >
+                  <div className="text-2xl mb-1 group-hover:scale-110 transition-transform">❄️</div>
+                  <p className={`text-[10px] uppercase font-bold tracking-wide ${neveraVencen.length > 0 ? 'text-red-700' : 'text-cyan-700'}`}>Nevera</p>
+                  <p className={`text-2xl font-black ${neveraVencen.length > 0 ? 'text-red-900' : 'text-cyan-900'}`}>{stockEmpaq}</p>
+                  <p className={`text-[10px] ${neveraVencen.length > 0 ? 'text-red-700 font-bold' : 'text-cyan-700'}`}>
+                    {neveraVencen.length > 0 ? `⚠️ ${neveraVencen.length} caduca` : 'unidades'}
+                  </p>
+                </button>
+                
+                <button 
+                  onClick={() => { setActiveSection('pedidos'); }}
+                  className="p-3 rounded-xl bg-purple-50 border-2 border-purple-200 hover:border-purple-400 hover:shadow-md transition-all text-center group"
+                >
+                  <div className="text-2xl mb-1 group-hover:scale-110 transition-transform">🚚</div>
+                  <p className="text-[10px] uppercase font-bold text-purple-700 tracking-wide">Enviado hoy</p>
+                  <p className="text-2xl font-black text-purple-900">{pedidos.filter(p => p.estado === 'entregado' && p.fecha_entrega === hoyD.toISOString().slice(0,10)).length}</p>
+                  <p className="text-[10px] text-purple-700">pedidos entregados</p>
+                </button>
+              </div>
+
+              {/* Alertas de acción inmediata */}
+              {(listosTraslado.length > 0 || neveraVencen.length > 0 || cosechasPorDia[0].bandejas > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-5">
+                  {cosechasPorDia[0].bandejas > 0 && (
+                    <button onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }} className="flex items-center gap-2 p-3 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-left transition-colors">
+                      <span className="text-2xl">🌾</span>
+                      <div className="flex-1">
+                        <p className="font-bold text-sm text-red-900">Cosecha HOY</p>
+                        <p className="text-xs text-red-700">{cosechasPorDia[0].bandejas} bandejas · {cosechasPorDia[0].lotes.length} lotes</p>
+                      </div>
+                    </button>
+                  )}
+                  {listosTraslado.length > 0 && (
+                    <button onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }} className="flex items-center gap-2 p-3 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl text-left transition-colors">
+                      <span className="text-2xl">🚚</span>
+                      <div className="flex-1">
+                        <p className="font-bold text-sm text-orange-900">A trasladar</p>
+                        <p className="text-xs text-orange-700">{listosTraslado.length} lotes germinación → crecimiento</p>
+                      </div>
+                    </button>
+                  )}
+                  {neveraVencen.length > 0 && (
+                    <button onClick={() => { setActiveSection('productos'); }} className="flex items-center gap-2 p-3 bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl text-left transition-colors">
+                      <span className="text-2xl">❄️</span>
+                      <div className="flex-1">
+                        <p className="font-bold text-sm text-red-900">Caducan pronto</p>
+                        <p className="text-xs text-red-700">{neveraVencen.length} productos en nevera ≥4d</p>
+                      </div>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Mini-gráfica de cosechas 6 días */}
+              <div>
+                <p className="text-xs font-bold uppercase text-neutral-500 tracking-wide mb-2">Cosechas próximos 6 días (bandejas a liberar)</p>
+                <div className="grid grid-cols-6 gap-2">
+                  {cosechasPorDia.map((dia) => {
+                    const max = Math.max(1, ...cosechasPorDia.map(d => d.bandejas));
+                    const altura = dia.bandejas > 0 ? Math.max(15, (dia.bandejas / max) * 60) : 4;
+                    const colorBg = dia.esHoy ? 'bg-red-500' : dia.esMañana ? 'bg-orange-500' : dia.bandejas > 0 ? 'bg-green-500' : 'bg-neutral-200';
+                    const colorBorde = dia.esHoy ? 'border-red-300 bg-red-50' : dia.esMañana ? 'border-orange-200 bg-orange-50' : 'border-neutral-200 bg-white';
+                    return (
+                      <button 
+                        key={dia.d}
+                        onClick={() => { setActiveSection('produccion'); setProduccionTab('fases'); }}
+                        className={`flex flex-col items-center p-2 rounded-lg border-2 hover:shadow-md transition-all ${colorBorde}`}
+                      >
+                        <p className={`text-[9px] uppercase font-bold ${dia.esHoy ? 'text-red-700' : dia.esMañana ? 'text-orange-700' : 'text-neutral-500'}`}>
+                          {dia.esHoy ? 'HOY' : dia.esMañana ? 'MAÑ' : dia.dia}
+                        </p>
+                        <p className={`text-sm font-black ${dia.esHoy ? 'text-red-700' : dia.esMañana ? 'text-orange-700' : 'text-neutral-700'}`}>{dia.num}</p>
+                        <div className="flex items-end h-12 w-full justify-center my-1">
+                          <div className={`w-6 rounded-t ${colorBg}`} style={{ height: `${altura}px`, minHeight: dia.bandejas > 0 ? '15px' : '3px' }}></div>
+                        </div>
+                        <p className={`text-xs font-bold ${dia.esHoy ? 'text-red-700' : 'text-neutral-700'}`}>{dia.bandejas}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </Card>
+          );
+        })()}
+
         {/* ============ ACCESOS RÁPIDOS ============ */}
         <Card className="p-5">
           <h3 className="text-lg font-bold text-neutral-900 mb-4">⚡ Accesos rápidos</h3>
@@ -10876,6 +11070,8 @@ ${transacciones}
 
   // Estado para pestaña de producción
   const [produccionTab, setProduccionTab] = useState('lotes');
+  // V46: modo visual del mapa de racks
+  const [mapaModo, setMapaModo] = useState('variedad'); // 'variedad' | 'dias' | 'fase'
   
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
@@ -12644,12 +12840,57 @@ ${logoRootflow}^FS
             {/* Mapa visual de ocupación */}
             {racksConfig.length > 0 && (
               <Card className="p-5">
-                <h3 className="text-lg font-bold text-neutral-900 mb-1">🗺️ Mapa de ocupación en tiempo real</h3>
-                <p className="text-xs text-neutral-500 mb-4">Qué hay sembrado ahora mismo en cada bandeja. Pasa el ratón para ver el lote.</p>
+                <div className="flex items-start justify-between gap-3 mb-1 flex-wrap">
+                  <div>
+                    <h3 className="text-lg font-bold text-neutral-900 mb-1">🗺️ Mapa de ocupación en tiempo real</h3>
+                    <p className="text-xs text-neutral-500">Qué hay sembrado ahora mismo en cada bandeja. Pasa el ratón para ver el lote.</p>
+                  </div>
+                  {/* SWITCH: Modo de vista */}
+                  <div className="flex items-center gap-2 bg-neutral-100 rounded-xl p-1">
+                    <button 
+                      onClick={() => setMapaModo('variedad')} 
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${(mapaModo || 'variedad') === 'variedad' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                    >
+                      🌿 Variedad
+                    </button>
+                    <button 
+                      onClick={() => setMapaModo('dias')} 
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${mapaModo === 'dias' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                    >
+                      ⏱️ Días a cosecha
+                    </button>
+                    <button 
+                      onClick={() => setMapaModo('fase')} 
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${mapaModo === 'fase' ? 'bg-white text-orange-600 shadow' : 'text-neutral-600'}`}
+                    >
+                      🔄 Fase
+                    </button>
+                  </div>
+                </div>
                 
-                <div className="flex items-center gap-4 text-xs mb-4 flex-wrap">
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-neutral-100 border border-neutral-300" /> Libre</span>
-                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500" /> Ocupada</span>
+                <div className="flex items-center gap-4 text-xs mb-4 flex-wrap mt-3">
+                  {(mapaModo || 'variedad') === 'variedad' && (
+                    <>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-neutral-100 border border-neutral-300" /> Libre</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 text-white text-[8px] flex items-center justify-center font-bold">C</span> Inicial de variedad</span>
+                    </>
+                  )}
+                  {mapaModo === 'dias' && (
+                    <>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-600" /> Hoy (0d)</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-orange-500" /> 1d</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500" /> 2-3d</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500" /> 4-6d</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-700" /> 7d+</span>
+                    </>
+                  )}
+                  {mapaModo === 'fase' && (
+                    <>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500 text-white text-[8px] flex items-center justify-center">G</span> Germinación</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 text-white text-[8px] flex items-center justify-center">C</span> Crecimiento</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-cyan-500 text-white text-[8px] flex items-center justify-center">N</span> Nevera</span>
+                    </>
+                  )}
                 </div>
 
                 <div 
@@ -12659,6 +12900,7 @@ ${logoRootflow}^FS
                   {racksConfig.map(rack => {
                     const baldas = rack.num_baldas || 4;
                     const porBalda = rack.bandejas_por_balda || 6;
+                    const tipoIcon = rack.tipo === 'germinacion' ? '🌱' : rack.tipo === 'nevera' ? '❄️' : rack.tipo === 'mixto' ? '🔄' : '☀️';
                     return (
                       <div 
                         key={rack.id} 
@@ -12669,7 +12911,9 @@ ${logoRootflow}^FS
                           gridRow: (rack.pos_y || 0) + 1,
                         }}
                       >
-                        <p className="font-bold text-sm mb-2 text-center" style={{ color: rack.color }}>{rack.nombre || `Rack ${rack.codigo}`}</p>
+                        <p className="font-bold text-sm mb-2 text-center" style={{ color: rack.color }}>
+                          {tipoIcon} {rack.nombre || `Rack ${rack.codigo}`}
+                        </p>
                         <div className="space-y-1">
                           {Array.from({ length: baldas }, (_, bi) => {
                             const balda = baldas - bi;
@@ -12682,14 +12926,56 @@ ${logoRootflow}^FS
                                     const ocup = loteBandejas.find(lb => lb.rack_id === rack.id && lb.balda === balda && lb.posicion === pos);
                                     const loteOcup = ocup ? lotes.find(l => l.id === ocup.lote_id) : null;
                                     const variedadOcup = loteOcup ? variedades.find(v => v.id === loteOcup.variedad_id) : null;
+                                    
+                                    // Calcular días a cosecha
+                                    let diasACosecha = null;
+                                    if (loteOcup?.fecha_cosecha_prevista) {
+                                      const hoyD = new Date(); hoyD.setHours(0,0,0,0);
+                                      diasACosecha = Math.ceil((new Date(loteOcup.fecha_cosecha_prevista) - hoyD) / (1000*60*60*24));
+                                    }
+                                    
+                                    // Determinar contenido y color según modo
+                                    let contenido = '';
+                                    let bgColor = '#22C55E';
+                                    let textColor = 'text-white';
+                                    
+                                    if (ocup && loteOcup) {
+                                      const modo = mapaModo || 'variedad';
+                                      if (modo === 'variedad') {
+                                        contenido = variedadOcup?.nombre?.charAt(0).toUpperCase() || '●';
+                                        bgColor = '#16A34A';
+                                      } else if (modo === 'dias') {
+                                        if (diasACosecha === null) {
+                                          contenido = '?';
+                                          bgColor = '#94A3B8';
+                                        } else {
+                                          contenido = diasACosecha <= 0 ? '!' : String(diasACosecha);
+                                          if (diasACosecha <= 0) bgColor = '#DC2626';
+                                          else if (diasACosecha === 1) bgColor = '#F97316';
+                                          else if (diasACosecha <= 3) bgColor = '#F59E0B';
+                                          else if (diasACosecha <= 6) bgColor = '#22C55E';
+                                          else bgColor = '#047857';
+                                        }
+                                      } else if (modo === 'fase') {
+                                        const fase = loteOcup.fase || (loteOcup.estado === 'sembrado' ? 'germinacion' : 'crecimiento');
+                                        if (fase === 'germinacion') { contenido = 'G'; bgColor = '#F59E0B'; }
+                                        else if (fase === 'crecimiento') { contenido = 'C'; bgColor = '#22C55E'; }
+                                        else if (fase === 'nevera') { contenido = 'N'; bgColor = '#06B6D4'; }
+                                        else if (fase === 'granel') { contenido = 'P'; bgColor = '#EAB308'; }
+                                        else { contenido = '•'; bgColor = '#94A3B8'; }
+                                      }
+                                    }
+                                    
                                     return (
                                       <div
                                         key={pos}
-                                        title={ocup ? `${rack.codigo}-${balda}-${pos} · Lote #${ocup.lote_id}${variedadOcup ? ' · ' + variedadOcup.nombre : ''}` : `${rack.codigo}-${balda}-${pos} · Libre`}
-                                        className={`w-6 h-6 rounded text-[8px] flex items-center justify-center font-bold ${ocup ? 'text-white' : 'bg-neutral-100 border border-neutral-200 text-neutral-300'}`}
-                                        style={ocup ? { backgroundColor: variedadOcup ? '#16A34A' : '#22C55E' } : {}}
+                                        title={ocup && loteOcup ? 
+                                          `${rack.codigo}-${balda}-${pos}\n${variedadOcup?.nombre || 'Lote ' + ocup.lote_id}\n${diasACosecha !== null ? `${diasACosecha > 0 ? diasACosecha + ' días a cosecha' : (diasACosecha === 0 ? '¡Cosecha HOY!' : 'Pasado ' + Math.abs(diasACosecha) + 'd')}` : 'Sin fecha de cosecha'}\nFase: ${loteOcup.fase || loteOcup.estado}` 
+                                          : `${rack.codigo}-${balda}-${pos} · Libre`}
+                                        className={`w-7 h-7 rounded text-[10px] flex items-center justify-center font-bold transition-all ${ocup && loteOcup ? textColor : 'bg-neutral-100 border border-neutral-200 text-neutral-300'}`}
+                                        style={ocup && loteOcup ? { backgroundColor: bgColor } : {}}
                                       >
-                                        {ocup ? (variedadOcup?.nombre?.charAt(0).toUpperCase() || '●') : ''}
+                                        {contenido}
                                       </div>
                                     );
                                   })}
