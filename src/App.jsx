@@ -3515,6 +3515,15 @@ const MainApp = () => {
         } catch (e) { console.warn('No se pudo crear movimiento de reserva:', e); }
       }
       
+      // V50: Encontrar lote(s) ORIGEN del granel para trazabilidad real
+      // Buscamos los últimos movimientos de cosecha que metieron material en este granel
+      const movsCosecha = movimientosStock
+        .filter(m => m.producto_id === granelProd.id && m.tipo === 'entrada_cosecha' && m.lote_id)
+        .sort((a, b) => new Date(b.created_at || b.fecha || 0) - new Date(a.created_at || a.fecha || 0));
+      
+      // El lote más reciente que aportó al granel
+      const loteOrigen = movsCosecha.length > 0 ? lotes.find(l => l.id === movsCosecha[0].lote_id) : null;
+      
       // V49: Abrir modal con opciones (descargar/copiar/cerrar)
       const pedidoVinc = pedidoId ? pedidos.find(p => p.id === pedidoId) : null;
       const clienteVinc = pedidoVinc ? clientes.find(c => c.id === pedidoVinc.cliente_id) : null;
@@ -3527,6 +3536,7 @@ const MainApp = () => {
         pedidoId,
         pedidoVinc,
         clienteVinc,
+        loteOrigen,  // V50: lote real
       });
       setShowModal('etiquetasEmpaquetado');
     } catch (e) {
@@ -3535,8 +3545,8 @@ const MainApp = () => {
     }
   };
 
-  // V49: Generar ZPL de producto empaquetado con cliente vinculado (si aplica)
-  const generarZPLProductoEmpaquetado = (formatoProd, indice, pedidoVinc, clienteVinc) => {
+  // V50: Generar ZPL de producto empaquetado con cliente vinculado y LOTE REAL
+  const generarZPLProductoEmpaquetado = (formatoProd, indice, pedidoVinc, clienteVinc, loteOrigen) => {
     const variedadProd = variedades.find(v => v.id === formatoProd.variedad_id);
     const nombreProducto = (variedadProd?.nombre || formatoProd.nombre || 'BROTES').toUpperCase();
     const peso = formatoProd.formato_gramos || 100;
@@ -3546,8 +3556,14 @@ const MainApp = () => {
     const fechaCosechaStr = fmtFecha(hoyD);
     const fechaConsumoStr = fmtFecha(consumo);
     
-    const loteCodigo = `EMP-${hoyD.toISOString().slice(0,10).replace(/-/g,'')}-${indice}`;
-    const clienteLinea = clienteVinc?.nombre ? `Cliente: ${clienteVinc.nombre.substring(0, 25)}` : '';
+    // V50: Lote REAL (no inventado). Si no hay, usa fallback con fecha
+    const loteCodigo = loteOrigen?.codigo 
+      ? `${loteOrigen.codigo}/${indice}` 
+      : loteOrigen?.id 
+        ? `L${loteOrigen.id}/${indice}`
+        : `EMP-${hoyD.toISOString().slice(0,10).replace(/-/g,'')}-${indice}`;
+    
+    const clienteLinea = clienteVinc?.nombre ? `Cliente: ${clienteVinc.nombre.substring(0, 22)}` : '';
     const pedidoLinea = pedidoVinc ? `Pedido #${pedidoVinc.id}` : '';
     
     // Logo Rootflow
@@ -6340,6 +6356,93 @@ ${pedidoLinea ? `^FO260,244
   };
 
   // ==================== MUESTRA FORM ====================
+  // V50: Editor de items para muestras (cuando faltan productos)
+  const ItemsMuestraEditor = ({ muestra, itemsActuales, onSave, onCancel }) => {
+    const initialItems = itemsActuales.length > 0 
+      ? itemsActuales.map(it => ({ producto_id: it.producto_id, cantidad: it.cantidad || 1 }))
+      : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []);
+    const [items, setItems] = useState(initialItems);
+    
+    const addItem = () => setItems([...items, { producto_id: productos[0]?.id, cantidad: 1 }]);
+    const removeItem = (idx) => setItems(items.filter((_, i) => i !== idx));
+    const updateItem = (idx, field, value) => {
+      const nuevos = [...items];
+      nuevos[idx] = { ...nuevos[idx], [field]: value };
+      setItems(nuevos);
+    };
+    
+    return (
+      <div className="space-y-4">
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+          <p className="font-semibold text-blue-900">📦 Productos de la muestra a entregar</p>
+          <p className="text-xs text-blue-700 mt-1">
+            Esto es lo que determina las etiquetas: variedad, peso de cada producto, y cuántas unidades.
+          </p>
+        </div>
+        
+        <div className="space-y-2">
+          {items.map((item, idx) => {
+            const prod = productos.find(p => p.id === parseInt(item.producto_id));
+            const variedad = prod ? variedades.find(v => v.id === prod.variedad_id) : null;
+            return (
+              <div key={idx} className="flex gap-2 items-center p-3 bg-neutral-50 rounded-xl flex-wrap">
+                <select 
+                  value={item.producto_id || ''} 
+                  onChange={e => updateItem(idx, 'producto_id', parseInt(e.target.value))} 
+                  className="flex-1 min-w-[200px] px-3 py-2 rounded-lg border text-sm"
+                >
+                  <option value="">— Seleccionar producto —</option>
+                  {productos.map(p => {
+                    const v = variedades.find(vv => vv.id === p.variedad_id);
+                    return <option key={p.id} value={p.id}>{v?.nombre || p.nombre} {p.formato_gramos ? `· ${p.formato_gramos}g` : ''}</option>;
+                  })}
+                </select>
+                <input 
+                  type="number" 
+                  value={item.cantidad} 
+                  onChange={e => updateItem(idx, 'cantidad', Math.max(1, parseInt(e.target.value) || 1))} 
+                  className="w-20 px-3 py-2 rounded-lg border text-sm text-center" 
+                  min="1" 
+                />
+                {variedad && <span className="text-xs text-green-600">✓ {variedad.nombre}</span>}
+                {items.length > 1 && (
+                  <button type="button" onClick={() => removeItem(idx)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg">
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <button type="button" onClick={addItem} className="w-full p-2 border-2 border-dashed border-neutral-300 rounded-xl text-sm text-neutral-600 hover:bg-neutral-50">
+            + Añadir producto
+          </button>
+        </div>
+        
+        {/* Preview etiquetas que se generarán */}
+        {items.length > 0 && items.some(i => i.producto_id) && (
+          <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+            <p className="text-xs font-semibold text-green-900 mb-2">🏷️ Etiquetas que se generarán:</p>
+            <ul className="text-xs text-green-800 space-y-0.5">
+              {items.filter(i => i.producto_id).map((it, idx) => {
+                const prod = productos.find(p => p.id === parseInt(it.producto_id));
+                const v = prod ? variedades.find(vv => vv.id === prod.variedad_id) : null;
+                return <li key={idx}>• {it.cantidad} × {v?.nombre || prod?.nombre} ({prod?.formato_gramos || 30}g)</li>;
+              })}
+              <li className="pt-1 font-bold border-t border-green-200 mt-1">
+                Total: {items.filter(i => i.producto_id).reduce((s, i) => s + parseInt(i.cantidad || 1), 0)} etiqueta(s)
+              </li>
+            </ul>
+          </div>
+        )}
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onSave(items)}>Guardar productos</Button>
+        </div>
+      </div>
+    );
+  };
+
   const MuestraForm = ({ onSave, onCancel }) => {
     const initialForm = {
       lead_id: null,
@@ -12248,12 +12351,6 @@ ${logoRootflow}^FS
             <Sprout size={18} />Lotes
           </button>
           <button 
-            onClick={() => setProduccionTab('etiquetas')} 
-            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'etiquetas' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
-          >
-            <FileText size={18} />Etiquetas
-          </button>
-          <button 
             onClick={() => setProduccionTab('empaquetado')} 
             className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'empaquetado' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
           >
@@ -12264,6 +12361,13 @@ ${logoRootflow}^FS
                 .reduce((s, p) => s + (p.gramos_disponibles || p.stock || 0), 0);
               return totalGranel > 0 ? <span className={`text-xs px-2 py-0.5 rounded-full ${produccionTab === 'empaquetado' ? 'bg-white/20' : 'bg-green-500 text-white'}`}>{(totalGranel/1000).toFixed(1)}kg</span> : null;
             })()}
+          </button>
+          <button 
+            onClick={() => setProduccionTab('etiquetas')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${produccionTab === 'etiquetas' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+            title="Etiquetas de lote/trazabilidad interna"
+          >
+            <FileText size={18} />Etiquetas lote
           </button>
           <button 
             onClick={() => setProduccionTab('planificacion')} 
@@ -20749,29 +20853,36 @@ Firma repartidor: _________________
                                 let zplCompleto = '';
                                 
                                 if (itemsMuestra.length === 0) {
-                                  // Sin items: una etiqueta genérica - mejor avisar
-                                  return null;
+                                  // SIN ITEMS: generar etiqueta genérica usando datos de la muestra
+                                  // Esto sirve cuando muestras antiguas se guardaron sin items
+                                  zplCompleto = generarZPLMuestraGlobal({
+                                    ...muestra,
+                                    variedad: muestra.nombre || muestra.empresa || 'BROTES FRESCOS',
+                                    peso_gramos: 30,
+                                  }, 1);
+                                } else {
+                                  // CON ITEMS: una etiqueta por unidad de cada producto
+                                  itemsMuestra.forEach(item => {
+                                    const prod = productos.find(p => p.id === item.producto_id);
+                                    if (!prod) return;
+                                    const variedad = variedades.find(v => v.id === prod.variedad_id);
+                                    const nombreVar = variedad?.nombre || prod.nombre || muestra.nombre || 'BROTES';
+                                    const peso = prod.formato_gramos || 30;
+                                    const cantidad = item.cantidad || 1;
+                                    for (let i = 0; i < cantidad; i++) {
+                                      zplCompleto += generarZPLMuestraGlobal({
+                                        ...muestra,
+                                        variedad: nombreVar,
+                                        peso_gramos: peso,
+                                      }, i + 1) + '\n';
+                                    }
+                                  });
                                 }
-                                
-                                // Una etiqueta por cada unidad de cada producto
-                                itemsMuestra.forEach(item => {
-                                  const prod = productos.find(p => p.id === item.producto_id);
-                                  if (!prod) return;
-                                  const variedad = variedades.find(v => v.id === prod.variedad_id);
-                                  const nombreVar = variedad?.nombre || prod.nombre || muestra.nombre || 'BROTES';
-                                  // Peso REAL del producto (no hardcoded 30g)
-                                  const peso = prod.formato_gramos || 30;
-                                  const cantidad = item.cantidad || 1;
-                                  for (let i = 0; i < cantidad; i++) {
-                                    zplCompleto += generarZPLMuestraGlobal({
-                                      ...muestra,
-                                      variedad: nombreVar,
-                                      peso_gramos: peso,
-                                    }, i + 1) + '\n';
-                                  }
-                                });
                                 return zplCompleto;
                               };
+                              
+                              const itemsActuales = muestraItems.filter(i => i.muestra_id === muestra.id);
+                              const sinItems = itemsActuales.length === 0;
                               
                               return (
                                 <>
@@ -20779,7 +20890,12 @@ Firma repartidor: _________________
                                   <button 
                                     onClick={() => {
                                       const zpl = generarZplDeMuestra();
-                                      if (!zpl) { alert('⚠️ La muestra no tiene productos. Añade productos para poder generar etiquetas con variedad y peso correctos.'); return; }
+                                      if (!zpl || !zpl.trim()) { 
+                                        alert('❌ No se pudo generar la etiqueta. Avisa al administrador.'); 
+                                        return; 
+                                      }
+                                      if (sinItems && !window.confirm(`⚠️ Esta muestra no tiene productos asignados.\n\nSe generará 1 etiqueta genérica de 30g.\n\nSi quieres etiquetas específicas (variedad + peso correcto), primero edita la muestra y añade productos.\n\n¿Generar etiqueta genérica de todos modos?`)) return;
+                                      
                                       const blob = new Blob([zpl], { type: 'text/plain' });
                                       const a = document.createElement('a');
                                       a.href = URL.createObjectURL(blob);
@@ -20787,8 +20903,8 @@ Firma repartidor: _________________
                                       a.click();
                                       URL.revokeObjectURL(a.href);
                                     }}
-                                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" 
-                                    title="Descargar archivo .zpl"
+                                    className={`p-2 rounded-lg ${sinItems ? 'text-amber-600 hover:bg-amber-50' : 'text-blue-600 hover:bg-blue-50'}`}
+                                    title={sinItems ? '⚠️ Muestra sin productos: descargará etiqueta genérica' : 'Descargar etiquetas ZPL'}
                                   >
                                     <Tag size={16} />
                                   </button>
@@ -20797,14 +20913,17 @@ Firma repartidor: _________________
                                   <button 
                                     onClick={async () => {
                                       const zpl = generarZplDeMuestra();
-                                      if (!zpl) { alert('⚠️ La muestra no tiene productos. Añade productos para poder generar etiquetas.'); return; }
+                                      if (!zpl || !zpl.trim()) { 
+                                        alert('❌ No se pudo generar la etiqueta.'); 
+                                        return; 
+                                      }
+                                      if (sinItems && !window.confirm(`⚠️ Esta muestra no tiene productos asignados.\n\nSe copiará 1 etiqueta genérica de 30g (sin variedad específica).\n\nPara etiquetas correctas, edita la muestra y añade productos primero.\n\n¿Copiar la genérica de todos modos?`)) return;
+                                      
                                       try {
                                         await navigator.clipboard.writeText(zpl);
-                                        const itemsMuestra = muestraItems.filter(i => i.muestra_id === muestra.id);
-                                        const totalEtiquetas = itemsMuestra.reduce((s, it) => s + (it.cantidad || 1), 0);
-                                        alert(`✅ ${totalEtiquetas} etiqueta(s) ZPL copiadas al portapapeles!\n\nPégalas en Zebra Setup Utilities → Raw Print, o en cualquier herramienta que envíe ZPL a la impresora.`);
+                                        const total = itemsActuales.reduce((s, it) => s + (it.cantidad || 1), 0) || 1;
+                                        alert(`✅ ${total} etiqueta(s) ZPL copiadas al portapapeles!\n\n${sinItems ? '⚠️ Etiqueta GENÉRICA (sin variedad). Edita la muestra para corregir.' : 'Pégalas en Zebra Setup Utilities → Raw Print.'}`);
                                       } catch (e) {
-                                        // Fallback: textarea + execCommand
                                         const ta = document.createElement('textarea');
                                         ta.value = zpl;
                                         document.body.appendChild(ta);
@@ -20814,11 +20933,22 @@ Firma repartidor: _________________
                                         alert('✅ ZPL copiado al portapapeles');
                                       }
                                     }}
-                                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" 
-                                    title="Copiar ZPL al portapapeles"
+                                    className={`p-2 rounded-lg ${sinItems ? 'text-amber-600 hover:bg-amber-50' : 'text-purple-600 hover:bg-purple-50'}`}
+                                    title={sinItems ? '⚠️ Copiará etiqueta genérica (muestra sin productos)' : 'Copiar ZPL al portapapeles'}
                                   >
                                     <Copy size={16} />
                                   </button>
+                                  
+                                  {/* Botón Editar productos si faltan */}
+                                  {sinItems && (
+                                    <button 
+                                      onClick={() => { setEditingItem(muestra); setShowModal('editarItemsMuestra'); }}
+                                      className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" 
+                                      title="⚠️ Esta muestra no tiene productos. Añade productos aquí."
+                                    >
+                                      <AlertTriangle size={16} />
+                                    </button>
+                                  )}
                                 </>
                               );
                             })()}
@@ -21581,16 +21711,60 @@ Firma repartidor: _________________
       {/* Modal Recibo TPV */}
       {/* Modal Reembolso a Socio V47 */}
       
+      {/* Modal Editar Items Muestra V50 */}
+      {showModal === 'editarItemsMuestra' && editingItem && (() => {
+        const muestraEdit = editingItem;
+        const itemsActuales = muestraItems.filter(i => i.muestra_id === muestraEdit.id);
+        
+        return (
+          <Modal title={`Productos de la muestra #${muestraEdit.id}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+            <ItemsMuestraEditor 
+              muestra={muestraEdit}
+              itemsActuales={itemsActuales}
+              onSave={async (nuevosItems) => {
+                try {
+                  // Borrar items antiguos
+                  await supabase.from('muestra_items').delete().eq('muestra_id', muestraEdit.id);
+                  // Insertar nuevos
+                  if (nuevosItems.length > 0) {
+                    const rows = nuevosItems.filter(i => i.producto_id).map(i => ({
+                      muestra_id: muestraEdit.id,
+                      producto_id: parseInt(i.producto_id),
+                      cantidad: parseInt(i.cantidad) || 1,
+                    }));
+                    if (rows.length > 0) {
+                      const { error } = await supabase.from('muestra_items').insert(rows);
+                      if (error) throw error;
+                    }
+                  }
+                  refetchMuestraItems();
+                  setShowModal(null);
+                  setEditingItem(null);
+                  alert('✅ Productos actualizados');
+                } catch (e) {
+                  if (e.code === '42P01') {
+                    alert('❌ La tabla muestra_items no existe. Ejecuta el SQL V15 en Supabase.');
+                  } else {
+                    alert('❌ Error: ' + e.message);
+                  }
+                }
+              }}
+              onCancel={() => { setShowModal(null); setEditingItem(null); }}
+            />
+          </Modal>
+        );
+      })()}
+      
       {/* Modal Etiquetas tras Empaquetar V49 */}
       {showModal === 'etiquetasEmpaquetado' && etiquetasEmpaquetadoData && (() => {
         const data = etiquetasEmpaquetadoData;
-        const { unidades, formatoProd, granelRestante, gramosUsados, pedidoId, pedidoVinc, clienteVinc } = data;
+        const { unidades, formatoProd, granelRestante, gramosUsados, pedidoId, pedidoVinc, clienteVinc, loteOrigen } = data;
         const variedadProd = variedades.find(v => v.id === formatoProd.variedad_id);
         
         const generarTodoZPL = () => {
           let zpl = '';
           for (let i = 0; i < unidades; i++) {
-            zpl += generarZPLProductoEmpaquetado(formatoProd, i + 1, pedidoVinc, clienteVinc) + '\n';
+            zpl += generarZPLProductoEmpaquetado(formatoProd, i + 1, pedidoVinc, clienteVinc, loteOrigen) + '\n';
           }
           return zpl;
         };
@@ -21602,6 +21776,13 @@ Firma repartidor: _________________
               <div className="bg-green-50 border border-green-200 rounded-xl p-4">
                 <p className="font-bold text-green-900 mb-2">+{unidades} × {formatoProd.nombre}</p>
                 <p className="text-sm text-green-800">−{gramosUsados}g del granel (quedan {granelRestante}g)</p>
+                
+                {loteOrigen && (
+                  <p className="text-xs text-green-700 mt-1">
+                    📦 Origen: Lote <strong>{loteOrigen.codigo || `L${loteOrigen.id}`}</strong>
+                    {loteOrigen.fecha_cosecha_real && ` · cosechado ${formatDate(loteOrigen.fecha_cosecha_real)}`}
+                  </p>
+                )}
                 
                 {pedidoVinc && (
                   <div className="mt-3 pt-3 border-t border-green-200 text-sm">
@@ -21618,6 +21799,7 @@ Firma repartidor: _________________
                 <ul className="space-y-0.5 text-neutral-600">
                   <li>• <strong>Variedad:</strong> {variedadProd?.nombre || formatoProd.nombre}</li>
                   <li>• <strong>Peso:</strong> {formatoProd.formato_gramos}g</li>
+                  <li>• <strong>Lote:</strong> {loteOrigen ? `${loteOrigen.codigo || `L${loteOrigen.id}`}/[1..${unidades}]` : '(sin lote origen identificado)'}</li>
                   <li>• <strong>Fecha cosecha:</strong> hoy</li>
                   <li>• <strong>Consumir antes:</strong> +7 días</li>
                   {clienteVinc && <li>• <strong>Cliente:</strong> {clienteVinc.nombre}</li>}
