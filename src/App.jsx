@@ -1604,6 +1604,9 @@ const MainApp = () => {
   const { data: reembolsosSociosData, refetch: refetchReembolsosSocios } = useRealtime('reembolsos_socios');
   // V48 - Mapeo categorías de gasto → tipo de coste
   const { data: mapeoCategoriasData, refetch: refetchMapeoCategorias } = useRealtime('mapeo_categorias_coste');
+  // V51 - Etiquetas persistentes + facturas semanales
+  const { data: etiquetasGeneradasData, refetch: refetchEtiquetasGeneradas } = useRealtime('etiquetas_generadas');
+  const { data: facturasSemanalesData, refetch: refetchFacturasSemanales } = useRealtime('facturas_semanales');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1711,6 +1714,9 @@ const MainApp = () => {
   const reembolsosSocios = reembolsosSociosData || [];
   // V48 - Mapeo categorías de coste
   const mapeoCategorias = mapeoCategoriasData || [];
+  // V51 - Etiquetas persistentes + facturas semanales
+  const etiquetasGeneradas = etiquetasGeneradasData || [];
+  const facturasSemanales = facturasSemanalesData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -3528,6 +3534,38 @@ const MainApp = () => {
       const pedidoVinc = pedidoId ? pedidos.find(p => p.id === pedidoId) : null;
       const clienteVinc = pedidoVinc ? clientes.find(c => c.id === pedidoVinc.cliente_id) : null;
       
+      // V51: Generar ZPL completo y GUARDARLO en BD para poder reimprimir luego
+      let zplCompleto = '';
+      for (let i = 0; i < unidades; i++) {
+        zplCompleto += generarZPLProductoEmpaquetado(formatoProd, i + 1, pedidoVinc, clienteVinc, loteOrigen) + '\n';
+      }
+      
+      const variedadProdInfo = variedades.find(v => v.id === formatoProd.variedad_id);
+      const descripcion = `${variedadProdInfo?.nombre || formatoProd.nombre} ${formatoProd.formato_gramos}g × ${unidades}u${clienteVinc ? ` → ${clienteVinc.nombre}` : ''}${loteOrigen ? ` (lote ${loteOrigen.codigo || loteOrigen.id})` : ''}`;
+      
+      let etiquetaGuardadaId = null;
+      try {
+        const { data: etiqGuard, error: etiqErr } = await supabase.from('etiquetas_generadas').insert({
+          tipo: 'producto_empaquetado',
+          producto_id: formatoProd.id,
+          lote_id: loteOrigen?.id || null,
+          pedido_id: pedidoId || null,
+          cliente_id: clienteVinc?.id || null,
+          unidades,
+          zpl_contenido: zplCompleto,
+          descripcion,
+          impresa: false,
+        }).select().single();
+        if (etiqErr) throw etiqErr;
+        etiquetaGuardadaId = etiqGuard?.id;
+        refetchEtiquetasGeneradas();
+      } catch (e) {
+        console.error('Error guardando etiquetas en BD:', e);
+        if (e.code === '42P01') {
+          console.warn('⚠️ Tabla etiquetas_generadas no existe. Ejecuta el SQL V51.');
+        }
+      }
+      
       setEtiquetasEmpaquetadoData({
         unidades,
         formatoProd,
@@ -3536,7 +3574,9 @@ const MainApp = () => {
         pedidoId,
         pedidoVinc,
         clienteVinc,
-        loteOrigen,  // V50: lote real
+        loteOrigen,
+        zplCompleto,
+        etiquetaGuardadaId,  // V51: id para marcar como impresa luego
       });
       setShowModal('etiquetasEmpaquetado');
     } catch (e) {
@@ -4190,6 +4230,82 @@ ${pedidoLinea ? `^FO260,244
               <span className="text-sm font-semibold text-neutral-700">días</span>
             </div>
           </div>
+        </div>
+
+        {/* V51: Modalidad de cobro */}
+        <div className="p-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl space-y-3">
+          <div className="flex items-center gap-2">
+            <CreditCard size={18} className="text-blue-700" />
+            <span className="font-bold text-blue-900">💳 Modalidad de cobro</span>
+          </div>
+          <p className="text-xs text-blue-700">Define cómo cobras a este cliente. Determinará el flujo de facturación.</p>
+          
+          <div className="grid grid-cols-1 gap-2">
+            <label className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${form.modalidad_cobro === 'sepa_b2b_semanal' || !form.modalidad_cobro ? 'border-blue-500 bg-blue-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}>
+              <div className="flex items-start gap-2">
+                <input type="radio" name="modalidad" value="sepa_b2b_semanal" checked={!form.modalidad_cobro || form.modalidad_cobro === 'sepa_b2b_semanal'} onChange={e => setForm({...form, modalidad_cobro: e.target.value})} className="mt-1" />
+                <div className="flex-1">
+                  <p className="font-bold text-sm text-blue-900">🏦 SEPA B2B · Facturación semanal agrupada</p>
+                  <p className="text-xs text-blue-700 mt-0.5">
+                    <strong>Estándar HORECA.</strong> Albaranes durante la semana → factura única el viernes → remesa SEPA el lunes. 
+                    Sin posibilidad de devolución (irrevocable tras aceptación bancaria 2-3 días).
+                  </p>
+                  <p className="text-[10px] text-blue-600 mt-1">✓ Ideal para clientes recurrentes con confianza establecida</p>
+                </div>
+              </div>
+            </label>
+            
+            <label className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${form.modalidad_cobro === 'prepago' ? 'border-amber-500 bg-amber-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}>
+              <div className="flex items-start gap-2">
+                <input type="radio" name="modalidad" value="prepago" checked={form.modalidad_cobro === 'prepago'} onChange={e => setForm({...form, modalidad_cobro: e.target.value})} className="mt-1" />
+                <div className="flex-1">
+                  <p className="font-bold text-sm text-amber-900">💰 Prepago · Cobro anticipado</p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    Transferencia inmediata o Bizum empresa <strong>antes de sembrar/entregar</strong>. Un pedido = una factura.
+                  </p>
+                  <p className="text-[10px] text-amber-600 mt-1">✓ Recomendado para clientes nuevos sin historial, o pedidos puntuales/spot</p>
+                </div>
+              </div>
+            </label>
+            
+            <label className={`p-3 rounded-xl border-2 cursor-pointer transition-all ${form.modalidad_cobro === 'contraentrega' ? 'border-purple-500 bg-purple-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}>
+              <div className="flex items-start gap-2">
+                <input type="radio" name="modalidad" value="contraentrega" checked={form.modalidad_cobro === 'contraentrega'} onChange={e => setForm({...form, modalidad_cobro: e.target.value})} className="mt-1" />
+                <div className="flex-1">
+                  <p className="font-bold text-sm text-purple-900">📱 Contra entrega · TPV/Bizum/efectivo</p>
+                  <p className="text-xs text-purple-700 mt-0.5">
+                    Cobro <strong>en el momento de la entrega</strong> con datáfono, Bizum o efectivo. Un pedido = un recibo.
+                  </p>
+                  <p className="text-[10px] text-purple-600 mt-1">✓ Útil para mercados, eventos, ventas directas o clientes que no quieren mandato bancario</p>
+                </div>
+              </div>
+            </label>
+          </div>
+          
+          {/* Datos SEPA si aplica */}
+          {(!form.modalidad_cobro || form.modalidad_cobro === 'sepa_b2b_semanal') && (
+            <div className="mt-3 pt-3 border-t border-blue-200 space-y-2">
+              <p className="text-xs font-bold text-blue-900">🏦 Datos para remesa SEPA B2B</p>
+              <Input label="IBAN del cliente" value={form.iban || ''} onChange={e => setForm({...form, iban: e.target.value.toUpperCase().replace(/\s/g,'')})} placeholder="ES00 0000 0000 0000 0000 0000" />
+              <div className="grid grid-cols-2 gap-2">
+                <Input label="Nº mandato SEPA B2B" value={form.mandato_sepa_b2b || ''} onChange={e => setForm({...form, mandato_sepa_b2b: e.target.value})} placeholder="ROOTFLOW-0001" />
+                <Input label="Fecha firma mandato" type="date" value={form.mandato_fecha_firma || ''} onChange={e => setForm({...form, mandato_fecha_firma: e.target.value})} />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium text-blue-900">Día de corte semanal:</label>
+                <select value={form.dia_corte_semanal || 5} onChange={e => setForm({...form, dia_corte_semanal: parseInt(e.target.value)})} className="text-xs px-2 py-1 rounded border border-blue-300 bg-white">
+                  <option value={1}>Lunes</option>
+                  <option value={2}>Martes</option>
+                  <option value={3}>Miércoles</option>
+                  <option value={4}>Jueves</option>
+                  <option value={5}>Viernes</option>
+                  <option value={6}>Sábado</option>
+                  <option value={7}>Domingo</option>
+                </select>
+                <span className="text-[10px] text-blue-600">(día que se emite la factura agrupada)</span>
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="flex justify-end gap-3 pt-4 border-t">
@@ -12628,6 +12744,133 @@ ${logoRootflow}^FS
 
         {produccionTab === 'empaquetado' && (
           <div className="space-y-4">
+            {/* V51: Sección de etiquetas pendientes de imprimir */}
+            {(() => {
+              const pendientes = etiquetasGeneradas.filter(e => !e.impresa).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              const impresasRecientes = etiquetasGeneradas.filter(e => e.impresa).sort((a, b) => new Date(b.fecha_impresa || b.updated_at) - new Date(a.fecha_impresa || a.updated_at)).slice(0, 5);
+              
+              if (pendientes.length === 0 && impresasRecientes.length === 0) return null;
+              
+              const reimprimirEtiqueta = async (etiq) => {
+                try {
+                  await navigator.clipboard.writeText(etiq.zpl_contenido);
+                  if (!etiq.impresa) {
+                    await supabase.from('etiquetas_generadas').update({ 
+                      impresa: true, 
+                      fecha_impresa: new Date().toISOString() 
+                    }).eq('id', etiq.id);
+                    refetchEtiquetasGeneradas();
+                  }
+                  alert(`✅ ${etiq.unidades} etiqueta(s) copiadas al portapapeles!\n\nPégalas en Zebra Setup Utilities → Raw Print.`);
+                } catch (e) {
+                  // Fallback
+                  const ta = document.createElement('textarea');
+                  ta.value = etiq.zpl_contenido;
+                  document.body.appendChild(ta);
+                  ta.select();
+                  document.execCommand('copy');
+                  document.body.removeChild(ta);
+                  alert('✅ ZPL copiado al portapapeles');
+                }
+              };
+              
+              const descargarEtiqueta = (etiq) => {
+                const blob = new Blob([etiq.zpl_contenido], { type: 'text/plain' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `etiq-${etiq.id}-${(etiq.descripcion || 'etiqueta').replace(/[^a-zA-Z0-9]/g,'_').substring(0,40)}.zpl`;
+                a.click();
+                URL.revokeObjectURL(a.href);
+              };
+              
+              return (
+                <Card className={`p-4 ${pendientes.length > 0 ? 'border-2 border-orange-300 bg-orange-50' : ''}`}>
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div>
+                      <h3 className="font-bold text-neutral-900 flex items-center gap-2">
+                        🏷️ Etiquetas pendientes de imprimir
+                        {pendientes.length > 0 && <Badge className="bg-orange-500 text-white">{pendientes.length}</Badge>}
+                      </h3>
+                      <p className="text-xs text-neutral-500">Etiquetas generadas que aún no has impreso. Click para copiar al portapapeles.</p>
+                    </div>
+                  </div>
+                  
+                  {pendientes.length === 0 ? (
+                    <p className="text-sm text-neutral-400 text-center py-3">✓ Sin etiquetas pendientes</p>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto">
+                      {pendientes.map(etiq => {
+                        const ped = etiq.pedido_id ? pedidos.find(p => p.id === etiq.pedido_id) : null;
+                        const cli = etiq.cliente_id ? clientes.find(c => c.id === etiq.cliente_id) : null;
+                        return (
+                          <div key={etiq.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-orange-200">
+                            <div className="text-2xl">🏷️</div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-sm text-neutral-900">{etiq.descripcion}</p>
+                              <p className="text-xs text-neutral-500">
+                                {new Date(etiq.created_at).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                {ped && ` · Pedido #${ped.id}`}
+                                {cli && ` · ${cli.nombre}`}
+                              </p>
+                            </div>
+                            <Badge className="bg-orange-100 text-orange-700 flex-shrink-0">{etiq.unidades}u</Badge>
+                            <button onClick={() => reimprimirEtiqueta(etiq)} className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg" title="Copiar ZPL al portapapeles">
+                              <Copy size={16} />
+                            </button>
+                            <button onClick={() => descargarEtiqueta(etiq)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Descargar .zpl">
+                              <Download size={16} />
+                            </button>
+                            <button 
+                              onClick={async () => {
+                                if (window.confirm(`¿Marcar como impresa "${etiq.descripcion}"?`)) {
+                                  await supabase.from('etiquetas_generadas').update({ impresa: true, fecha_impresa: new Date().toISOString() }).eq('id', etiq.id);
+                                  refetchEtiquetasGeneradas();
+                                }
+                              }}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como impresa"
+                            >
+                              <CheckCircle size={16} />
+                            </button>
+                            <button 
+                              onClick={async () => {
+                                if (window.confirm(`¿Eliminar definitivamente esta etiqueta?`)) {
+                                  await supabase.from('etiquetas_generadas').delete().eq('id', etiq.id);
+                                  refetchEtiquetasGeneradas();
+                                }
+                              }}
+                              className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  
+                  {/* Histórico impresas reciente (colapsable) */}
+                  {impresasRecientes.length > 0 && (
+                    <details className="mt-3 border-t pt-3">
+                      <summary className="cursor-pointer text-xs font-semibold text-neutral-500 hover:text-neutral-700">
+                        ✓ Últimas {impresasRecientes.length} impresas (reimprimir si hace falta)
+                      </summary>
+                      <div className="space-y-1 mt-2">
+                        {impresasRecientes.map(etiq => (
+                          <div key={etiq.id} className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg text-xs">
+                            <span className="flex-1 min-w-0 truncate">{etiq.descripcion}</span>
+                            <span className="text-neutral-400">{new Date(etiq.fecha_impresa || etiq.updated_at).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}</span>
+                            <button onClick={() => reimprimirEtiqueta(etiq)} className="p-1 text-purple-600 hover:bg-purple-100 rounded" title="Reimprimir">
+                              <Copy size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </Card>
+              );
+            })()}
+            
             {(() => {
               // Listar todos los granel disponibles (estado listo_sin_empaquetar con gramos > 0)
               const granelesDisponibles = productos.filter(p => 
@@ -20675,7 +20918,17 @@ Firma repartidor: _________________
 
         if (itemsError) {
           console.error('❌ Error items:', itemsError);
-          alert(`⚠️ Muestra creada pero hubo error en los productos:\n\n${itemsError.message}\n\nCódigo: ${itemsError.code || 'N/A'}\n\nLa muestra existe pero sin productos. Edítala para añadirlos.`);
+          
+          // V51: diagnóstico mejorado
+          if (itemsError.code === '42P01' || itemsError.message?.includes('does not exist')) {
+            alert(`⚠️ MUESTRA CREADA pero NO se guardaron los productos.\n\n❌ Problema: la tabla "muestra_items" NO existe en Supabase.\n\n👉 SOLUCIÓN: ejecuta el SQL V51 (o el V15 original) en Supabase Dashboard → SQL Editor.\n\nEntra a la muestra y añade los productos cuando esté la tabla.`);
+          } else if (itemsError.code === '42501' || itemsError.message?.includes('policy')) {
+            alert(`⚠️ MUESTRA CREADA pero NO se guardaron los productos.\n\n❌ Problema: la tabla "muestra_items" existe pero tiene RLS sin permisos.\n\n👉 SOLUCIÓN: en Supabase, ejecuta:\nDROP POLICY IF EXISTS "Acceso completo muestra_items" ON muestra_items;\nCREATE POLICY "Acceso completo muestra_items" ON muestra_items FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);\n\nO ejecuta el SQL V51 entero.`);
+          } else {
+            alert(`⚠️ Muestra creada pero hubo error en los productos:\n\nCódigo: ${itemsError.code || 'N/A'}\nMensaje: ${itemsError.message}\n\nLa muestra existe pero sin productos. Edítala (botón ⚠️ naranja) para añadirlos.`);
+          }
+        } else {
+          console.log('✅ Items guardados:', itemsInsert.length);
         }
 
         refetchMuestras();
@@ -20939,16 +21192,14 @@ Firma repartidor: _________________
                                     <Copy size={16} />
                                   </button>
                                   
-                                  {/* Botón Editar productos si faltan */}
-                                  {sinItems && (
-                                    <button 
-                                      onClick={() => { setEditingItem(muestra); setShowModal('editarItemsMuestra'); }}
-                                      className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" 
-                                      title="⚠️ Esta muestra no tiene productos. Añade productos aquí."
-                                    >
-                                      <AlertTriangle size={16} />
-                                    </button>
-                                  )}
+                                  {/* Botón Editar productos (siempre disponible) */}
+                                  <button 
+                                    onClick={() => { setEditingItem(muestra); setShowModal('editarItemsMuestra'); }}
+                                    className={`p-2 rounded-lg ${sinItems ? 'text-red-600 hover:bg-red-50 animate-pulse' : 'text-orange-500 hover:bg-orange-50'}`} 
+                                    title={sinItems ? '⚠️ Esta muestra no tiene productos. Click para añadir.' : 'Editar productos de esta muestra'}
+                                  >
+                                    {sinItems ? <AlertTriangle size={16} /> : <Edit2 size={16} />}
+                                  </button>
                                 </>
                               );
                             })()}
@@ -21816,8 +22067,20 @@ Firma repartidor: _________________
                 <Button 
                   onClick={async () => {
                     const zpl = generarTodoZPL();
+                    const marcarImpresa = async () => {
+                      if (data.etiquetaGuardadaId) {
+                        try {
+                          await supabase.from('etiquetas_generadas').update({ 
+                            impresa: true, 
+                            fecha_impresa: new Date().toISOString() 
+                          }).eq('id', data.etiquetaGuardadaId);
+                          refetchEtiquetasGeneradas();
+                        } catch (e) { console.warn(e); }
+                      }
+                    };
                     try {
                       await navigator.clipboard.writeText(zpl);
+                      await marcarImpresa();
                       alert(`✅ ${unidades} etiqueta(s) copiadas al portapapeles!\n\nPégalas en Zebra Setup Utilities → Raw Print.`);
                       setShowModal(null);
                       setEtiquetasEmpaquetadoData(null);
@@ -21828,6 +22091,7 @@ Firma repartidor: _________________
                       ta.select();
                       document.execCommand('copy');
                       document.body.removeChild(ta);
+                      await marcarImpresa();
                       alert('✅ ZPL copiado al portapapeles');
                       setShowModal(null);
                       setEtiquetasEmpaquetadoData(null);
@@ -21840,7 +22104,7 @@ Firma repartidor: _________________
                 
                 <Button 
                   variant="secondary"
-                  onClick={() => {
+                  onClick={async () => {
                     const zpl = generarTodoZPL();
                     const blob = new Blob([zpl], { type: 'text/plain' });
                     const a = document.createElement('a');
@@ -21849,6 +22113,15 @@ Firma repartidor: _________________
                     a.download = `etiquetas-${formatoProd.nombre.replace(/[^a-zA-Z0-9]/g,'_')}-${tag}-${unidades}u.zpl`;
                     a.click();
                     URL.revokeObjectURL(a.href);
+                    if (data.etiquetaGuardadaId) {
+                      try {
+                        await supabase.from('etiquetas_generadas').update({ 
+                          impresa: true, 
+                          fecha_impresa: new Date().toISOString() 
+                        }).eq('id', data.etiquetaGuardadaId);
+                        refetchEtiquetasGeneradas();
+                      } catch (e) { console.warn(e); }
+                    }
                     setShowModal(null);
                     setEtiquetasEmpaquetadoData(null);
                   }}
@@ -21858,10 +22131,14 @@ Firma repartidor: _________________
                 </Button>
                 
                 <button 
-                  onClick={() => { setShowModal(null); setEtiquetasEmpaquetadoData(null); }}
+                  onClick={() => { 
+                    alert('💾 La etiqueta se ha guardado como PENDIENTE.\n\nLa podrás recuperar e imprimir cuando quieras desde:\nProducción → Empaquetado → "Etiquetas pendientes de imprimir"');
+                    setShowModal(null); 
+                    setEtiquetasEmpaquetadoData(null); 
+                  }}
                   className="text-sm text-neutral-500 hover:text-neutral-700 py-2"
                 >
-                  No imprimir ahora
+                  💾 Guardar para imprimir luego
                 </button>
               </div>
             </div>
