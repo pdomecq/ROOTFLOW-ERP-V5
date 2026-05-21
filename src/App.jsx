@@ -1601,6 +1601,8 @@ const MainApp = () => {
   const { data: loteMovimientosData, refetch: refetchLoteMovimientos } = useRealtime('lote_movimientos');
   // V47 - Reembolsos a socios (saldar deuda 551)
   const { data: reembolsosSociosData, refetch: refetchReembolsosSocios } = useRealtime('reembolsos_socios');
+  // V48 - Mapeo categorías de gasto → tipo de coste
+  const { data: mapeoCategoriasData, refetch: refetchMapeoCategorias } = useRealtime('mapeo_categorias_coste');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1706,6 +1708,8 @@ const MainApp = () => {
   const loteMovimientos = loteMovimientosData || [];
   // V47 - Reembolsos a socios
   const reembolsosSocios = reembolsosSociosData || [];
+  // V48 - Mapeo categorías de coste
+  const mapeoCategorias = mapeoCategoriasData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -4228,6 +4232,26 @@ const MainApp = () => {
         )}
 
         <p className="text-xs text-neutral-500">💡 Si la variedad tiene configurado g/bandeja, podrás calcular automáticamente las bandejas necesarias en producción.</p>
+
+        {/* V48: Ficha técnica de coste por unidad */}
+        <details className="border border-amber-200 bg-amber-50 rounded-xl">
+          <summary className="cursor-pointer p-3 font-semibold text-amber-900 flex items-center gap-2">
+            💰 Coste de packaging (envase + etiqueta)
+          </summary>
+          <div className="p-4 pt-0 space-y-3 border-t border-amber-200">
+            <p className="text-xs text-amber-700">Coste de los materiales de empaquetado para CADA unidad de este producto.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Coste envase (€/ud)" type="number" step="0.001" value={form.coste_envase || ''} onChange={e => setForm({...form, coste_envase: parseFloat(e.target.value) || 0})} placeholder="Ej: 0,15" />
+              <Input label="Coste etiqueta (€/ud)" type="number" step="0.001" value={form.coste_etiqueta || ''} onChange={e => setForm({...form, coste_etiqueta: parseFloat(e.target.value) || 0})} placeholder="Ej: 0,02" />
+            </div>
+            {(form.coste_envase > 0 || form.coste_etiqueta > 0) && (
+              <div className="bg-white border border-amber-300 rounded-lg p-2 text-center">
+                <p className="text-xs text-amber-700 font-bold uppercase">Coste packaging por unidad</p>
+                <p className="text-xl font-black text-amber-900">{formatCurrency((form.coste_envase || 0) + (form.coste_etiqueta || 0))}</p>
+              </div>
+            )}
+          </div>
+        </details>
         
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
@@ -4326,6 +4350,53 @@ const MainApp = () => {
         <p className="text-xs text-neutral-500 p-3 bg-blue-50 rounded-lg">
           <strong>💡 Gramos por bandeja:</strong> Es lo que se cosecha de UNA bandeja completa de esta variedad. Se usa para calcular cuántas bandejas necesitas plantar para cubrir un pedido (Sesión 3).
         </p>
+        
+        {/* V48: Ficha técnica de coste */}
+        <details className="border border-amber-200 bg-amber-50 rounded-xl">
+          <summary className="cursor-pointer p-3 font-semibold text-amber-900 flex items-center gap-2">
+            💰 Ficha técnica de coste (opcional, para análisis de margen)
+          </summary>
+          <div className="p-4 pt-0 space-y-3 border-t border-amber-200">
+            <p className="text-xs text-amber-700">
+              Define cuánto material consume UNA bandeja de esta variedad. El sistema lo usará para calcular el coste real por bandeja y unidad.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Semilla (g/bandeja)" type="number" step="0.1" value={form.gramos_semilla_por_bandeja || ''} onChange={e => setForm({...form, gramos_semilla_por_bandeja: parseFloat(e.target.value) || 0})} placeholder="Ej: 8g" />
+              <Input label="Precio semilla (€/kg)" type="number" step="0.01" value={form.coste_semilla_kg || ''} onChange={e => setForm({...form, coste_semilla_kg: parseFloat(e.target.value) || 0})} placeholder="Ej: 25€/kg" />
+              <Input label="Sustrato (g/bandeja)" type="number" step="1" value={form.gramos_sustrato_por_bandeja || ''} onChange={e => setForm({...form, gramos_sustrato_por_bandeja: parseFloat(e.target.value) || 0})} placeholder="Ej: 200g" />
+              <Input label="Precio sustrato (€/kg)" type="number" step="0.01" value={form.coste_sustrato_l || ''} onChange={e => setForm({...form, coste_sustrato_l: parseFloat(e.target.value) || 0})} placeholder="Ej: 1,50€/kg" />
+              <Input label="Rendimiento real (g cosechados/bandeja)" type="number" step="1" value={form.rendimiento_g_por_bandeja || form.gramos_por_bandeja || ''} onChange={e => setForm({...form, rendimiento_g_por_bandeja: parseFloat(e.target.value) || 0})} placeholder="Ej: 200g" />
+              <Input label="Merma típica (%)" type="number" step="0.5" value={form.merma_pct || ''} onChange={e => setForm({...form, merma_pct: parseFloat(e.target.value) || 0})} placeholder="Ej: 5" />
+            </div>
+            
+            {/* Preview del coste directo */}
+            {(form.gramos_semilla_por_bandeja > 0 || form.gramos_sustrato_por_bandeja > 0) && (() => {
+              const costeSemilla = ((form.gramos_semilla_por_bandeja || 0) / 1000) * (form.coste_semilla_kg || 0);
+              const costeSustrato = ((form.gramos_sustrato_por_bandeja || 0) / 1000) * (form.coste_sustrato_l || 0);
+              const total = costeSemilla + costeSustrato;
+              const merma = (form.merma_pct || 0) / 100;
+              const rendReal = (form.rendimiento_g_por_bandeja || form.gramos_por_bandeja || 100) * (1 - merma);
+              const cPorG = rendReal > 0 ? total / rendReal : 0;
+              return (
+                <div className="bg-white border border-amber-300 rounded-lg p-3 grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <p className="text-amber-700 font-bold uppercase">Coste directo</p>
+                    <p className="text-lg font-black text-amber-900">{formatCurrency(total)}/b</p>
+                  </div>
+                  <div>
+                    <p className="text-amber-700 font-bold uppercase">Rend. neto</p>
+                    <p className="text-lg font-black text-amber-900">{rendReal.toFixed(0)}g</p>
+                  </div>
+                  <div>
+                    <p className="text-amber-700 font-bold uppercase">Coste/g</p>
+                    <p className="text-lg font-black text-amber-900">{formatCurrency(cPorG)}</p>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </details>
+        
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{variedad ? 'Guardar' : 'Crear Variedad'}</Button>
@@ -15005,6 +15076,358 @@ Firma repartidor: _________________
           <StatCard icon={TrendingUp} label="Beneficio" value={formatCurrency(totalVentas - totalGastos)} color={totalVentas - totalGastos >= 0 ? "bg-green-100 text-green-600" : "bg-red-100 text-red-600"} />
           <StatCard icon={Receipt} label="Facturado" value={formatCurrency(totalFacturado)} color="bg-blue-100 text-blue-600" />
         </div>
+
+        {/* ============ V48 - ANÁLISIS DE COSTES UNITARIOS ============ */}
+        {(() => {
+          // Categorías de coste y su tipo (directo/indirecto)
+          const tiposCoste = {
+            semilla:    { label: '🌱 Semilla',       emoji: '🌱', tipo: 'directo_variedad', color: '#22C55E' },
+            sustrato:   { label: '🪴 Sustrato',      emoji: '🪴', tipo: 'directo_variedad', color: '#A16207' },
+            envases:    { label: '📦 Envases',       emoji: '📦', tipo: 'directo_producto', color: '#F59E0B' },
+            etiquetas:  { label: '🏷️ Etiquetas',     emoji: '🏷️', tipo: 'directo_producto', color: '#EAB308' },
+            energia:    { label: '⚡ Energía',       emoji: '⚡', tipo: 'indirecto',         color: '#FACC15' },
+            agua:       { label: '💧 Agua',           emoji: '💧', tipo: 'indirecto',         color: '#06B6D4' },
+            alquiler:   { label: '🏠 Alquiler',       emoji: '🏠', tipo: 'indirecto',         color: '#6366F1' },
+            reparto:    { label: '🚚 Reparto',        emoji: '🚚', tipo: 'indirecto',         color: '#8B5CF6' },
+            admin:      { label: '📑 Admin/SaaS',     emoji: '📑', tipo: 'indirecto',         color: '#EC4899' },
+            otros:      { label: '➕ Otros',           emoji: '➕', tipo: 'indirecto',         color: '#94A3B8' },
+            excluir:    { label: '— Excluir',         emoji: '—',  tipo: 'excluir',           color: '#E5E7EB' },
+          };
+
+          // Obtener tipo_coste de un gasto según su categoría (string)
+          const getTipoCoste = (cat) => {
+            if (!cat) return 'otros';
+            const mapeo = mapeoCategorias.find(m => m.categoria_gasto === cat);
+            if (mapeo) return mapeo.tipo_coste;
+            // Inferencia automática por nombre de categoría
+            const c = cat.toLowerCase();
+            if (c.includes('semilla')) return 'semilla';
+            if (c.includes('sustrato') || c.includes('turba') || c.includes('fibra')) return 'sustrato';
+            if (c.includes('envase') || c.includes('caja') || c.includes('bandeja') || c.includes('tarrina')) return 'envases';
+            if (c.includes('etiqueta')) return 'etiquetas';
+            if (c.includes('luz') || c.includes('energ') || c.includes('electric')) return 'energia';
+            if (c.includes('agua')) return 'agua';
+            if (c.includes('alquiler') || c.includes('nave') || c.includes('local')) return 'alquiler';
+            if (c.includes('reparto') || c.includes('transport') || c.includes('combust')) return 'reparto';
+            if (c.includes('asesor') || c.includes('admin') || c.includes('saas') || c.includes('software') || c.includes('intern')) return 'admin';
+            return 'otros';
+          };
+
+          // === 1. Agrupar gastos del periodo por tipo de coste ===
+          const gastosPorTipo = {};
+          Object.keys(tiposCoste).forEach(t => gastosPorTipo[t] = 0);
+          gastosPeriodoInf.forEach(g => {
+            const tipo = getTipoCoste(g.categoria);
+            if (tipo !== 'excluir') {
+              gastosPorTipo[tipo] = (gastosPorTipo[tipo] || 0) + (g.importe || 0);
+            }
+          });
+
+          const costesDirectosVariedad = (gastosPorTipo.semilla || 0) + (gastosPorTipo.sustrato || 0);
+          const costesDirectosProducto = (gastosPorTipo.envases || 0) + (gastosPorTipo.etiquetas || 0);
+          const costesIndirectos = (gastosPorTipo.energia || 0) + (gastosPorTipo.agua || 0) + (gastosPorTipo.alquiler || 0) + (gastosPorTipo.reparto || 0) + (gastosPorTipo.admin || 0) + (gastosPorTipo.otros || 0);
+          const totalCostes = costesDirectosVariedad + costesDirectosProducto + costesIndirectos;
+
+          // === 2. Bandejas producidas en el periodo ===
+          const lotesPeriodoCos = lotes.filter(l => {
+            if (!l.fecha_siembra) return false;
+            const f = new Date(l.fecha_siembra);
+            const ini = new Date(informesPeriodo === 'mes_actual' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1) : (informesPeriodo === 'año_actual' ? new Date(new Date().getFullYear(), 0, 1) : informesPeriodo + '-01'));
+            const fin = new Date(ini); 
+            if (informesPeriodo === 'año_actual') fin.setFullYear(fin.getFullYear() + 1);
+            else fin.setMonth(fin.getMonth() + 1);
+            return f >= ini && f < fin;
+          });
+          const totalBandejasPeriodo = lotesPeriodoCos.reduce((s, l) => s + (l.bandejas || 0), 0);
+          const totalGramosPeriodo = lotesPeriodoCos.reduce((s, l) => {
+            const v = variedades.find(vv => vv.id === l.variedad_id);
+            const rend = v?.rendimiento_g_por_bandeja || v?.gramos_por_bandeja || 200;
+            const merma = (v?.merma_pct || 5) / 100;
+            return s + (l.bandejas || 0) * rend * (1 - merma);
+          }, 0);
+
+          // === 3. Coste indirecto por bandeja (prorrateo) ===
+          const costeIndirectoPorBandeja = totalBandejasPeriodo > 0 ? costesIndirectos / totalBandejasPeriodo : 0;
+
+          // === 4. Coste real por VARIEDAD ===
+          const analisisVariedades = variedades.map(v => {
+            const lotesV = lotesPeriodoCos.filter(l => l.variedad_id === v.id);
+            const bandejas = lotesV.reduce((s, l) => s + (l.bandejas || 0), 0);
+            if (bandejas === 0) return null;
+            
+            const cSem = ((v.gramos_semilla_por_bandeja || 0) / 1000) * (v.coste_semilla_kg || 0);
+            const cSus = ((v.gramos_sustrato_por_bandeja || 0) / 1000) * (v.coste_sustrato_l || 0);
+            const cDirecto = cSem + cSus;
+            const cTotalPorBandeja = cDirecto + costeIndirectoPorBandeja;
+            const rendNeto = (v.rendimiento_g_por_bandeja || v.gramos_por_bandeja || 200) * (1 - (v.merma_pct || 5) / 100);
+            const cPorG = rendNeto > 0 ? cTotalPorBandeja / rendNeto : 0;
+            const cPorKg = cPorG * 1000;
+            
+            return {
+              variedad: v,
+              bandejas,
+              cSem, cSus, cDirecto, cIndirecto: costeIndirectoPorBandeja,
+              cTotalPorBandeja,
+              rendNeto,
+              cPorG, cPorKg,
+              precioRef: v.precio_kg_referencia || 0,
+              margenPct: v.precio_kg_referencia > 0 ? ((v.precio_kg_referencia - cPorKg) / v.precio_kg_referencia * 100) : null,
+              fichaCompleta: (v.gramos_semilla_por_bandeja > 0 && v.coste_semilla_kg > 0),
+            };
+          }).filter(Boolean);
+
+          // === 5. Coste por PRODUCTO empaquetado ===
+          const analisisProductos = productos.filter(p => p.estado_inventario === 'empaquetado' && p.variedad_id).map(p => {
+            const v = variedades.find(vv => vv.id === p.variedad_id);
+            const analV = analisisVariedades.find(a => a.variedad.id === p.variedad_id);
+            const costePorG = analV?.cPorG || 0;
+            const peso = p.formato_gramos || 100;
+            const costeBrote = costePorG * peso;
+            const costeEnv = (p.coste_envase || 0) + (p.coste_etiqueta || 0);
+            const costeTotal = costeBrote + costeEnv;
+            const precio = p.precio || 0;
+            const margen = precio - costeTotal;
+            const margenPct = precio > 0 ? (margen / precio * 100) : 0;
+            
+            return {
+              producto: p, variedad: v,
+              peso, costeBrote, costeEnv, costeTotal,
+              precio, margen, margenPct,
+              fichaCompleta: analV?.fichaCompleta && (p.coste_envase || 0) > 0,
+            };
+          });
+
+          // Si no hay nada del periodo, mostrar mensaje
+          if (totalBandejasPeriodo === 0) {
+            return (
+              <Card className="p-6 text-center bg-amber-50 border-amber-200">
+                <p className="text-2xl mb-2">💰</p>
+                <p className="font-bold text-amber-900">Sin producción en este periodo</p>
+                <p className="text-xs text-amber-700 mt-1">Para ver el análisis de costes unitarios, necesitas tener lotes sembrados en el periodo seleccionado.</p>
+              </Card>
+            );
+          }
+
+          return (
+            <>
+              {/* === DESGLOSE DE COSTES === */}
+              <Card className="p-5">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                  <div>
+                    <h3 className="text-lg font-bold text-neutral-900">💰 Análisis de costes unitarios</h3>
+                    <p className="text-xs text-neutral-500">Coste real por bandeja, por gramo y por unidad de producto</p>
+                  </div>
+                  <span className="text-xs text-neutral-500 bg-neutral-100 px-2 py-1 rounded-full">{totalBandejasPeriodo} bandejas · {(totalGramosPeriodo/1000).toFixed(1)} kg cosechados</span>
+                </div>
+
+                {/* KPIs principales */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-3">
+                    <p className="text-xs text-amber-700 uppercase font-bold">Total costes</p>
+                    <p className="text-2xl font-black text-amber-900">{formatCurrency(totalCostes)}</p>
+                    <p className="text-[10px] text-amber-700">en el periodo</p>
+                  </div>
+                  <div className="bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-200 rounded-xl p-3">
+                    <p className="text-xs text-blue-700 uppercase font-bold">Coste medio/bandeja</p>
+                    <p className="text-2xl font-black text-blue-900">{formatCurrency(totalCostes / totalBandejasPeriodo)}</p>
+                    <p className="text-[10px] text-blue-700">global</p>
+                  </div>
+                  <div className="bg-gradient-to-br from-purple-50 to-pink-50 border border-purple-200 rounded-xl p-3">
+                    <p className="text-xs text-purple-700 uppercase font-bold">Coste/gramo</p>
+                    <p className="text-2xl font-black text-purple-900">{formatCurrency(totalCostes / Math.max(1, totalGramosPeriodo))}</p>
+                    <p className="text-[10px] text-purple-700">cosechado neto</p>
+                  </div>
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl p-3">
+                    <p className="text-xs text-green-700 uppercase font-bold">Coste indirecto/b</p>
+                    <p className="text-2xl font-black text-green-900">{formatCurrency(costeIndirectoPorBandeja)}</p>
+                    <p className="text-[10px] text-green-700">alquiler/luz/agua...</p>
+                  </div>
+                </div>
+
+                {/* Desglose por tipo de coste */}
+                <div>
+                  <p className="text-xs font-bold uppercase text-neutral-500 tracking-wide mb-2">Desglose por categoría</p>
+                  <div className="space-y-1.5">
+                    {Object.entries(tiposCoste).filter(([k]) => k !== 'excluir').map(([k, t]) => {
+                      const importe = gastosPorTipo[k] || 0;
+                      if (importe === 0) return null;
+                      const pct = totalCostes > 0 ? (importe / totalCostes * 100) : 0;
+                      return (
+                        <div key={k} className="flex items-center gap-2">
+                          <span className="text-xs font-medium w-32 flex-shrink-0">{t.label}</span>
+                          <div className="flex-1 bg-neutral-100 rounded-full h-5 relative overflow-hidden">
+                            <div className="h-5 rounded-full transition-all flex items-center px-2" style={{ width: pct + '%', backgroundColor: t.color, minWidth: '40px' }}>
+                              <span className="text-[10px] font-bold text-white">{pct.toFixed(1)}%</span>
+                            </div>
+                          </div>
+                          <span className="text-xs font-bold w-20 text-right">{formatCurrency(importe)}</span>
+                          <span className="text-[10px] text-neutral-400 w-12 flex-shrink-0">
+                            {t.tipo === 'directo_variedad' ? 'D.var' : t.tipo === 'directo_producto' ? 'D.prod' : 'Indir.'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Card>
+
+              {/* === COSTES POR VARIEDAD === */}
+              <Card className="p-5">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h3 className="text-lg font-bold text-neutral-900">🌿 Coste por variedad</h3>
+                  <span className="text-xs text-neutral-500">{analisisVariedades.length} variedades activas</span>
+                </div>
+
+                {analisisVariedades.length === 0 ? (
+                  <p className="text-sm text-neutral-400 text-center py-6">No hay producción de variedades en el periodo.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs text-neutral-500">
+                          <th className="py-2">Variedad</th>
+                          <th className="py-2 text-right">Bandejas</th>
+                          <th className="py-2 text-right">€ semilla/b</th>
+                          <th className="py-2 text-right">€ sustrato/b</th>
+                          <th className="py-2 text-right">€ indirect./b</th>
+                          <th className="py-2 text-right">Total/b</th>
+                          <th className="py-2 text-right">€/kg</th>
+                          <th className="py-2 text-right">Margen</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analisisVariedades.sort((a,b) => b.bandejas - a.bandejas).map(a => (
+                          <tr key={a.variedad.id} className="border-b hover:bg-neutral-50">
+                            <td className="py-2 font-medium">
+                              {a.variedad.nombre}
+                              {!a.fichaCompleta && <span className="text-[10px] text-amber-600 ml-1" title="Falta ficha técnica completa">⚠️</span>}
+                            </td>
+                            <td className="py-2 text-right">{a.bandejas}</td>
+                            <td className="py-2 text-right text-neutral-600">{formatCurrency(a.cSem)}</td>
+                            <td className="py-2 text-right text-neutral-600">{formatCurrency(a.cSus)}</td>
+                            <td className="py-2 text-right text-neutral-600">{formatCurrency(a.cIndirecto)}</td>
+                            <td className="py-2 text-right font-bold">{formatCurrency(a.cTotalPorBandeja)}</td>
+                            <td className="py-2 text-right font-bold">{formatCurrency(a.cPorKg)}</td>
+                            <td className="py-2 text-right">
+                              {a.margenPct !== null ? (
+                                <Badge className={a.margenPct > 50 ? 'bg-green-100 text-green-700' : a.margenPct > 20 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}>
+                                  {a.margenPct.toFixed(1)}%
+                                </Badge>
+                              ) : <span className="text-neutral-300 text-xs">sin precio ref.</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                
+                <p className="text-[10px] text-neutral-400 mt-3">
+                  ⚠️ Variedades con ficha técnica incompleta usan estimaciones. Configura semilla/sustrato/coste en cada variedad para mayor precisión.
+                </p>
+              </Card>
+
+              {/* === COSTES POR PRODUCTO EMPAQUETADO === */}
+              {analisisProductos.length > 0 && (
+                <Card className="p-5">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <h3 className="text-lg font-bold text-neutral-900">📦 Coste por producto · Margen vs PVP</h3>
+                    <span className="text-xs text-neutral-500">{analisisProductos.length} productos empaquetados</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs text-neutral-500">
+                          <th className="py-2">Producto</th>
+                          <th className="py-2 text-right">Peso</th>
+                          <th className="py-2 text-right">Brote</th>
+                          <th className="py-2 text-right">Packaging</th>
+                          <th className="py-2 text-right">Coste total</th>
+                          <th className="py-2 text-right">PVP</th>
+                          <th className="py-2 text-right">Margen €</th>
+                          <th className="py-2 text-right">Margen %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analisisProductos.sort((a,b) => b.margenPct - a.margenPct).map(a => (
+                          <tr key={a.producto.id} className="border-b hover:bg-neutral-50">
+                            <td className="py-2 font-medium">
+                              {a.producto.nombre}
+                              {!a.fichaCompleta && <span className="text-[10px] text-amber-600 ml-1" title="Falta ficha técnica completa">⚠️</span>}
+                            </td>
+                            <td className="py-2 text-right text-neutral-500">{a.peso}g</td>
+                            <td className="py-2 text-right text-neutral-600">{formatCurrency(a.costeBrote)}</td>
+                            <td className="py-2 text-right text-neutral-600">{formatCurrency(a.costeEnv)}</td>
+                            <td className="py-2 text-right font-bold">{formatCurrency(a.costeTotal)}</td>
+                            <td className="py-2 text-right">{formatCurrency(a.precio)}</td>
+                            <td className={`py-2 text-right font-bold ${a.margen >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                              {formatCurrency(a.margen)}
+                            </td>
+                            <td className="py-2 text-right">
+                              <Badge className={a.margenPct > 50 ? 'bg-green-100 text-green-700' : a.margenPct > 20 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}>
+                                {a.margenPct.toFixed(1)}%
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+
+              {/* === MAPEO DE CATEGORÍAS (configuración) === */}
+              <details className="border border-neutral-200 bg-white rounded-xl">
+                <summary className="cursor-pointer p-4 font-semibold flex items-center gap-2 hover:bg-neutral-50">
+                  ⚙️ Configurar mapeo de categorías de gasto
+                  <span className="text-xs text-neutral-500 ml-auto">Asigna qué categoría es qué tipo de coste</span>
+                </summary>
+                <div className="px-4 pb-4 space-y-2">
+                  <p className="text-xs text-neutral-500 mb-2">
+                    El sistema infiere automáticamente el tipo según el nombre de la categoría. Si la inferencia es incorrecta, configúrala aquí manualmente.
+                  </p>
+                  {(() => {
+                    const categoriasUnicas = [...new Set(gastos.map(g => g.categoria).filter(Boolean))];
+                    if (categoriasUnicas.length === 0) return <p className="text-sm text-neutral-400">Aún no hay gastos con categoría.</p>;
+                    return (
+                      <div className="space-y-1.5">
+                        {categoriasUnicas.map(cat => {
+                          const mapeoExist = mapeoCategorias.find(m => m.categoria_gasto === cat);
+                          const tipoActual = mapeoExist?.tipo_coste || getTipoCoste(cat);
+                          const totalGastos = gastos.filter(g => g.categoria === cat).reduce((s,g) => s + (g.importe||0), 0);
+                          return (
+                            <div key={cat} className="flex items-center gap-2 p-2 bg-neutral-50 rounded-lg">
+                              <span className="font-medium text-sm flex-1 truncate">{cat}</span>
+                              <span className="text-xs text-neutral-500">{formatCurrency(totalGastos)}</span>
+                              <select 
+                                value={tipoActual} 
+                                onChange={async (e) => {
+                                  const nuevoTipo = e.target.value;
+                                  if (mapeoExist?.id) {
+                                    await supabase.from('mapeo_categorias_coste').update({ tipo_coste: nuevoTipo }).eq('id', mapeoExist.id);
+                                  } else {
+                                    await supabase.from('mapeo_categorias_coste').insert({ categoria_gasto: cat, tipo_coste: nuevoTipo });
+                                  }
+                                  refetchMapeoCategorias();
+                                }}
+                                className="text-xs px-2 py-1 rounded border border-neutral-300 bg-white"
+                              >
+                                {Object.entries(tiposCoste).map(([k, t]) => (
+                                  <option key={k} value={k}>{t.label}</option>
+                                ))}
+                              </select>
+                              {!mapeoExist && <span className="text-[10px] text-neutral-400" title="Inferido automáticamente">auto</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </details>
+            </>
+          );
+        })()}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="p-5">
