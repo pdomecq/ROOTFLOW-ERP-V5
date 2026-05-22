@@ -1607,6 +1607,8 @@ const MainApp = () => {
   // V51 - Etiquetas persistentes + facturas semanales
   const { data: etiquetasGeneradasData, refetch: refetchEtiquetasGeneradas } = useRealtime('etiquetas_generadas');
   const { data: facturasSemanalesData, refetch: refetchFacturasSemanales } = useRealtime('facturas_semanales');
+  // V52 - Mandatos SEPA firmados
+  const { data: mandatosSepaData, refetch: refetchMandatosSepa } = useRealtime('mandatos_sepa');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1717,6 +1719,8 @@ const MainApp = () => {
   // V51 - Etiquetas persistentes + facturas semanales
   const etiquetasGeneradas = etiquetasGeneradasData || [];
   const facturasSemanales = facturasSemanalesData || [];
+  // V52 - Mandatos SEPA
+  const mandatosSepa = mandatosSepaData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -4303,6 +4307,27 @@ ${pedidoLinea ? `^FO260,244
                   <option value={7}>Domingo</option>
                 </select>
                 <span className="text-[10px] text-blue-600">(día que se emite la factura agrupada)</span>
+              </div>
+              
+              {/* V52: Botón generar mandato */}
+              <div className="mt-3 p-3 bg-white border border-blue-300 rounded-lg">
+                <p className="text-xs font-bold text-blue-900 mb-2">📜 Generar documento de mandato</p>
+                <p className="text-xs text-blue-700 mb-2">
+                  Crea un PDF con el modelo oficial SEPA B2B prerrellenado con los datos del cliente. 
+                  Imprímelo, fírmalo, hazlo firmar al cliente y guarda el escaneado.
+                </p>
+                {cliente?.id ? (
+                  <Button 
+                    type="button" 
+                    size="sm" 
+                    onClick={() => generarMandatoSEPA({ ...cliente, ...form })}
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    <FileText size={14} /> Generar mandato SEPA PDF
+                  </Button>
+                ) : (
+                  <p className="text-xs text-amber-700 italic">💡 Guarda el cliente primero para poder generar el mandato</p>
+                )}
               </div>
             </div>
           )}
@@ -17437,6 +17462,232 @@ Firma repartidor: _________________
     );
   };
 
+  // V52: Generador de mandato SEPA B2B en HTML imprimible (abre nueva pestaña)
+  const generarMandatoSEPA = (cliente) => {
+    if (!cliente) { alert('❌ Sin cliente'); return; }
+    
+    const referencia = `ROOTFLOW-${String(cliente.id).padStart(4,'0')}-${new Date().getFullYear()}`;
+    const fechaEmision = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
+    
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Mandato SEPA B2B - ${cliente.nombre || cliente.razon_social || 'Cliente'}</title>
+<style>
+@page { size: A4; margin: 1.5cm; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.4; color: #1f2937; margin: 0; padding: 30px; }
+.header { display: flex; justify-content: space-between; align-items: start; border-bottom: 3px solid #ED7E1F; padding-bottom: 12px; margin-bottom: 24px; }
+.logo { font-weight: 900; font-size: 26pt; color: #1D4F37; }
+.logo .orange { color: #ED7E1F; }
+.subtitle { font-size: 9pt; color: #6b7280; letter-spacing: 1px; }
+.title-box { background: #1D4F37; color: white; padding: 18px; text-align: center; margin: 18px 0; border-radius: 4px; }
+.title-box h1 { margin: 0; font-size: 18pt; letter-spacing: 1px; }
+.title-box p { margin: 4px 0 0 0; font-size: 10pt; opacity: 0.9; }
+.section { margin: 18px 0; }
+.section-title { background: #FCF2EB; color: #1D4F37; padding: 8px 14px; font-weight: 700; font-size: 11pt; border-left: 4px solid #ED7E1F; margin-bottom: 10px; }
+.field-row { display: grid; grid-template-columns: 200px 1fr; gap: 8px; padding: 7px 14px; border-bottom: 1px dotted #e5e7eb; }
+.field-label { color: #374151; font-weight: 600; font-size: 10pt; }
+.field-value { color: #1f2937; font-size: 10pt; }
+.field-value.blank { color: #9ca3af; font-style: italic; }
+.ref-box { background: #fef3c7; border: 2px solid #f59e0b; padding: 10px; border-radius: 4px; text-align: center; margin: 12px 0; }
+.ref-box .label { font-size: 9pt; color: #92400e; text-transform: uppercase; letter-spacing: 1px; }
+.ref-box .value { font-size: 14pt; font-weight: 700; color: #78350f; font-family: monospace; }
+.legal { background: #f9fafb; border: 1px solid #d1d5db; padding: 14px; margin: 18px 0; font-size: 9pt; line-height: 1.5; color: #4b5563; }
+.legal strong { color: #1f2937; }
+.signature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 30px; }
+.signature-box { border: 2px solid #d1d5db; padding: 20px 14px; border-radius: 4px; min-height: 140px; }
+.signature-box .title { font-weight: 700; font-size: 10pt; color: #1D4F37; border-bottom: 2px solid #ED7E1F; padding-bottom: 6px; margin-bottom: 12px; }
+.signature-box .line { border-bottom: 1px solid #9ca3af; margin: 32px 0 6px 0; }
+.signature-box .small { font-size: 9pt; color: #6b7280; }
+.checkbox-row { margin: 8px 0; }
+.checkbox-row input[type="checkbox"] { width: 14px; height: 14px; }
+.footer { margin-top: 24px; padding-top: 14px; border-top: 1px solid #e5e7eb; font-size: 8pt; color: #6b7280; text-align: center; }
+.no-print { background: #ED7E1F; color: white; padding: 10px 20px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 12pt; position: fixed; top: 20px; right: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.no-print:hover { background: #c75d0e; }
+@media print { .no-print { display: none; } body { padding: 0; } }
+</style>
+</head>
+<body>
+<button class="no-print" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+
+<div class="header">
+  <div>
+    <div class="logo">Root<span class="orange">Flow</span></div>
+    <div class="subtitle">HYDROPONICS S.L.</div>
+  </div>
+  <div style="text-align: right; font-size: 9pt; color: #6b7280;">
+    Ref: <strong>${referencia}</strong><br>
+    Fecha: ${fechaEmision}
+  </div>
+</div>
+
+<div class="title-box">
+  <h1>ORDEN DE DOMICILIACIÓN DE ADEUDO DIRECTO SEPA B2B</h1>
+  <p>Mandato para el cobro recurrente de servicios — formato SEPA Empresas (B2B)</p>
+</div>
+
+<p style="font-size: 10pt; color: #4b5563;">
+Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza a <strong>(A) ROOTFLOW HYDROPONICS S.L.</strong> a enviar instrucciones a su entidad financiera para adeudar en su cuenta y <strong>(B) a su entidad financiera para adeudar los importes correspondientes en su cuenta de acuerdo con las instrucciones de ROOTFLOW HYDROPONICS S.L.</strong>
+</p>
+
+<div class="ref-box">
+  <div class="label">Referencia única del mandato</div>
+  <div class="value">${referencia}</div>
+</div>
+
+<!-- DATOS DEL ACREEDOR -->
+<div class="section">
+  <div class="section-title">DATOS DEL ACREEDOR</div>
+  <div class="field-row"><span class="field-label">Nombre/Razón Social:</span><span class="field-value">ROOTFLOW HYDROPONICS S.L.</span></div>
+  <div class="field-row"><span class="field-label">CIF:</span><span class="field-value">B27535137</span></div>
+  <div class="field-row"><span class="field-label">Dirección:</span><span class="field-value">C. Nueva 16 P6, 28231 Las Rozas de Madrid, España</span></div>
+  <div class="field-row"><span class="field-label">Identificador Acreedor (CID):</span><span class="field-value blank">[A rellenar tras inscripción en BBVA]</span></div>
+  <div class="field-row"><span class="field-label">Email:</span><span class="field-value">info@rootflow.es</span></div>
+  <div class="field-row"><span class="field-label">Teléfono:</span><span class="field-value">694 918 481</span></div>
+</div>
+
+<!-- DATOS DEL DEUDOR -->
+<div class="section">
+  <div class="section-title">DATOS DEL DEUDOR (CLIENTE)</div>
+  <div class="field-row"><span class="field-label">Nombre/Razón Social:</span><span class="field-value">${cliente.razon_social || cliente.nombre || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">CIF/NIF:</span><span class="field-value">${cliente.cif || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">Dirección:</span><span class="field-value">${cliente.direccion || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">CP / Ciudad:</span><span class="field-value">${cliente.codigo_postal || '_____'} ${cliente.ciudad || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">País:</span><span class="field-value">España</span></div>
+  <div class="field-row"><span class="field-label">Persona de contacto:</span><span class="field-value">${cliente.contacto || cliente.nombre_contacto || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">Email:</span><span class="field-value">${cliente.email || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">Teléfono:</span><span class="field-value">${cliente.telefono || '________________'}</span></div>
+</div>
+
+<!-- DATOS BANCARIOS -->
+<div class="section">
+  <div class="section-title">DATOS BANCARIOS DEL DEUDOR</div>
+  <div class="field-row"><span class="field-label">Nombre del titular:</span><span class="field-value">${cliente.razon_social || cliente.nombre || '________________'}</span></div>
+  <div class="field-row"><span class="field-label">Número de cuenta (IBAN):</span><span class="field-value" style="font-family: monospace; font-size: 11pt; letter-spacing: 1px;">${cliente.iban ? cliente.iban.replace(/(.{4})/g, '$1 ').trim() : '________________________'}</span></div>
+  <div class="field-row"><span class="field-label">Entidad bancaria:</span><span class="field-value blank">[El cliente lo cumplimentará]</span></div>
+  <div class="field-row"><span class="field-label">Código BIC/SWIFT:</span><span class="field-value blank">[El cliente lo cumplimentará]</span></div>
+</div>
+
+<!-- TIPO DE PAGO -->
+<div class="section">
+  <div class="section-title">TIPO DE PAGO</div>
+  <div class="checkbox-row">
+    <input type="checkbox" checked disabled> 
+    <strong>Pago recurrente</strong> — Adeudos periódicos correspondientes a la facturación semanal de servicios de suministro de microbrotes
+  </div>
+  <div class="checkbox-row">
+    <input type="checkbox" disabled> Pago único
+  </div>
+</div>
+
+<!-- AVISO LEGAL B2B -->
+<div class="legal">
+  <p style="margin: 0 0 8px 0; font-weight: 700; color: #b91c1c; font-size: 10pt;">
+    ⚠️ IMPORTANTE — ESQUEMA B2B (EMPRESA A EMPRESA):
+  </p>
+  <p style="margin: 0 0 6px 0;">
+    El esquema SEPA B2B <strong>solamente está disponible para clientes que NO sean consumidores</strong>. 
+    Como deudor, <strong>NO tiene derecho a obtener un reembolso de su entidad financiera</strong> una vez se haya producido el cargo en su cuenta, pero podrá reclamar su devolución directamente con su acreedor.
+  </p>
+  <p style="margin: 0 0 6px 0;">
+    Como deudor, <strong>tiene la obligación de confirmar este mandato a su entidad bancaria</strong> antes de la presentación del primer adeudo. Si no lo hace, su banco rechazará el cargo.
+  </p>
+  <p style="margin: 6px 0 0 0;">
+    En el caso de que se realice un adeudo no autorizado o no conforme con las condiciones acordadas, podrá oponerse en un plazo máximo de 2 días hábiles desde la fecha de adeudo.
+  </p>
+</div>
+
+<!-- FIRMAS -->
+<div class="signature-grid">
+  <div class="signature-box">
+    <div class="title">FIRMA DEL DEUDOR</div>
+    <div class="small">${cliente.razon_social || cliente.nombre || 'Cliente'}</div>
+    <div class="line"></div>
+    <div class="small">Nombre y apellidos del firmante: ________________</div>
+    <div class="small" style="margin-top: 8px;">DNI: ________________</div>
+    <div class="small" style="margin-top: 8px;">Cargo: ________________</div>
+    <div class="small" style="margin-top: 8px;">Fecha: _____ / _____ / 2026</div>
+    <div class="small" style="margin-top: 8px;">Lugar: ________________</div>
+  </div>
+  <div class="signature-box">
+    <div class="title">FIRMA Y SELLO DEL ACREEDOR</div>
+    <div class="small">ROOTFLOW HYDROPONICS S.L.</div>
+    <div class="line"></div>
+    <div class="small">Pedro Domecq Vergara</div>
+    <div class="small" style="margin-top: 4px;">Administrador</div>
+    <div class="small" style="margin-top: 12px;">Fecha de emisión: ${fechaEmision}</div>
+    <div class="small" style="margin-top: 8px;">Sello de la empresa:</div>
+  </div>
+</div>
+
+<div class="footer">
+  <strong>ROOTFLOW HYDROPONICS S.L.</strong> · CIF B27535137 · C. Nueva 16 P6, 28231 Las Rozas de Madrid<br>
+  Tel: 694 918 481 · info@rootflow.es · www.rootflow.es<br>
+  <em>Documento generado por el ERP de RootFlow el ${fechaEmision} — Referencia ${referencia}</em>
+</div>
+
+</body>
+</html>`;
+    
+    // Abrir en nueva ventana para que el usuario pueda imprimir o guardar como PDF
+    const w = window.open('', '_blank');
+    if (!w) {
+      alert('⚠️ El navegador bloqueó la ventana emergente. Permite pop-ups para rootflow-erp.vercel.app y vuelve a intentarlo.');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    
+    // Registrar el mandato en BD
+    (async () => {
+      try {
+        await supabase.from('mandatos_sepa').insert({
+          cliente_id: cliente.id,
+          referencia,
+          fecha_emision: new Date().toISOString().slice(0,10),
+          estado: 'borrador',
+          notas: 'Generado desde ERP',
+        });
+        refetchMandatosSepa();
+      } catch (e) {
+        console.warn('No se pudo registrar el mandato:', e);
+      }
+    })();
+  };
+
+  // V52: Helper para leer items de una muestra (usa items_json primero, fallback a muestra_items)
+  const getItemsMuestra = (muestra) => {
+    if (!muestra) return [];
+    // Prioridad 1: items_json embebido
+    if (muestra.items_json && Array.isArray(muestra.items_json) && muestra.items_json.length > 0) {
+      return muestra.items_json;
+    }
+    // Prioridad 2: tabla muestra_items (compatibilidad con muestras antiguas)
+    return muestraItems.filter(i => i.muestra_id === muestra.id);
+  };
+
+  // V52: Helper para guardar items en una muestra
+  const guardarItemsMuestra = async (muestraId, items) => {
+    const itemsLimpios = items.filter(i => i.producto_id).map(i => ({
+      producto_id: parseInt(i.producto_id),
+      cantidad: parseInt(i.cantidad) || 1,
+    }));
+    // Guardar en items_json (siempre)
+    const { error } = await supabase.from('muestras').update({ items_json: itemsLimpios }).eq('id', muestraId);
+    if (error) throw error;
+    // Compatibilidad: también en muestra_items si la tabla existe
+    try {
+      await supabase.from('muestra_items').delete().eq('muestra_id', muestraId);
+      if (itemsLimpios.length > 0) {
+        await supabase.from('muestra_items').insert(itemsLimpios.map(it => ({ muestra_id: muestraId, ...it })));
+      }
+    } catch (e) {
+      console.log('ℹ️ muestra_items no actualizada:', e.message);
+    }
+  };
+
   // ==================== EVENTOS CALENDARIO + GOOGLE CALENDAR ====================
   const tipoEventoConfig = {
     general: { label: 'General', emoji: '📌', color: '#F97316' },
@@ -20838,6 +21089,12 @@ Firma repartidor: _________________
           return;
         }
 
+        // V52: Items van DENTRO de la propia muestra como JSON (no tabla aparte)
+        const itemsJsonValido = itemsValidos.map(item => ({
+          producto_id: parseInt(item.producto_id),
+          cantidad: parseInt(item.cantidad) || 1,
+        }));
+
         const muestraData = {
           lead_id: form.lead_id ? parseInt(form.lead_id) : null,
           nombre_contacto: form.nombre_contacto.trim(),
@@ -20850,9 +21107,10 @@ Firma repartidor: _________________
           estado: 'pendiente',
           notas: form.notas || '',
           tipo_negocio: form.tipo_negocio || 'restaurante',
+          items_json: itemsJsonValido,  // ← V52: JSON embebido
         };
 
-        console.log('📤 Enviando datos a muestras:', muestraData);
+        console.log('📤 Enviando muestra con items_json:', muestraData);
 
         const { data: nuevaMuestra, error } = await supabase
           .from('muestras')
@@ -20862,79 +21120,33 @@ Firma repartidor: _________________
 
         if (error) {
           console.error('❌ Error completo Supabase:', error);
-          
-          // Diagnóstico detallado y específico
-          let mensaje = `❌ Error al crear muestra\n\n`;
-          mensaje += `📋 Mensaje: ${error.message || 'Sin mensaje'}\n`;
+          let mensaje = `❌ Error al crear muestra\n\n📋 ${error.message || 'Sin mensaje'}\n`;
           if (error.code) mensaje += `🔢 Código: ${error.code}\n`;
-          if (error.details) mensaje += `🔍 Detalles: ${error.details}\n`;
-          if (error.hint) mensaje += `💡 Pista: ${error.hint}\n`;
-          mensaje += `\n`;
           
-          // Sugerencias específicas según el código de error
-          if (error.code === '42P01' || error.message?.includes('does not exist')) {
-            mensaje += `🛠️ SOLUCIÓN: La tabla "muestras" no existe.\n`;
-            mensaje += `Ve a Supabase → SQL Editor y ejecuta:\n`;
-            mensaje += `• ROOTFLOW-SQL-V21-FIXES.sql\n`;
-            mensaje += `(Este SQL crea la tabla muestras si no existe)`;
-          } else if (error.code === '42703' || error.message?.includes('column')) {
-            mensaje += `🛠️ SOLUCIÓN: Falta una columna en la tabla "muestras".\n`;
-            mensaje += `Ejecuta ROOTFLOW-SQL-V21-FIXES.sql en Supabase.\n`;
-            mensaje += `Columnas necesarias: lead_id, nombre_contacto, empresa, telefono, email,\n`;
-            mensaje += `direccion, tipo_negocio, fecha_entrega, fecha_siguiente, estado, notas`;
-          } else if (error.code === '42501' || error.message?.includes('policy') || error.message?.includes('permission')) {
-            mensaje += `🛠️ SOLUCIÓN: Sin permisos (RLS).\n`;
-            mensaje += `En Supabase → Authentication → Policies, asegúrate de que "muestras" tiene política activa.\n`;
-            mensaje += `O ejecuta ROOTFLOW-SQL-V21-FIXES.sql que crea las políticas.`;
-          } else if (error.code === '23502') {
-            mensaje += `🛠️ SOLUCIÓN: Falta un valor obligatorio.\n`;
-            mensaje += `Revisa qué campo falta según el mensaje arriba.`;
-          } else if (error.code === '23503') {
-            mensaje += `🛠️ SOLUCIÓN: Hay una referencia inválida (lead_id o producto_id).\n`;
-            mensaje += `Probablemente el lead seleccionado no existe.`;
-          } else {
-            mensaje += `🛠️ SOLUCIÓN: Copia este mensaje completo y compártelo.\n`;
-            mensaje += `También revisa la consola del navegador (F12 → Console) para más detalles.`;
+          if (error.code === '42703' && error.message?.includes('items_json')) {
+            mensaje += `\n🛠️ SOLUCIÓN: Falta la columna "items_json" en la tabla muestras.\n`;
+            mensaje += `Ejecuta el SQL V52 en Supabase.`;
+          } else if (error.code === '42P01') {
+            mensaje += `\n🛠️ SOLUCIÓN: La tabla "muestras" no existe.\n`;
+            mensaje += `Ejecuta el SQL V21 + V52 en Supabase.`;
           }
-          
           alert(mensaje);
           return;
         }
-
-        console.log('✅ Muestra creada:', nuevaMuestra);
-
-        // Insertar items de muestra
-        const itemsInsert = itemsValidos.map(item => ({
-          muestra_id: nuevaMuestra.id,
-          producto_id: parseInt(item.producto_id),
-          cantidad: parseInt(item.cantidad) || 1,
-        }));
-
-        console.log('📤 Enviando items:', itemsInsert);
-
-        const { error: itemsError } = await supabase
-          .from('muestra_items')
-          .insert(itemsInsert);
-
-        if (itemsError) {
-          console.error('❌ Error items:', itemsError);
-          
-          // V51: diagnóstico mejorado
-          if (itemsError.code === '42P01' || itemsError.message?.includes('does not exist')) {
-            alert(`⚠️ MUESTRA CREADA pero NO se guardaron los productos.\n\n❌ Problema: la tabla "muestra_items" NO existe en Supabase.\n\n👉 SOLUCIÓN: ejecuta el SQL V51 (o el V15 original) en Supabase Dashboard → SQL Editor.\n\nEntra a la muestra y añade los productos cuando esté la tabla.`);
-          } else if (itemsError.code === '42501' || itemsError.message?.includes('policy')) {
-            alert(`⚠️ MUESTRA CREADA pero NO se guardaron los productos.\n\n❌ Problema: la tabla "muestra_items" existe pero tiene RLS sin permisos.\n\n👉 SOLUCIÓN: en Supabase, ejecuta:\nDROP POLICY IF EXISTS "Acceso completo muestra_items" ON muestra_items;\nCREATE POLICY "Acceso completo muestra_items" ON muestra_items FOR ALL TO authenticated, anon USING (true) WITH CHECK (true);\n\nO ejecuta el SQL V51 entero.`);
-          } else {
-            alert(`⚠️ Muestra creada pero hubo error en los productos:\n\nCódigo: ${itemsError.code || 'N/A'}\nMensaje: ${itemsError.message}\n\nLa muestra existe pero sin productos. Edítala (botón ⚠️ naranja) para añadirlos.`);
-          }
-        } else {
-          console.log('✅ Items guardados:', itemsInsert.length);
+        
+        // Compatibilidad: también guardar en muestra_items si la tabla existe (por si se usa en otro sitio)
+        try {
+          const itemsRetro = itemsJsonValido.map(it => ({ muestra_id: nuevaMuestra.id, ...it }));
+          await supabase.from('muestra_items').insert(itemsRetro);
+        } catch (e) {
+          // Si falla, no pasa nada: ya está en items_json
+          console.log('ℹ️ muestra_items no actualizada (no es crítico, usa items_json):', e.message);
         }
-
+        
         refetchMuestras();
         refetchMuestraItems();
         setShowModal(null);
-        alert('✅ Muestra programada correctamente');
+        alert(`✅ Muestra creada con ${itemsJsonValido.length} producto${itemsJsonValido.length !== 1 ? 's' : ''}`);
       } catch (error) {
         console.error('❌ Error general:', error);
         alert(`❌ Error inesperado:\n\n${error.message || String(error)}\n\nAbre la consola del navegador (F12) para más detalles.`);
@@ -21062,7 +21274,7 @@ Firma repartidor: _________________
                 ) : (
                   muestras.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(muestra => {
                     const config = estadoMuestraConfig[muestra.estado] || estadoMuestraConfig.pendiente;
-                    const items = muestraItems.filter(i => i.muestra_id === muestra.id);
+                    const items = getItemsMuestra(muestra);
                     const productosTexto = items.map(i => {
                       const prod = productos.find(p => p.id === i.producto_id);
                       return `${prod?.nombre || '?'} x${i.cantidad}`;
@@ -21102,7 +21314,7 @@ Firma repartidor: _________________
                             {/* Función reutilizable para generar el ZPL de la muestra */}
                             {(() => {
                               const generarZplDeMuestra = () => {
-                                const itemsMuestra = muestraItems.filter(i => i.muestra_id === muestra.id);
+                                const itemsMuestra = getItemsMuestra(muestra);
                                 let zplCompleto = '';
                                 
                                 if (itemsMuestra.length === 0) {
@@ -21134,7 +21346,7 @@ Firma repartidor: _________________
                                 return zplCompleto;
                               };
                               
-                              const itemsActuales = muestraItems.filter(i => i.muestra_id === muestra.id);
+                              const itemsActuales = getItemsMuestra(muestra);
                               const sinItems = itemsActuales.length === 0;
                               
                               return (
@@ -21965,7 +22177,7 @@ Firma repartidor: _________________
       {/* Modal Editar Items Muestra V50 */}
       {showModal === 'editarItemsMuestra' && editingItem && (() => {
         const muestraEdit = editingItem;
-        const itemsActuales = muestraItems.filter(i => i.muestra_id === muestraEdit.id);
+        const itemsActuales = getItemsMuestra(muestraEdit);
         
         return (
           <Modal title={`Productos de la muestra #${muestraEdit.id}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
@@ -21974,27 +22186,15 @@ Firma repartidor: _________________
               itemsActuales={itemsActuales}
               onSave={async (nuevosItems) => {
                 try {
-                  // Borrar items antiguos
-                  await supabase.from('muestra_items').delete().eq('muestra_id', muestraEdit.id);
-                  // Insertar nuevos
-                  if (nuevosItems.length > 0) {
-                    const rows = nuevosItems.filter(i => i.producto_id).map(i => ({
-                      muestra_id: muestraEdit.id,
-                      producto_id: parseInt(i.producto_id),
-                      cantidad: parseInt(i.cantidad) || 1,
-                    }));
-                    if (rows.length > 0) {
-                      const { error } = await supabase.from('muestra_items').insert(rows);
-                      if (error) throw error;
-                    }
-                  }
+                  await guardarItemsMuestra(muestraEdit.id, nuevosItems);
+                  refetchMuestras();
                   refetchMuestraItems();
                   setShowModal(null);
                   setEditingItem(null);
                   alert('✅ Productos actualizados');
                 } catch (e) {
-                  if (e.code === '42P01') {
-                    alert('❌ La tabla muestra_items no existe. Ejecuta el SQL V15 en Supabase.');
+                  if (e.code === '42703') {
+                    alert('❌ Falta la columna items_json en muestras. Ejecuta el SQL V52.');
                   } else {
                     alert('❌ Error: ' + e.message);
                   }
