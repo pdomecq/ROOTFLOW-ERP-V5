@@ -1609,6 +1609,11 @@ const MainApp = () => {
   const { data: facturasSemanalesData, refetch: refetchFacturasSemanales } = useRealtime('facturas_semanales');
   // V52 - Mandatos SEPA firmados
   const { data: mandatosSepaData, refetch: refetchMandatosSepa } = useRealtime('mandatos_sepa');
+  // V54 - Planificación de producción
+  const { data: planesProduccionData, refetch: refetchPlanesProduccion } = useRealtime('planes_produccion');
+  const { data: tareasCalendarioData, refetch: refetchTareasCalendario } = useRealtime('tareas_calendario');
+  // V56 - Slack
+  const { data: configSlackData, refetch: refetchConfigSlack } = useRealtime('config_slack');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1721,6 +1726,11 @@ const MainApp = () => {
   const facturasSemanales = facturasSemanalesData || [];
   // V52 - Mandatos SEPA
   const mandatosSepa = mandatosSepaData || [];
+  // V54 - Planificación
+  const planesProduccion = planesProduccionData || [];
+  const tareasCalendario = tareasCalendarioData || [];
+  // V56 - Slack
+  const configSlack = (configSlackData && configSlackData[0]) || null;
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -4636,6 +4646,55 @@ ${pedidoLinea ? `^FO260,244
         <p className="text-xs text-neutral-500 p-3 bg-blue-50 rounded-lg">
           <strong>💡 Gramos por bandeja:</strong> Es lo que se cosecha de UNA bandeja completa de esta variedad. Se usa para calcular cuántas bandejas necesitas plantar para cubrir un pedido (Sesión 3).
         </p>
+        
+        {/* V54: Ciclo de cultivo (para planificación) */}
+        <details className="border border-green-200 bg-green-50 rounded-xl" open>
+          <summary className="cursor-pointer p-3 font-semibold text-green-900 flex items-center gap-2">
+            🌱 Ciclo de cultivo (para planificación)
+          </summary>
+          <div className="p-4 pt-0 space-y-3 border-t border-green-200">
+            <p className="text-xs text-green-700">
+              Tiempos y rendimientos por <strong>tray</strong> (bandeja física de cultivo). Se usa para el calendario automático de siembra/cosecha.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input 
+                label="Días de germinación (oscuro)" 
+                type="number" step="1" 
+                value={form.dias_germinacion ?? 6} 
+                onChange={e => setForm({...form, dias_germinacion: parseInt(e.target.value) || 0})} 
+                placeholder="Ej: 6"
+              />
+              <Input 
+                label="Días en luz" 
+                type="number" step="1" 
+                value={form.dias_luz ?? 10} 
+                onChange={e => setForm({...form, dias_luz: parseInt(e.target.value) || 0})} 
+                placeholder="Cilantro 10, Albahaca 13"
+              />
+              <Input 
+                label="Producción g/tray (rendimiento real)" 
+                type="number" step="1" 
+                value={form.gramos_produccion_por_tray ?? 100} 
+                onChange={e => setForm({...form, gramos_produccion_por_tray: parseFloat(e.target.value) || 0})} 
+                placeholder="Cilantro 135, Albahaca 100"
+              />
+              <Input 
+                label="Semilla g/tray" 
+                type="number" step="0.5" 
+                value={form.gramos_semilla_por_bandeja ?? 0} 
+                onChange={e => setForm({...form, gramos_semilla_por_bandeja: parseFloat(e.target.value) || 0})} 
+                placeholder="Cilantro 34, Albahaca 16"
+              />
+            </div>
+            {(form.dias_germinacion > 0 && form.dias_luz > 0) && (
+              <div className="bg-white border border-green-300 rounded-lg p-2 text-center text-xs">
+                <span className="text-green-700 font-bold">Ciclo total:</span> <strong className="text-green-900">{(form.dias_germinacion || 0) + (form.dias_luz || 0)} días</strong>
+                <span className="mx-2 text-green-300">·</span>
+                <span className="text-green-700">{form.dias_germinacion}d germinación + {form.dias_luz}d luz</span>
+              </div>
+            )}
+          </div>
+        </details>
         
         {/* V48: Ficha técnica de coste */}
         <details className="border border-amber-200 bg-amber-50 rounded-xl">
@@ -12058,6 +12117,553 @@ ${logoRootflow}^FS
 ^XZ`;
     };
 
+  // V54: Vista de planificación de producción
+  const renderPlanificacion = () => {
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const hoyIso = hoy.toISOString().slice(0,10);
+    
+    // Tareas filtradas
+    const tareasHoy = tareasCalendario.filter(t => t.fecha === hoyIso && t.estado === 'pendiente');
+    const tareasPasadas = tareasCalendario.filter(t => t.fecha < hoyIso && t.estado === 'pendiente');
+    
+    // Configuración por tipo
+    const tipoCfg = {
+      sembrar:    { emoji: '🌱', label: 'Sembrar',     color: '#22C55E', bgClass: 'bg-green-100 text-green-700' },
+      pasar_luz:  { emoji: '☀️', label: 'Pasar a luz', color: '#EAB308', bgClass: 'bg-yellow-100 text-yellow-700' },
+      cosechar:   { emoji: '✂️', label: 'Cosechar',    color: '#F97316', bgClass: 'bg-orange-100 text-orange-700' },
+      entregar:   { emoji: '🚚', label: 'Entregar',    color: '#3B82F6', bgClass: 'bg-blue-100 text-blue-700' },
+    };
+    
+    const completarTarea = async (tarea, nuevoEstado = 'hecho') => {
+      // Si se marca como omitida/pendiente, no tocar lotes
+      if (nuevoEstado !== 'hecho') {
+        try {
+          await supabase.from('tareas_calendario').update({ 
+            estado: nuevoEstado, 
+            fecha_completado: null 
+          }).eq('id', tarea.id);
+          refetchTareasCalendario();
+        } catch (e) { alert('Error: ' + e.message); }
+        return;
+      }
+      
+      try {
+        const variedadT = variedades.find(v => v.id === tarea.variedad_id);
+        if (!variedadT) {
+          alert('❌ No se encuentra la variedad de esta tarea');
+          return;
+        }
+        
+        let loteId = tarea.lote_id;
+        
+        // === SEMBRAR: crear el lote ===
+        if (tarea.tipo === 'sembrar' && !loteId) {
+          // Calcular cosecha prevista: fecha_entrega_origen
+          const fechaCosecha = tarea.fecha_entrega_origen || (() => {
+            const f = new Date(tarea.fecha);
+            const diasGerm = variedadT.dias_germinacion || 6;
+            const diasLuz = variedadT.dias_luz || 10;
+            f.setDate(f.getDate() + diasGerm + diasLuz);
+            return f.toISOString().slice(0,10);
+          })();
+          
+          // Código auto: VARIEDAD-YYYYMMDD-NN
+          const fechaSiembraISO = new Date().toISOString().slice(0,10);
+          const codigo = `${(variedadT.nombre || 'LOTE').substring(0,3).toUpperCase()}-${fechaSiembraISO.replace(/-/g,'')}-${tarea.id}`;
+          
+          const loteData = {
+            variedad_id: tarea.variedad_id,
+            fecha_siembra: fechaSiembraISO,
+            fecha_cosecha_prevista: fechaCosecha,
+            bandejas: tarea.trays,
+            estado: 'sembrado',
+            fase: 'germinacion',
+            codigo,
+            notas: `Auto-creado desde plan #${tarea.plan_id} · Entrega prevista ${fechaCosecha}`,
+          };
+          
+          const { data: nuevoLote, error: errL } = await supabase.from('lotes').insert(loteData).select().single();
+          if (errL) {
+            if (errL.code === '42703') {
+              // Reintento sin el campo 'fase' (por si la columna no existe)
+              delete loteData.fase;
+              const { data: nuevoLote2, error: errL2 } = await supabase.from('lotes').insert(loteData).select().single();
+              if (errL2) throw errL2;
+              loteId = nuevoLote2.id;
+            } else throw errL;
+          } else {
+            loteId = nuevoLote.id;
+          }
+          
+          refetchLotes();
+        }
+        
+        // === PASAR A LUZ: mover lote de germinación a crecimiento ===
+        if (tarea.tipo === 'pasar_luz') {
+          // Si no hay lote_id directo, buscarlo por la tarea de siembra previa del mismo plan+entrega
+          if (!loteId) {
+            const tareaSiembra = tareasCalendario.find(t => 
+              t.plan_id === tarea.plan_id && 
+              t.fecha_entrega_origen === tarea.fecha_entrega_origen && 
+              t.tipo === 'sembrar'
+            );
+            if (tareaSiembra?.lote_id) {
+              loteId = tareaSiembra.lote_id;
+            }
+          }
+          
+          if (loteId) {
+            try {
+              await supabase.from('lotes').update({ fase: 'crecimiento' }).eq('id', loteId);
+              refetchLotes();
+            } catch (e) {
+              if (e.code !== '42703') console.warn('No se pudo actualizar fase:', e);
+            }
+          }
+        }
+        
+        // === COSECHAR: marcar lote como cosechado + entrada al granel ===
+        if (tarea.tipo === 'cosechar') {
+          // Buscar lote
+          if (!loteId) {
+            const tareaSiembra = tareasCalendario.find(t => 
+              t.plan_id === tarea.plan_id && 
+              t.fecha_entrega_origen === tarea.fecha_entrega_origen && 
+              t.tipo === 'sembrar'
+            );
+            if (tareaSiembra?.lote_id) loteId = tareaSiembra.lote_id;
+          }
+          
+          if (loteId) {
+            const fechaCosechaISO = new Date().toISOString().slice(0,10);
+            try {
+              await supabase.from('lotes').update({ 
+                fase: 'granel',
+                estado: 'cosechado',
+                fecha_cosecha_real: fechaCosechaISO 
+              }).eq('id', loteId);
+            } catch (e) {
+              // Fallback sin 'fase'
+              try {
+                await supabase.from('lotes').update({ 
+                  estado: 'cosechado',
+                  fecha_cosecha_real: fechaCosechaISO 
+                }).eq('id', loteId);
+              } catch (e2) { console.warn(e2); }
+            }
+            
+            // Crear entrada de cosecha en stock (granel)
+            // Buscar producto granel asociado a la variedad
+            const productoGranel = productos.find(p => 
+              p.variedad_id === tarea.variedad_id && 
+              p.estado_inventario === 'listo_sin_empaquetar'
+            );
+            
+            if (productoGranel) {
+              const gramosCosechados = tarea.trays * (variedadT.gramos_produccion_por_tray || 100);
+              try {
+                // Sumar al granel
+                const gramosNuevos = (productoGranel.gramos_disponibles || productoGranel.stock || 0) + gramosCosechados;
+                await supabase.from('productos').update({ 
+                  gramos_disponibles: gramosNuevos,
+                  stock: gramosNuevos
+                }).eq('id', productoGranel.id);
+                
+                // Movimiento de cosecha
+                await supabase.from('movimientos_stock').insert({
+                  producto_id: productoGranel.id,
+                  tipo: 'entrada_cosecha',
+                  cantidad: gramosCosechados,
+                  lote_id: loteId,
+                  notas: `Cosecha de ${tarea.trays} trays · Plan #${tarea.plan_id}`,
+                });
+                
+                refetchProductos();
+                refetchMovimientosStock();
+              } catch (e) {
+                console.warn('No se pudo registrar entrada de cosecha:', e);
+              }
+            } else {
+              console.warn('No hay producto granel para esta variedad. Crea uno antes para que la cosecha se registre en stock.');
+            }
+            
+            refetchLotes();
+          }
+        }
+        
+        // Actualizar la tarea con estado hecho + lote_id (si se creó uno)
+        await supabase.from('tareas_calendario').update({ 
+          estado: 'hecho', 
+          fecha_completado: new Date().toISOString(),
+          lote_id: loteId || tarea.lote_id || null
+        }).eq('id', tarea.id);
+        
+        // Si era una siembra, propagar el lote_id a las tareas hermanas (pasar_luz y cosechar de la misma entrega)
+        if (tarea.tipo === 'sembrar' && loteId) {
+          await supabase.from('tareas_calendario')
+            .update({ lote_id: loteId })
+            .eq('plan_id', tarea.plan_id)
+            .eq('fecha_entrega_origen', tarea.fecha_entrega_origen)
+            .neq('id', tarea.id);
+        }
+        
+        refetchTareasCalendario();
+        
+        // V56: Notificar a Slack si está habilitado
+        if (configSlack && configSlack.activo && configSlack.notificar_al_completar_tarea) {
+          const tipoEmoji = { sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚' };
+          const tipoLabel = { sembrar: 'Sembrado', pasar_luz: 'Pasado a luz', cosechar: 'Cosechado', entregar: 'Entregado' };
+          let msg = `${tipoEmoji[tarea.tipo] || '✅'} *${tipoLabel[tarea.tipo] || 'Tarea completada'}*: ${tarea.trays} trays ${variedadT.nombre}`;
+          if (tarea.tipo === 'sembrar' && loteId) {
+            const loteCreado = lotes.find(l => l.id === loteId);
+            msg += `\n_Lote creado: ${loteCreado?.codigo || `#${loteId}`}_`;
+          }
+          if (tarea.tipo === 'cosechar') {
+            const g = tarea.trays * (variedadT.gramos_produccion_por_tray || 100);
+            msg += `\n_+${g}g añadidos al granel_`;
+          }
+          enviarASlack(msg, 'tarea_completada');
+        }
+        
+        // Mensaje de éxito según tipo
+        const mensajes = {
+          sembrar: `✅ Lote creado en germinación (${tarea.trays} trays)`,
+          pasar_luz: `✅ Lote movido a fase de crecimiento`,
+          cosechar: `✅ Cosecha registrada (${tarea.trays} trays → granel)`,
+        };
+        // Sin alert para no interrumpir flujo, pero log claro
+        console.log(mensajes[tarea.tipo] || '✅ Tarea completada');
+      } catch (e) {
+        console.error(e);
+        alert('❌ Error al completar tarea: ' + (e.message || String(e)));
+      }
+    };
+    
+    // Generar próximas 14 semanas de calendario (vista mensual)
+    const [semanasAdelante, setSemanasAdelante] = [4, () => {}]; // por ahora fijo, 4 semanas
+    const fechasVista = [];
+    for (let i = 0; i < semanasAdelante * 7; i++) {
+      const d = new Date(hoy);
+      d.setDate(hoy.getDate() + i);
+      fechasVista.push(d);
+    }
+    
+    // Agrupar tareas por fecha
+    const tareasPorFecha = {};
+    fechasVista.forEach(d => {
+      const iso = d.toISOString().slice(0,10);
+      tareasPorFecha[iso] = tareasCalendario.filter(t => t.fecha === iso);
+    });
+    
+    // Resumen mensual de semilla
+    const finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const tareasMes = tareasCalendario.filter(t => {
+      const f = new Date(t.fecha);
+      return f >= inicioMes && f <= finMes && t.tipo === 'sembrar';
+    });
+    const semillaPorVariedad = {};
+    tareasMes.forEach(t => {
+      const v = variedades.find(vv => vv.id === t.variedad_id);
+      const nombre = v?.nombre || 'Sin variedad';
+      semillaPorVariedad[nombre] = (semillaPorVariedad[nombre] || 0) + (parseFloat(t.semilla_g) || 0);
+    });
+    
+    return (
+      <div className="space-y-4 max-w-screen-2xl mx-auto px-2 sm:px-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">📅 Planificación de producción</h1>
+            <p className="text-xs text-neutral-500 mt-1">Calendario automático de siembras, traslados y cosechas</p>
+          </div>
+          <div className="flex gap-2">
+            {configSlack && configSlack.webhook_url && configSlack.activo && (
+              <Button 
+                variant="secondary" 
+                onClick={async () => {
+                  const msg = generarResumenDiario();
+                  const r = await enviarASlack(msg, 'manual');
+                  if (r.ok) {
+                    alert('📲 Resumen enviado a Slack');
+                  } else {
+                    alert('❌ Error: ' + r.error);
+                  }
+                }}
+                title="Enviar resumen del día a Slack"
+              >
+                📲 Enviar a Slack
+              </Button>
+            )}
+            <Button onClick={() => { setEditingItem(null); setShowModal('planProduccion'); }}>
+              <Plus size={16} /> Nuevo plan
+            </Button>
+          </div>
+        </div>
+        
+        {/* V54 Fase 2: Avisos preflight */}
+        {(() => {
+          const variedadesActivasIds = [...new Set(planesProduccion.filter(p => p.activo).map(p => p.variedad_id))];
+          const variedadesSinCiclo = variedadesActivasIds
+            .map(id => variedades.find(v => v.id === id))
+            .filter(v => v && (!v.dias_germinacion || !v.dias_luz || !v.gramos_produccion_por_tray));
+          const variedadesSinGranel = variedadesActivasIds
+            .map(id => variedades.find(v => v.id === id))
+            .filter(v => v && !productos.some(p => p.variedad_id === v.id && p.estado_inventario === 'listo_sin_empaquetar'));
+          
+          if (variedadesSinCiclo.length === 0 && variedadesSinGranel.length === 0) return null;
+          
+          return (
+            <Card className="p-4 bg-amber-50 border-2 border-amber-300">
+              <div className="flex items-start gap-2 mb-2">
+                <AlertTriangle size={20} className="text-amber-600 flex-shrink-0" />
+                <div>
+                  <h3 className="font-bold text-amber-900">Avisos de configuración</h3>
+                  <p className="text-xs text-amber-700">Estos detalles pueden hacer que el calendario o la integración con lotes no funcione bien.</p>
+                </div>
+              </div>
+              <div className="space-y-2 text-sm">
+                {variedadesSinCiclo.length > 0 && (
+                  <div className="bg-white border border-amber-200 rounded-lg p-2">
+                    <p className="font-semibold text-amber-900">⚠️ Variedades sin ciclo configurado:</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {variedadesSinCiclo.map(v => v.nombre).join(', ')} — edita cada una y completa "🌱 Ciclo de cultivo".
+                    </p>
+                  </div>
+                )}
+                {variedadesSinGranel.length > 0 && (
+                  <div className="bg-white border border-amber-200 rounded-lg p-2">
+                    <p className="font-semibold text-amber-900">⚠️ Variedades sin producto granel:</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {variedadesSinGranel.map(v => v.nombre).join(', ')} — sin un producto "listo_sin_empaquetar" para esta variedad, las cosechas no entrarán al stock automáticamente. Crea un producto granel desde Productos → "Nuevo".
+                    </p>
+                  </div>
+                )}
+              </div>
+            </Card>
+          );
+        })()}
+        
+        {/* HOY TOCA */}
+        <Card className="p-5 bg-gradient-to-br from-orange-50 to-amber-50 border-2 border-orange-300">
+          <div className="flex items-start gap-3 mb-3">
+            <div className="text-3xl">📋</div>
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-orange-900">HOY · {hoy.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</h2>
+              <p className="text-xs text-orange-700">{tareasHoy.length} tarea(s) pendiente(s){tareasPasadas.length > 0 ? ` · ${tareasPasadas.length} atrasada(s)` : ''}</p>
+            </div>
+          </div>
+          
+          {tareasHoy.length === 0 && tareasPasadas.length === 0 ? (
+            <p className="text-center py-4 text-neutral-500">✓ Sin tareas pendientes para hoy</p>
+          ) : (
+            <div className="space-y-2">
+              {[...tareasPasadas, ...tareasHoy].map(t => {
+                const cfg = tipoCfg[t.tipo] || tipoCfg.sembrar;
+                const v = variedades.find(vv => vv.id === t.variedad_id);
+                const c = t.cliente_id ? clientes.find(cc => cc.id === t.cliente_id) : null;
+                const atrasada = t.fecha < hoyIso;
+                return (
+                  <div key={t.id} className={`bg-white rounded-xl p-3 border-2 flex items-center gap-3 ${atrasada ? 'border-red-300' : 'border-orange-200'}`}>
+                    <div className="text-2xl flex-shrink-0">{cfg.emoji}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-neutral-900">{cfg.label}</span>
+                        <Badge className={cfg.bgClass}>{t.trays} trays</Badge>
+                        {t.tipo === 'sembrar' && t.semilla_g > 0 && <Badge className="bg-amber-100 text-amber-700">{parseFloat(t.semilla_g).toFixed(0)}g semilla</Badge>}
+                        {t.tipo === 'cosechar' && t.bandejas_venta > 0 && <Badge className="bg-purple-100 text-purple-700">→ {t.bandejas_venta} cajitas</Badge>}
+                        {atrasada && <Badge className="bg-red-100 text-red-700">⏰ Atrasada {formatDate(t.fecha)}</Badge>}
+                        {t.lote_id && (() => {
+                          const lote = lotes.find(l => l.id === t.lote_id);
+                          return lote ? (
+                            <Badge className="bg-indigo-100 text-indigo-700" title={`Lote ${lote.codigo}`}>
+                              🏷️ {lote.codigo}
+                            </Badge>
+                          ) : null;
+                        })()}
+                      </div>
+                      <p className="text-xs text-neutral-500 mt-0.5">
+                        {v?.nombre || 'Sin variedad'}
+                        {c && ` · ${c.nombre}`}
+                        {t.fecha_entrega_origen && ` · entrega ${formatDate(t.fecha_entrega_origen)}`}
+                      </p>
+                    </div>
+                    <Button size="sm" onClick={() => completarTarea(t, 'hecho')} className="bg-green-600 hover:bg-green-700 flex-shrink-0">
+                      <CheckCircle size={14}/> Hecho
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+        
+        {/* CALENDARIO 4 SEMANAS */}
+        <Card className="p-4">
+          <h3 className="text-lg font-bold text-neutral-900 mb-3">🗓️ Calendario próximas {semanasAdelante} semanas</h3>
+          
+          <div className="overflow-x-auto">
+            <div className="min-w-[800px]">
+              {/* Cabecera días */}
+              <div className="grid grid-cols-7 gap-1 mb-1">
+                {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => (
+                  <div key={d} className="text-center text-xs font-bold text-neutral-600 py-1">{d}</div>
+                ))}
+              </div>
+              
+              {/* Semanas */}
+              {Array.from({ length: semanasAdelante }).map((_, semIdx) => {
+                // Alinear al lunes
+                const inicioSem = new Date(hoy);
+                const diaSem = (hoy.getDay() + 6) % 7; // Lunes=0
+                inicioSem.setDate(hoy.getDate() - diaSem + (semIdx * 7));
+                const dias = Array.from({ length: 7 }).map((_, i) => {
+                  const d = new Date(inicioSem); d.setDate(inicioSem.getDate() + i);
+                  return d;
+                });
+                
+                return (
+                  <div key={semIdx} className="grid grid-cols-7 gap-1 mb-1">
+                    {dias.map(d => {
+                      const iso = d.toISOString().slice(0,10);
+                      const tareasDia = tareasPorFecha[iso] || [];
+                      const esHoy = iso === hoyIso;
+                      const esPasado = d < hoy;
+                      const enRangoVista = d >= hoy;
+                      
+                      return (
+                        <div 
+                          key={iso} 
+                          className={`rounded-lg p-1.5 min-h-[70px] border ${
+                            esHoy ? 'bg-orange-50 border-orange-400 border-2' : 
+                            esPasado ? 'bg-neutral-100 border-neutral-200 opacity-60' :
+                            'bg-white border-neutral-200'
+                          }`}
+                        >
+                          <div className="text-[10px] font-bold text-neutral-500 mb-1">
+                            {d.getDate()}/{d.getMonth() + 1}
+                          </div>
+                          <div className="space-y-0.5">
+                            {tareasDia.slice(0, 4).map(t => {
+                              const cfg = tipoCfg[t.tipo] || tipoCfg.sembrar;
+                              const v = variedades.find(vv => vv.id === t.variedad_id);
+                              const hecho = t.estado === 'hecho';
+                              return (
+                                <div 
+                                  key={t.id} 
+                                  className={`text-[10px] px-1 py-0.5 rounded ${hecho ? 'opacity-40 line-through' : ''}`}
+                                  style={{ backgroundColor: cfg.color + '20', color: cfg.color, borderLeft: `2px solid ${cfg.color}` }}
+                                  title={`${cfg.label}: ${t.trays} trays ${v?.nombre || ''}`}
+                                >
+                                  {cfg.emoji} {t.trays}t {v?.nombre?.substring(0,6) || ''}
+                                </div>
+                              );
+                            })}
+                            {tareasDia.length > 4 && <p className="text-[9px] text-neutral-500">+{tareasDia.length - 4} más</p>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          {/* Leyenda */}
+          <div className="flex gap-3 mt-3 flex-wrap text-xs">
+            {Object.entries(tipoCfg).map(([k, c]) => (
+              <div key={k} className="flex items-center gap-1">
+                <div className="w-3 h-3 rounded" style={{ backgroundColor: c.color }}></div>
+                <span>{c.emoji} {c.label}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+        
+        {/* RESUMEN MENSUAL DE SEMILLA */}
+        {Object.keys(semillaPorVariedad).length > 0 && (
+          <Card className="p-4">
+            <h3 className="text-lg font-bold text-neutral-900 mb-2">🌱 Semilla a usar este mes</h3>
+            <p className="text-xs text-neutral-500 mb-3">
+              Calculado a partir de las siembras planificadas en {hoy.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+            </p>
+            <div className="space-y-1.5">
+              {Object.entries(semillaPorVariedad).sort((a,b) => b[1] - a[1]).map(([nombre, gramos]) => (
+                <div key={nombre} className="flex items-center justify-between p-2 bg-green-50 rounded-lg">
+                  <span className="font-medium text-green-900">{nombre}</span>
+                  <span className="font-bold text-green-700">{(gramos/1000).toFixed(3)} kg <span className="text-xs font-normal">({gramos.toFixed(0)}g)</span></span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between p-2 bg-green-100 rounded-lg border-2 border-green-300 mt-2">
+                <span className="font-bold text-green-900">TOTAL</span>
+                <span className="font-black text-green-900 text-lg">
+                  {(Object.values(semillaPorVariedad).reduce((s,g) => s+g, 0)/1000).toFixed(3)} kg
+                </span>
+              </div>
+            </div>
+          </Card>
+        )}
+        
+        {/* PLANES ACTIVOS */}
+        <Card className="p-4">
+          <h3 className="text-lg font-bold text-neutral-900 mb-3">🔄 Planes de producción</h3>
+          
+          {planesProduccion.length === 0 ? (
+            <div className="text-center py-8 text-neutral-400">
+              <p className="text-4xl mb-2">📋</p>
+              <p>No hay planes definidos todavía.</p>
+              <p className="text-xs mt-1">Crea un plan para empezar a planificar producción automáticamente.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {planesProduccion.map(plan => {
+                const v = variedades.find(vv => vv.id === plan.variedad_id);
+                const c = plan.cliente_id ? clientes.find(cc => cc.id === plan.cliente_id) : null;
+                const tareasDePlan = tareasCalendario.filter(t => t.plan_id === plan.id);
+                const tareasFuturas = tareasDePlan.filter(t => t.fecha >= hoyIso).length;
+                
+                return (
+                  <div key={plan.id} className={`p-3 rounded-xl border ${plan.activo ? 'bg-white border-neutral-200' : 'bg-neutral-50 border-neutral-200 opacity-60'}`}>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold">{plan.nombre || `${v?.nombre || 'Variedad'}${c ? ` · ${c.nombre}` : ''}`}</span>
+                          {!plan.activo && <Badge className="bg-neutral-200 text-neutral-600">Inactivo</Badge>}
+                          {plan.activo && <Badge className="bg-green-100 text-green-700">Activo</Badge>}
+                        </div>
+                        <p className="text-xs text-neutral-500 mt-0.5">
+                          {plan.bandejas_venta_semanales} cajitas/sem × {plan.peso_bandeja_venta_g}g · merma {plan.merma_pct}% · entrega {(Array.isArray(plan.dias_entrega) ? plan.dias_entrega : (typeof plan.dias_entrega === 'string' ? (JSON.parse(plan.dias_entrega || '[]')) : [])).join(', ')}
+                        </p>
+                        <p className="text-[10px] text-neutral-400">{tareasFuturas} tareas planificadas</p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="secondary" onClick={() => generarYGuardarTareas(plan, 8)} title="Generar 8 semanas de tareas">
+                          <Calendar size={14}/> Generar 8 sem.
+                        </Button>
+                        <button onClick={() => { setEditingItem(plan); setShowModal('planProduccion'); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Editar">
+                          <Edit2 size={14}/>
+                        </button>
+                        <button onClick={async () => {
+                          if (window.confirm(`¿Eliminar el plan "${plan.nombre || v?.nombre}" y todas sus tareas?`)) {
+                            await supabase.from('planes_produccion').delete().eq('id', plan.id);
+                            refetchPlanesProduccion();
+                            refetchTareasCalendario();
+                          }
+                        }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar">
+                          <Trash2 size={14}/>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  };
+
   const renderProduccion = () => {
     // Aplicar filtros de columna
     const lotesFiltrados = aplicarFiltros(lotes, filtrosLotes, {
@@ -17462,51 +18068,627 @@ Firma repartidor: _________________
     );
   };
 
-  // V52: Generador de mandato SEPA B2B en HTML imprimible (abre nueva pestaña)
+  // V54: Algoritmo generador de tareas a partir de un plan
+  // Genera N semanas de tareas (sembrar, pasar_luz, cosechar) basándose en el patrón del PDF
+  const generarTareasDelPlan = (plan, semanas = 8, fechaInicioRef = null) => {
+    if (!plan || !plan.activo) return [];
+    const variedad = variedades.find(v => v.id === plan.variedad_id);
+    if (!variedad) return [];
+    
+    // Resolver parámetros (override del plan o de la variedad)
+    const diasGerm = plan.dias_germinacion_override || variedad.dias_germinacion || 6;
+    const diasLuz = plan.dias_luz_override || variedad.dias_luz || 10;
+    const prodPorTray = plan.produccion_tray_override || variedad.gramos_produccion_por_tray || 100;
+    const semillaPorTray = plan.semilla_tray_override || variedad.gramos_semilla_por_bandeja || 10;
+    const pesoBandejaVenta = plan.peso_bandeja_venta_g || 30;
+    const mermaPct = plan.merma_pct || 10;
+    
+    // Días de entrega ('lunes', 'martes', etc.)
+    const diasMap = { 'domingo': 0, 'lunes': 1, 'martes': 2, 'miercoles': 3, 'miércoles': 3, 'jueves': 4, 'viernes': 5, 'sabado': 6, 'sábado': 6 };
+    let diasEntregaArr = plan.dias_entrega;
+    if (typeof diasEntregaArr === 'string') {
+      try { diasEntregaArr = JSON.parse(diasEntregaArr); } catch { diasEntregaArr = ['lunes', 'jueves']; }
+    }
+    if (!Array.isArray(diasEntregaArr) || diasEntregaArr.length === 0) diasEntregaArr = ['lunes', 'jueves'];
+    const diasEntregaNums = diasEntregaArr.map(d => diasMap[d.toLowerCase()]).filter(n => n !== undefined).sort((a,b)=>a-b);
+    if (diasEntregaNums.length === 0) return [];
+    
+    const numEntregasSemana = diasEntregaNums.length;
+    const bandejasVentaTotal = plan.bandejas_venta_semanales || 0;
+    
+    // Cálculo de trays por entrega
+    const bandejasPorEntrega = bandejasVentaTotal / numEntregasSemana;
+    const gramosPorEntrega = bandejasPorEntrega * pesoBandejaVenta;
+    const traysBase = gramosPorEntrega / prodPorTray;
+    const traysConMerma = Math.ceil(traysBase * (1 + mermaPct / 100));
+    const semillaPorEntregaG = traysConMerma * semillaPorTray;
+    
+    // Fecha de inicio: ahora o la fecha pasada
+    const inicio = fechaInicioRef ? new Date(fechaInicioRef) : new Date(plan.fecha_inicio || new Date());
+    inicio.setHours(0,0,0,0);
+    
+    const tareas = [];
+    // Para cada semana, para cada día de entrega, calcular las 3 tareas
+    for (let semana = 0; semana < semanas; semana++) {
+      for (const diaEntregaNum of diasEntregaNums) {
+        // Calcular fecha de entrega: primer día_entrega_num en la semana 'semana'
+        const fechaEntrega = new Date(inicio);
+        const diasHastaEntrega = ((diaEntregaNum - inicio.getDay() + 7) % 7) + (semana * 7);
+        fechaEntrega.setDate(inicio.getDate() + diasHastaEntrega);
+        
+        // Validar que esté dentro del rango del plan
+        if (plan.fecha_fin && fechaEntrega > new Date(plan.fecha_fin)) continue;
+        
+        const fechaPasarLuz = new Date(fechaEntrega);
+        fechaPasarLuz.setDate(fechaEntrega.getDate() - diasLuz);
+        
+        const fechaSiembra = new Date(fechaPasarLuz);
+        fechaSiembra.setDate(fechaPasarLuz.getDate() - diasGerm);
+        
+        const fmtFecha = (d) => d.toISOString().slice(0, 10);
+        const fechaEntregaIso = fmtFecha(fechaEntrega);
+        
+        tareas.push({
+          plan_id: plan.id,
+          fecha: fmtFecha(fechaSiembra),
+          tipo: 'sembrar',
+          variedad_id: plan.variedad_id,
+          cliente_id: plan.cliente_id,
+          trays: traysConMerma,
+          semilla_g: semillaPorEntregaG,
+          fecha_entrega_origen: fechaEntregaIso,
+          estado: 'pendiente',
+        });
+        tareas.push({
+          plan_id: plan.id,
+          fecha: fmtFecha(fechaPasarLuz),
+          tipo: 'pasar_luz',
+          variedad_id: plan.variedad_id,
+          cliente_id: plan.cliente_id,
+          trays: traysConMerma,
+          semilla_g: 0,
+          fecha_entrega_origen: fechaEntregaIso,
+          estado: 'pendiente',
+        });
+        tareas.push({
+          plan_id: plan.id,
+          fecha: fechaEntregaIso,
+          tipo: 'cosechar',
+          variedad_id: plan.variedad_id,
+          cliente_id: plan.cliente_id,
+          trays: traysConMerma,
+          semilla_g: 0,
+          bandejas_venta: Math.round(bandejasPorEntrega),
+          fecha_entrega_origen: fechaEntregaIso,
+          estado: 'pendiente',
+        });
+      }
+    }
+    return tareas;
+  };
+
+  // V54: Generar y guardar tareas en BD para un plan (upsert por (plan_id, fecha, tipo, fecha_entrega_origen))
+  const generarYGuardarTareas = async (plan, semanas = 8) => {
+    const tareas = generarTareasDelPlan(plan, semanas);
+    if (tareas.length === 0) {
+      alert('⚠️ No se han generado tareas. Revisa que el plan esté activo y la variedad tenga datos de ciclo.');
+      return;
+    }
+    try {
+      const { error } = await supabase.from('tareas_calendario').upsert(tareas, {
+        onConflict: 'plan_id,fecha,tipo,fecha_entrega_origen',
+        ignoreDuplicates: false,
+      });
+      if (error) throw error;
+      refetchTareasCalendario();
+      alert(`✅ Generadas ${tareas.length} tareas (${semanas} semanas de planificación).`);
+    } catch (e) {
+      if (e.code === '42P01') {
+        alert('❌ Falta ejecutar el SQL V54 en Supabase (tabla tareas_calendario no existe).');
+      } else {
+        alert('❌ Error al guardar tareas: ' + e.message);
+      }
+    }
+  };
+
+  // V54: PlanProduccionForm
+  // V56: Editor de configuración Slack
+  const ConfigSlackEditor = ({ config, onSave, onTest, onProbarResumen }) => {
+    const initialForm = config || {
+      webhook_url: '',
+      canal: '',
+      activo: false,
+      enviar_resumen_diario: true,
+      hora_resumen: '08:00',
+      notificar_al_completar_tarea: false,
+      notificar_al_crear_lote: false,
+      notificar_al_empaquetar: false,
+      nombre_bot: 'RootFlow ERP',
+      emoji_bot: ':seedling:',
+      notas: '',
+    };
+    const [form, setForm] = useState(initialForm);
+    
+    return (
+      <div className="space-y-4">
+        {!config?.id && (
+          <details className="border border-blue-200 bg-blue-50 rounded-xl">
+            <summary className="cursor-pointer p-3 font-semibold text-blue-900">📖 Cómo configurar Slack (primera vez)</summary>
+            <div className="p-4 pt-0 text-xs text-blue-800 space-y-2 border-t border-blue-200">
+              <p><strong>1.</strong> Ve a <a href="https://api.slack.com/apps" target="_blank" rel="noopener" className="underline">https://api.slack.com/apps</a> e inicia sesión con tu workspace de Rootflow.</p>
+              <p><strong>2.</strong> Click "Create New App" → "From scratch" → ponle nombre "RootFlow ERP" y elige el workspace.</p>
+              <p><strong>3.</strong> En el menú izquierdo, ve a "Incoming Webhooks" → activa el toggle "Activate Incoming Webhooks".</p>
+              <p><strong>4.</strong> Abajo, click "Add New Webhook to Workspace" → elige el canal (ej. <code>#produccion</code> o tu DM) → Permitir.</p>
+              <p><strong>5.</strong> Copia la URL que aparece (empieza por <code>https://hooks.slack.com/services/...</code>) y pégala aquí abajo.</p>
+              <p><strong>6.</strong> Pulsa "Test" para verificar que llega el mensaje a tu Slack.</p>
+              <p className="text-amber-700 mt-2">💡 <strong>Tip</strong>: instala la app de Slack en el móvil y activa las notificaciones para ese canal. Así te suena cuando lleguen.</p>
+            </div>
+          </details>
+        )}
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Webhook URL de Slack *</label>
+          <input
+            type="text"
+            value={form.webhook_url || ''}
+            onChange={e => setForm({...form, webhook_url: e.target.value})}
+            placeholder="https://hooks.slack.com/services/TXX/BXX/XXXXX"
+            className="w-full px-3 py-2 rounded-lg border border-neutral-300 font-mono text-xs"
+          />
+          <p className="text-[10px] text-neutral-500 mt-1">Esta URL es secreta — guárdala como una contraseña.</p>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Canal (informativo)" value={form.canal || ''} onChange={e => setForm({...form, canal: e.target.value})} placeholder="#produccion" />
+          <Input label="Nombre del bot" value={form.nombre_bot || ''} onChange={e => setForm({...form, nombre_bot: e.target.value})} placeholder="RootFlow ERP" />
+        </div>
+        
+        <label className="flex items-center gap-2 p-3 bg-neutral-50 rounded-xl">
+          <input type="checkbox" checked={form.activo || false} onChange={e => setForm({...form, activo: e.target.checked})} />
+          <div>
+            <p className="font-semibold text-sm">Activo</p>
+            <p className="text-xs text-neutral-500">Si está desactivado no se envían notificaciones aunque haya webhook</p>
+          </div>
+        </label>
+        
+        <div className="space-y-2">
+          <p className="text-sm font-bold text-neutral-700">¿Cuándo enviar avisos?</p>
+          
+          <label className="flex items-start gap-2 p-3 bg-blue-50 rounded-xl cursor-pointer">
+            <input type="checkbox" checked={form.enviar_resumen_diario !== false} onChange={e => setForm({...form, enviar_resumen_diario: e.target.checked})} className="mt-1" />
+            <div className="flex-1">
+              <p className="font-semibold text-sm">☀️ Resumen diario</p>
+              <p className="text-xs text-neutral-600">Cada mañana, lista completa de tareas de hoy + atrasadas + mañana.</p>
+              {form.enviar_resumen_diario !== false && (
+                <div className="mt-2 flex items-center gap-2">
+                  <label className="text-xs">Hora:</label>
+                  <input type="time" value={(form.hora_resumen || '08:00').substring(0,5)} onChange={e => setForm({...form, hora_resumen: e.target.value + ':00'})} className="text-xs px-2 py-1 rounded border" />
+                  <span className="text-[10px] text-amber-700">⚠ Requiere configurar pg_cron en Supabase</span>
+                </div>
+              )}
+            </div>
+          </label>
+          
+          <label className="flex items-start gap-2 p-3 bg-green-50 rounded-xl cursor-pointer">
+            <input type="checkbox" checked={form.notificar_al_completar_tarea || false} onChange={e => setForm({...form, notificar_al_completar_tarea: e.target.checked})} className="mt-1" />
+            <div>
+              <p className="font-semibold text-sm">✓ Al marcar tarea como hecha</p>
+              <p className="text-xs text-neutral-600">Aviso instantáneo cuando alguien marca una siembra/cosecha/etc.</p>
+            </div>
+          </label>
+        </div>
+        
+        <div className="flex flex-wrap gap-2 pt-3 border-t">
+          <Button onClick={() => onSave(form)}>💾 Guardar configuración</Button>
+          {form.webhook_url && (
+            <Button variant="secondary" onClick={() => onTest(form.webhook_url)}>
+              🧪 Test (mensaje simple)
+            </Button>
+          )}
+          {config?.activo && config?.webhook_url && (
+            <Button variant="secondary" onClick={onProbarResumen}>
+              📲 Enviar resumen del día
+            </Button>
+          )}
+        </div>
+        
+        {/* Instrucciones cron diario */}
+        {form.enviar_resumen_diario && form.activo && form.webhook_url && (
+          <details className="border border-amber-200 bg-amber-50 rounded-xl">
+            <summary className="cursor-pointer p-3 font-semibold text-amber-900">⏰ Configurar resumen diario automático (pg_cron)</summary>
+            <div className="p-4 pt-0 text-xs text-amber-800 space-y-2 border-t border-amber-200">
+              <p>Para que el resumen llegue solo cada día a las {(form.hora_resumen || '08:00').substring(0,5)} sin que tengas que pulsar nada, hay que configurar un cron job en Supabase. <strong>Solo se hace una vez:</strong></p>
+              <p><strong>1.</strong> En Supabase Dashboard → Database → Extensions → activa <code>pg_cron</code> y <code>pg_net</code>.</p>
+              <p><strong>2.</strong> Ve a SQL Editor y ejecuta:</p>
+              <pre className="bg-white border border-amber-300 rounded p-2 overflow-x-auto text-[10px]">{`-- Función que llama al webhook con un resumen
+CREATE OR REPLACE FUNCTION enviar_resumen_slack_diario()
+RETURNS void AS $$
+DECLARE
+  cfg RECORD;
+  payload JSONB;
+BEGIN
+  SELECT * INTO cfg FROM config_slack WHERE activo = true 
+    AND webhook_url IS NOT NULL AND enviar_resumen_diario = true LIMIT 1;
+  IF cfg.id IS NULL THEN RETURN; END IF;
+  
+  -- (la app web genera el texto mejor; este job dispara un trigger
+  -- que la app puede consumir, o usa lógica SQL simplificada)
+  -- Versión simple: solo notifica que hay tareas pendientes
+  payload := jsonb_build_object(
+    'text', '🌱 *Buenos días Rootflow* — abre el ERP para ver las tareas de hoy',
+    'username', cfg.nombre_bot,
+    'icon_emoji', cfg.emoji_bot
+  );
+  
+  PERFORM net.http_post(
+    url := cfg.webhook_url,
+    body := payload,
+    headers := jsonb_build_object('Content-Type', 'application/json')
+  );
+  
+  UPDATE config_slack SET ultimo_resumen_enviado = NOW() WHERE id = cfg.id;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Programar a las ${(form.hora_resumen || '08:00').substring(0,5)} cada día (UTC; ajusta si tu zona horaria difiere)
+SELECT cron.schedule(
+  'resumen_rootflow_diario',
+  '${(form.hora_resumen || '08:00').substring(3,5)} ${parseInt((form.hora_resumen || '08:00').substring(0,2)) - 2} * * *',  -- Madrid UTC+2 en verano
+  $$SELECT enviar_resumen_slack_diario();$$
+);`}</pre>
+              <p>Esto envía un aviso simple desde Supabase. Si quieres el resumen completo formateado igual que el de la app, usa el botón <strong>"📲 Enviar resumen del día"</strong> manualmente cada mañana, o avísame y montamos una Edge Function de Supabase.</p>
+            </div>
+          </details>
+        )}
+      </div>
+    );
+  };
+
+  // V56: Enviar mensaje a Slack vía webhook
+  // El navegador no puede leer la respuesta (CORS) pero el mensaje sí se envía
+  const enviarASlack = async (mensaje, tipo = 'manual', opcionesExtra = {}) => {
+    if (!configSlack || !configSlack.webhook_url || !configSlack.activo) {
+      return { ok: false, error: 'Slack no configurado o inactivo' };
+    }
+    
+    const payload = {
+      text: mensaje,
+      username: configSlack.nombre_bot || 'RootFlow ERP',
+      icon_emoji: configSlack.emoji_bot || ':seedling:',
+      ...opcionesExtra,
+    };
+    
+    try {
+      // mode 'no-cors': se envía pero no podemos leer la respuesta
+      await fetch(configSlack.webhook_url, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      // Log
+      try {
+        await supabase.from('slack_log').insert({
+          tipo,
+          mensaje: mensaje.substring(0, 500),
+          exito: true,
+        });
+      } catch (e) { /* ignorar */ }
+      
+      return { ok: true };
+    } catch (err) {
+      try {
+        await supabase.from('slack_log').insert({
+          tipo,
+          mensaje: mensaje.substring(0, 500),
+          exito: false,
+          error_msg: err.message,
+        });
+      } catch (e) { /* ignorar */ }
+      return { ok: false, error: err.message };
+    }
+  };
+  
+  // V56: Generar texto del resumen diario
+  const generarResumenDiario = () => {
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    const hoyIso = hoy.toISOString().slice(0,10);
+    const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
+    const mananaIso = manana.toISOString().slice(0,10);
+    
+    const tareasHoy = tareasCalendario.filter(t => t.fecha === hoyIso && t.estado === 'pendiente');
+    const tareasAtrasadas = tareasCalendario.filter(t => t.fecha < hoyIso && t.estado === 'pendiente');
+    const tareasManana = tareasCalendario.filter(t => t.fecha === mananaIso && t.estado === 'pendiente');
+    
+    const tipoEmoji = {
+      sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚',
+    };
+    const tipoLabel = {
+      sembrar: 'Sembrar', pasar_luz: 'Pasar a luz', cosechar: 'Cosechar', entregar: 'Entregar',
+    };
+    
+    const formatTarea = (t) => {
+      const v = variedades.find(vv => vv.id === t.variedad_id);
+      let txt = `${tipoEmoji[t.tipo] || '•'} ${tipoLabel[t.tipo] || t.tipo} *${t.trays} trays* ${v?.nombre || ''}`;
+      if (t.tipo === 'sembrar' && t.semilla_g > 0) txt += ` _(${parseFloat(t.semilla_g).toFixed(0)}g semilla)_`;
+      if (t.tipo === 'cosechar' && t.bandejas_venta > 0) txt += ` _(→ ${t.bandejas_venta} cajitas)_`;
+      return txt;
+    };
+    
+    const fechaStr = hoy.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+    
+    let mensaje = `🌱 *Buenos días — Rootflow*\n📅 *${fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1)}*\n\n`;
+    
+    if (tareasAtrasadas.length > 0) {
+      mensaje += `⚠️ *Atrasadas (${tareasAtrasadas.length}):*\n`;
+      tareasAtrasadas.slice(0, 10).forEach(t => {
+        const dias = Math.ceil((hoy - new Date(t.fecha)) / (1000*60*60*24));
+        mensaje += `  ${formatTarea(t)} _(hace ${dias}d)_\n`;
+      });
+      if (tareasAtrasadas.length > 10) mensaje += `  _...y ${tareasAtrasadas.length - 10} más_\n`;
+      mensaje += `\n`;
+    }
+    
+    if (tareasHoy.length === 0) {
+      mensaje += `✓ *Hoy:* Sin tareas pendientes\n\n`;
+    } else {
+      mensaje += `📋 *Hoy (${tareasHoy.length}):*\n`;
+      tareasHoy.forEach(t => { mensaje += `  ${formatTarea(t)}\n`; });
+      mensaje += `\n`;
+    }
+    
+    if (tareasManana.length > 0) {
+      mensaje += `🔜 *Mañana (${tareasManana.length}):*\n`;
+      tareasManana.forEach(t => { mensaje += `  ${formatTarea(t)}\n`; });
+    }
+    
+    // Resumen de semilla del día
+    const semillaHoy = tareasHoy
+      .filter(t => t.tipo === 'sembrar')
+      .reduce((s, t) => s + (parseFloat(t.semilla_g) || 0), 0);
+    if (semillaHoy > 0) {
+      mensaje += `\n_💧 Semilla a usar hoy: *${semillaHoy.toFixed(0)}g*_`;
+    }
+    
+    return mensaje;
+  };
+
+  const PlanProduccionForm = ({ plan, onSave, onCancel }) => {
+    const initialForm = plan || {
+      nombre: '',
+      cliente_id: '',
+      variedad_id: variedades[0]?.id || '',
+      bandejas_venta_semanales: 60,
+      peso_bandeja_venta_g: 30,
+      dias_entrega: ['lunes', 'jueves'],
+      merma_pct: 10,
+      fecha_inicio: new Date().toISOString().slice(0, 10),
+      fecha_fin: null,
+      activo: true,
+      notas: '',
+    };
+    const [form, setForm] = useState({
+      ...initialForm,
+      dias_entrega: typeof initialForm.dias_entrega === 'string' 
+        ? (JSON.parse(initialForm.dias_entrega) || ['lunes', 'jueves']) 
+        : (Array.isArray(initialForm.dias_entrega) ? initialForm.dias_entrega : ['lunes', 'jueves']),
+    });
+    
+    const variedadSel = variedades.find(v => v.id === parseInt(form.variedad_id));
+    
+    // Cálculo en vivo
+    const calc = (() => {
+      if (!variedadSel) return null;
+      const diasGerm = variedadSel.dias_germinacion || 6;
+      const diasLuz = variedadSel.dias_luz || 10;
+      const prodTray = variedadSel.gramos_produccion_por_tray || 100;
+      const semillaTray = variedadSel.gramos_semilla_por_bandeja || 10;
+      const numEntregas = form.dias_entrega.length || 1;
+      const bandejasEntrega = (form.bandejas_venta_semanales || 0) / numEntregas;
+      const gramosEntrega = bandejasEntrega * (form.peso_bandeja_venta_g || 30);
+      const traysBase = gramosEntrega / prodTray;
+      const traysMerma = Math.ceil(traysBase * (1 + (form.merma_pct || 0) / 100));
+      const semillaEntrega = traysMerma * semillaTray;
+      const semillaSemana = semillaEntrega * numEntregas;
+      const ciclo = diasGerm + diasLuz;
+      return { diasGerm, diasLuz, ciclo, prodTray, semillaTray, numEntregas, bandejasEntrega, gramosEntrega, traysBase, traysMerma, semillaEntrega, semillaSemana };
+    })();
+    
+    const toggleDia = (dia) => {
+      const actual = form.dias_entrega;
+      if (actual.includes(dia)) {
+        setForm({ ...form, dias_entrega: actual.filter(d => d !== dia) });
+      } else {
+        setForm({ ...form, dias_entrega: [...actual, dia] });
+      }
+    };
+    
+    return (
+      <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2">
+        {/* Identificación */}
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Nombre del plan" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Ej: Pizzería Rossi · Cilantro" className="col-span-2" />
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <Select 
+            label="Cliente (opcional)"
+            value={form.cliente_id || ''} 
+            onChange={e => setForm({...form, cliente_id: e.target.value ? parseInt(e.target.value) : null})}
+            options={[{ value: '', label: '— Sin cliente específico —' }, ...clientes.map(c => ({ value: c.id, label: c.nombre }))]}
+          />
+          <Select 
+            label="Variedad *"
+            value={form.variedad_id || ''} 
+            onChange={e => setForm({...form, variedad_id: parseInt(e.target.value)})}
+            options={variedades.map(v => ({ value: v.id, label: v.nombre }))}
+          />
+        </div>
+        
+        {/* Aviso si la variedad no tiene datos de ciclo */}
+        {variedadSel && (!variedadSel.dias_germinacion || !variedadSel.dias_luz) && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+            ⚠️ La variedad <strong>{variedadSel.nombre}</strong> no tiene configurados los días de germinación o luz. 
+            Ve a editar la variedad y completa la sección "🌱 Ciclo de cultivo" antes de generar tareas.
+          </div>
+        )}
+        
+        {/* Pedido base */}
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Bandejas de venta / semana" type="number" step="1" value={form.bandejas_venta_semanales} onChange={e => setForm({...form, bandejas_venta_semanales: parseInt(e.target.value) || 0})} />
+          <Input label="Peso por bandeja venta (g)" type="number" step="1" value={form.peso_bandeja_venta_g} onChange={e => setForm({...form, peso_bandeja_venta_g: parseFloat(e.target.value) || 0})} />
+        </div>
+        
+        {/* Días de entrega */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Días de entrega *</label>
+          <div className="flex gap-1 flex-wrap">
+            {['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'].map(d => (
+              <button 
+                key={d} type="button"
+                onClick={() => toggleDia(d)}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                  form.dias_entrega.includes(d) 
+                    ? 'bg-orange-500 text-white' 
+                    : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                {d.charAt(0).toUpperCase() + d.slice(1)}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-neutral-500 mt-1">{form.dias_entrega.length} entrega(s)/semana</p>
+        </div>
+        
+        {/* Merma */}
+        <div className="grid grid-cols-3 gap-3">
+          <Input label="Merma de seguridad (%)" type="number" step="0.5" value={form.merma_pct} onChange={e => setForm({...form, merma_pct: parseFloat(e.target.value) || 0})} />
+          <Input label="Fecha inicio plan" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value})} />
+          <Input label="Fecha fin (opcional)" type="date" value={form.fecha_fin || ''} onChange={e => setForm({...form, fecha_fin: e.target.value || null})} />
+        </div>
+        
+        {/* Preview de cálculos */}
+        {calc && variedadSel && (
+          <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-4 space-y-2">
+            <p className="text-sm font-bold text-green-900">📊 Cálculos automáticos</p>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <p className="text-green-700 font-semibold">CICLO</p>
+                <p>{calc.diasGerm}d germinación + {calc.diasLuz}d luz = <strong>{calc.ciclo} días totales</strong></p>
+              </div>
+              <div>
+                <p className="text-green-700 font-semibold">RENDIMIENTO/TRAY</p>
+                <p>{calc.prodTray}g · semilla {calc.semillaTray}g</p>
+              </div>
+              <div>
+                <p className="text-green-700 font-semibold">POR ENTREGA</p>
+                <p>{calc.bandejasEntrega.toFixed(0)} cajitas = {calc.gramosEntrega.toFixed(0)}g</p>
+                <p>{calc.traysBase.toFixed(2)} trays base → <strong>{calc.traysMerma} con merma</strong></p>
+              </div>
+              <div>
+                <p className="text-green-700 font-semibold">SEMILLA</p>
+                <p>{calc.semillaEntrega.toFixed(0)}g/entrega</p>
+                <p><strong>{(calc.semillaSemana/1000).toFixed(3)} kg/semana</strong> · {(calc.semillaSemana*4.33/1000).toFixed(2)} kg/mes</p>
+              </div>
+            </div>
+            <div className="bg-white border border-green-300 rounded-lg p-2 text-center text-sm">
+              <strong className="text-green-900">{calc.traysMerma} trays × {calc.numEntregas} entregas/sem = {calc.traysMerma * calc.numEntregas} trays/semana</strong>
+            </div>
+          </div>
+        )}
+        
+        <Input label="Notas (opcional)" value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} />
+        
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={form.activo !== false} onChange={e => setForm({...form, activo: e.target.checked})} />
+          <span className="text-sm font-medium">Plan activo (genera tareas)</span>
+        </label>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.variedad_id) { alert('Selecciona una variedad'); return; }
+            if (form.dias_entrega.length === 0) { alert('Selecciona al menos un día de entrega'); return; }
+            if (!form.bandejas_venta_semanales || form.bandejas_venta_semanales <= 0) { alert('Las bandejas semanales deben ser > 0'); return; }
+            onSave({ ...form, dias_entrega: form.dias_entrega });
+          }}>
+            {plan?.id ? 'Guardar plan' : 'Crear plan'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  // V53: Generador de mandato SEPA B2B — formato oficial bilingüe, 1 página A4
   const generarMandatoSEPA = (cliente) => {
     if (!cliente) { alert('❌ Sin cliente'); return; }
     
     const referencia = `ROOTFLOW-${String(cliente.id).padStart(4,'0')}-${new Date().getFullYear()}`;
-    const fechaEmision = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
+    const ibanFmt = cliente.iban ? cliente.iban.replace(/\s/g,'').replace(/(.{4})/g, '$1 ').trim() : '';
     
     const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Mandato SEPA B2B - ${cliente.nombre || cliente.razon_social || 'Cliente'}</title>
+<title>Mandato SEPA B2B · ${cliente.nombre || cliente.razon_social || 'Cliente'} · ${referencia}</title>
 <style>
-@page { size: A4; margin: 1.5cm; }
-* { box-sizing: border-box; }
-body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.4; color: #1f2937; margin: 0; padding: 30px; }
-.header { display: flex; justify-content: space-between; align-items: start; border-bottom: 3px solid #ED7E1F; padding-bottom: 12px; margin-bottom: 24px; }
-.logo { font-weight: 900; font-size: 26pt; color: #1D4F37; }
-.logo .orange { color: #ED7E1F; }
-.subtitle { font-size: 9pt; color: #6b7280; letter-spacing: 1px; }
-.title-box { background: #1D4F37; color: white; padding: 18px; text-align: center; margin: 18px 0; border-radius: 4px; }
-.title-box h1 { margin: 0; font-size: 18pt; letter-spacing: 1px; }
-.title-box p { margin: 4px 0 0 0; font-size: 10pt; opacity: 0.9; }
-.section { margin: 18px 0; }
-.section-title { background: #FCF2EB; color: #1D4F37; padding: 8px 14px; font-weight: 700; font-size: 11pt; border-left: 4px solid #ED7E1F; margin-bottom: 10px; }
-.field-row { display: grid; grid-template-columns: 200px 1fr; gap: 8px; padding: 7px 14px; border-bottom: 1px dotted #e5e7eb; }
-.field-label { color: #374151; font-weight: 600; font-size: 10pt; }
-.field-value { color: #1f2937; font-size: 10pt; }
-.field-value.blank { color: #9ca3af; font-style: italic; }
-.ref-box { background: #fef3c7; border: 2px solid #f59e0b; padding: 10px; border-radius: 4px; text-align: center; margin: 12px 0; }
-.ref-box .label { font-size: 9pt; color: #92400e; text-transform: uppercase; letter-spacing: 1px; }
-.ref-box .value { font-size: 14pt; font-weight: 700; color: #78350f; font-family: monospace; }
-.legal { background: #f9fafb; border: 1px solid #d1d5db; padding: 14px; margin: 18px 0; font-size: 9pt; line-height: 1.5; color: #4b5563; }
-.legal strong { color: #1f2937; }
-.signature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 30px; }
-.signature-box { border: 2px solid #d1d5db; padding: 20px 14px; border-radius: 4px; min-height: 140px; }
-.signature-box .title { font-weight: 700; font-size: 10pt; color: #1D4F37; border-bottom: 2px solid #ED7E1F; padding-bottom: 6px; margin-bottom: 12px; }
-.signature-box .line { border-bottom: 1px solid #9ca3af; margin: 32px 0 6px 0; }
-.signature-box .small { font-size: 9pt; color: #6b7280; }
-.checkbox-row { margin: 8px 0; }
-.checkbox-row input[type="checkbox"] { width: 14px; height: 14px; }
-.footer { margin-top: 24px; padding-top: 14px; border-top: 1px solid #e5e7eb; font-size: 8pt; color: #6b7280; text-align: center; }
-.no-print { background: #ED7E1F; color: white; padding: 10px 20px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 12pt; position: fixed; top: 20px; right: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+@page { size: A4; margin: 12mm 14mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 9pt; line-height: 1.3; color: #000; }
+body { padding: 0; }
+
+.header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 8px; border-bottom: 2px solid #000; margin-bottom: 10px; }
+.brand { font-weight: 800; font-size: 16pt; letter-spacing: -0.5px; }
+.brand .o { color: #ED7E1F; }
+.brand-sub { font-size: 7pt; letter-spacing: 1.5px; color: #555; margin-top: 1px; }
+.ref { text-align: right; font-size: 8pt; }
+.ref strong { font-size: 9pt; font-family: 'Courier New', monospace; }
+
+h1.title { text-align: center; font-size: 13pt; letter-spacing: 1px; margin: 6px 0 2px; }
+h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #666; font-weight: normal; margin-bottom: 8px; }
+
+.intro { background: #f5f5f5; border: 1px solid #ccc; padding: 7px 9px; font-size: 8pt; line-height: 1.45; margin-bottom: 8px; }
+.intro p { margin-bottom: 3px; }
+.intro p:last-child { margin-bottom: 0; }
+.intro .es { color: #000; }
+.intro .en { color: #555; font-style: italic; }
+
+.section-h { background: #000; color: #fff; padding: 3px 7px; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.5px; margin: 7px 0 0; }
+.section-h .en { font-weight: 400; font-style: italic; font-size: 7.5pt; color: #ccc; margin-left: 6px; }
+
+.row { display: grid; grid-template-columns: 145px 1fr; gap: 4px; border-bottom: 1px solid #ddd; padding: 3.5px 4px; }
+.row .l { font-weight: 600; font-size: 8pt; }
+.row .l .en { font-weight: 400; font-style: italic; color: #777; font-size: 7pt; margin-left: 2px; }
+.row .v { font-size: 8.5pt; padding-left: 4px; }
+.row .v.blank { color: #999; font-style: italic; }
+.row .v.iban { font-family: 'Courier New', monospace; font-size: 9.5pt; letter-spacing: 0.5px; font-weight: 600; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.type-pago { padding: 5px 7px; border: 1px solid #ccc; margin-top: 5px; font-size: 8pt; }
+.type-pago label { display: inline-block; margin-right: 14px; }
+.type-pago input { vertical-align: middle; margin-right: 3px; }
+
+.legal-b2b { background: #fff5f5; border: 1px solid #cc0000; padding: 6px 8px; font-size: 7.5pt; margin: 8px 0; line-height: 1.4; }
+.legal-b2b .warn { color: #cc0000; font-weight: 700; font-size: 8pt; }
+.legal-b2b .en { color: #666; font-style: italic; }
+
+.sign-area { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.sign-box { border: 1px solid #000; padding: 6px 8px; min-height: 90px; }
+.sign-box .h { font-size: 8.5pt; font-weight: 700; border-bottom: 1px solid #000; padding-bottom: 3px; margin-bottom: 4px; }
+.sign-box .h .en { font-weight: 400; font-style: italic; color: #777; font-size: 7pt; }
+.sign-box .sm { font-size: 7.5pt; line-height: 1.5; margin-top: 2px; }
+.sign-box .line { border-bottom: 1px dotted #999; height: 11px; }
+.sign-line { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; font-size: 7.5pt; }
+.sign-line .lbl { color: #777; flex-shrink: 0; }
+.sign-line .dots { flex: 1; border-bottom: 1px dotted #999; }
+
+.footer { margin-top: 7px; padding-top: 5px; border-top: 1px solid #ccc; font-size: 7pt; text-align: center; color: #666; line-height: 1.4; }
+
+.no-print { position: fixed; top: 12px; right: 12px; background: #ED7E1F; color: white; padding: 8px 14px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 11pt; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 999; }
 .no-print:hover { background: #c75d0e; }
-@media print { .no-print { display: none; } body { padding: 0; } }
+@media print { .no-print { display: none; } }
 </style>
 </head>
 <body>
@@ -17514,133 +18696,91 @@ body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; fon
 
 <div class="header">
   <div>
-    <div class="logo">Root<span class="orange">Flow</span></div>
-    <div class="subtitle">HYDROPONICS S.L.</div>
+    <div class="brand">Root<span class="o">Flow</span></div>
+    <div class="brand-sub">HYDROPONICS S.L.</div>
   </div>
-  <div style="text-align: right; font-size: 9pt; color: #6b7280;">
-    Ref: <strong>${referencia}</strong><br>
-    Fecha: ${fechaEmision}
+  <div class="ref">
+    Ref. mandato / <em>Mandate ref.</em><br>
+    <strong>${referencia}</strong>
   </div>
 </div>
 
-<div class="title-box">
-  <h1>ORDEN DE DOMICILIACIÓN DE ADEUDO DIRECTO SEPA B2B</h1>
-  <p>Mandato para el cobro recurrente de servicios — formato SEPA Empresas (B2B)</p>
-</div>
+<h1 class="title">ORDEN DE DOMICILIACIÓN DE ADEUDO DIRECTO SEPA B2B</h1>
+<h1 class="title-en">SEPA Business to Business Direct Debit Mandate</h1>
 
-<p style="font-size: 10pt; color: #4b5563;">
-Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza a <strong>(A) ROOTFLOW HYDROPONICS S.L.</strong> a enviar instrucciones a su entidad financiera para adeudar en su cuenta y <strong>(B) a su entidad financiera para adeudar los importes correspondientes en su cuenta de acuerdo con las instrucciones de ROOTFLOW HYDROPONICS S.L.</strong>
-</p>
-
-<div class="ref-box">
-  <div class="label">Referencia única del mandato</div>
-  <div class="value">${referencia}</div>
-</div>
-
-<!-- DATOS DEL ACREEDOR -->
-<div class="section">
-  <div class="section-title">DATOS DEL ACREEDOR</div>
-  <div class="field-row"><span class="field-label">Nombre/Razón Social:</span><span class="field-value">ROOTFLOW HYDROPONICS S.L.</span></div>
-  <div class="field-row"><span class="field-label">CIF:</span><span class="field-value">B27535137</span></div>
-  <div class="field-row"><span class="field-label">Dirección:</span><span class="field-value">C. Nueva 16 P6, 28231 Las Rozas de Madrid, España</span></div>
-  <div class="field-row"><span class="field-label">Identificador Acreedor (CID):</span><span class="field-value blank">[A rellenar tras inscripción en BBVA]</span></div>
-  <div class="field-row"><span class="field-label">Email:</span><span class="field-value">info@rootflow.es</span></div>
-  <div class="field-row"><span class="field-label">Teléfono:</span><span class="field-value">694 918 481</span></div>
+<div class="intro">
+  <p class="es">Mediante la firma de este formulario de Orden de Domiciliación, el deudor autoriza (A) al acreedor a enviar instrucciones a la entidad del deudor para adeudar su cuenta y (B) a la entidad para efectuar los adeudos en su cuenta siguiendo las instrucciones del acreedor. Como parte de sus derechos, el deudor está legitimado al reembolso por su entidad en los términos y condiciones del contrato suscrito con la misma. La solicitud de reembolso deberá efectuarse dentro de las cuatro semanas que siguen a la fecha de adeudo en cuenta. <strong>Sus derechos quedan explicados en una declaración que puede obtener de su entidad.</strong></p>
+  <p class="en">By signing this mandate form, the debtor authorises (A) the creditor to send instructions to the debtor's bank to debit the debtor's account and (B) the debtor's bank to debit the debtor's account in accordance with the instructions from the creditor.</p>
 </div>
 
 <!-- DATOS DEL DEUDOR -->
-<div class="section">
-  <div class="section-title">DATOS DEL DEUDOR (CLIENTE)</div>
-  <div class="field-row"><span class="field-label">Nombre/Razón Social:</span><span class="field-value">${cliente.razon_social || cliente.nombre || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">CIF/NIF:</span><span class="field-value">${cliente.cif || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">Dirección:</span><span class="field-value">${cliente.direccion || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">CP / Ciudad:</span><span class="field-value">${cliente.codigo_postal || '_____'} ${cliente.ciudad || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">País:</span><span class="field-value">España</span></div>
-  <div class="field-row"><span class="field-label">Persona de contacto:</span><span class="field-value">${cliente.contacto || cliente.nombre_contacto || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">Email:</span><span class="field-value">${cliente.email || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">Teléfono:</span><span class="field-value">${cliente.telefono || '________________'}</span></div>
-</div>
+<div class="section-h">DATOS DEL DEUDOR <span class="en">/ Debtor</span></div>
+<div class="row"><span class="l">Nombre del deudor <span class="en">/ Debtor's name</span></span><span class="v">${cliente.razon_social || cliente.nombre || '<span class="blank">______________________________________</span>'}</span></div>
+<div class="row"><span class="l">CIF / NIF <span class="en">/ ID</span></span><span class="v">${cliente.cif || '<span class="blank">______________</span>'}</span></div>
+<div class="row"><span class="l">Dirección <span class="en">/ Address</span></span><span class="v">${cliente.direccion || '<span class="blank">______________________________________</span>'}</span></div>
+<div class="row"><span class="l">Código postal · Ciudad <span class="en">/ Postal code · City</span></span><span class="v">${(cliente.codigo_postal || '_____')} · ${(cliente.ciudad || '__________________')}</span></div>
+<div class="row"><span class="l">País <span class="en">/ Country</span></span><span class="v">${cliente.pais || 'España / Spain'}</span></div>
+<div class="row"><span class="l">Número de cuenta IBAN <span class="en">/ Account no. IBAN</span></span><span class="v iban">${ibanFmt || '<span class="blank">ES__  ____  ____  ____  ____  ____</span>'}</span></div>
+<div class="row"><span class="l">BIC / SWIFT</span><span class="v iban">${cliente.swift_bic || '<span class="blank">________________</span>'}</span></div>
 
-<!-- DATOS BANCARIOS -->
-<div class="section">
-  <div class="section-title">DATOS BANCARIOS DEL DEUDOR</div>
-  <div class="field-row"><span class="field-label">Nombre del titular:</span><span class="field-value">${cliente.razon_social || cliente.nombre || '________________'}</span></div>
-  <div class="field-row"><span class="field-label">Número de cuenta (IBAN):</span><span class="field-value" style="font-family: monospace; font-size: 11pt; letter-spacing: 1px;">${cliente.iban ? cliente.iban.replace(/(.{4})/g, '$1 ').trim() : '________________________'}</span></div>
-  <div class="field-row"><span class="field-label">Entidad bancaria:</span><span class="field-value blank">[El cliente lo cumplimentará]</span></div>
-  <div class="field-row"><span class="field-label">Código BIC/SWIFT:</span><span class="field-value blank">[El cliente lo cumplimentará]</span></div>
-</div>
+<!-- DATOS DEL ACREEDOR -->
+<div class="section-h">DATOS DEL ACREEDOR <span class="en">/ Creditor</span></div>
+<div class="row"><span class="l">Acreedor <span class="en">/ Creditor</span></span><span class="v">ROOTFLOW HYDROPONICS S.L.</span></div>
+<div class="row"><span class="l">Identificador del acreedor <span class="en">/ Creditor ID</span></span><span class="v blank">[CID a comunicar tras alta en BBVA / To be informed]</span></div>
+<div class="row"><span class="l">CIF <span class="en">/ Tax ID</span></span><span class="v">B27535137</span></div>
+<div class="row"><span class="l">Dirección <span class="en">/ Address</span></span><span class="v">C. Nueva 16 P6, 28231 Las Rozas de Madrid, España</span></div>
 
 <!-- TIPO DE PAGO -->
-<div class="section">
-  <div class="section-title">TIPO DE PAGO</div>
-  <div class="checkbox-row">
-    <input type="checkbox" checked disabled> 
-    <strong>Pago recurrente</strong> — Adeudos periódicos correspondientes a la facturación semanal de servicios de suministro de microbrotes
-  </div>
-  <div class="checkbox-row">
-    <input type="checkbox" disabled> Pago único
-  </div>
+<div class="section-h">TIPO DE PAGO <span class="en">/ Type of payment</span></div>
+<div class="type-pago">
+  <label><input type="checkbox" checked disabled> <strong>Recurrente</strong> / <em>Recurrent</em></label>
+  <label><input type="checkbox" disabled> Único / <em>One-off</em></label>
+  <span style="float:right; color:#666;">Concepto: <strong>Suministro de microbrotes (factura semanal)</strong></span>
 </div>
 
-<!-- AVISO LEGAL B2B -->
-<div class="legal">
-  <p style="margin: 0 0 8px 0; font-weight: 700; color: #b91c1c; font-size: 10pt;">
-    ⚠️ IMPORTANTE — ESQUEMA B2B (EMPRESA A EMPRESA):
-  </p>
-  <p style="margin: 0 0 6px 0;">
-    El esquema SEPA B2B <strong>solamente está disponible para clientes que NO sean consumidores</strong>. 
-    Como deudor, <strong>NO tiene derecho a obtener un reembolso de su entidad financiera</strong> una vez se haya producido el cargo en su cuenta, pero podrá reclamar su devolución directamente con su acreedor.
-  </p>
-  <p style="margin: 0 0 6px 0;">
-    Como deudor, <strong>tiene la obligación de confirmar este mandato a su entidad bancaria</strong> antes de la presentación del primer adeudo. Si no lo hace, su banco rechazará el cargo.
-  </p>
-  <p style="margin: 6px 0 0 0;">
-    En el caso de que se realice un adeudo no autorizado o no conforme con las condiciones acordadas, podrá oponerse en un plazo máximo de 2 días hábiles desde la fecha de adeudo.
-  </p>
+<!-- AVISO B2B -->
+<div class="legal-b2b">
+  <p><span class="warn">⚠ ESQUEMA B2B (EMPRESAS) — NO HAY DERECHO DE REEMBOLSO</span></p>
+  <p>El esquema SEPA B2B sólo está disponible para clientes que NO sean consumidores. El deudor confirma que no es consumidor y que <strong>no tiene derecho a obtener un reembolso de su entidad bancaria</strong> una vez se haya producido el cargo en su cuenta, pudiendo reclamar su devolución directamente al acreedor. El deudor se compromete a <strong>confirmar este mandato a su entidad bancaria</strong> antes del primer adeudo; en caso contrario el cargo será rechazado.</p>
+  <p class="en">Under the SEPA B2B scheme the debtor has no right to a refund from his/her bank once the account has been debited. The debtor is obliged to confirm this mandate to his/her bank before the first debit.</p>
 </div>
 
 <!-- FIRMAS -->
-<div class="signature-grid">
-  <div class="signature-box">
-    <div class="title">FIRMA DEL DEUDOR</div>
-    <div class="small">${cliente.razon_social || cliente.nombre || 'Cliente'}</div>
-    <div class="line"></div>
-    <div class="small">Nombre y apellidos del firmante: ________________</div>
-    <div class="small" style="margin-top: 8px;">DNI: ________________</div>
-    <div class="small" style="margin-top: 8px;">Cargo: ________________</div>
-    <div class="small" style="margin-top: 8px;">Fecha: _____ / _____ / 2026</div>
-    <div class="small" style="margin-top: 8px;">Lugar: ________________</div>
+<div class="sign-area">
+  <div class="sign-box">
+    <div class="h">FIRMA DEL DEUDOR <span class="en">/ Debtor's signature</span></div>
+    <div style="height:32px;"></div>
+    <div class="sign-line"><span class="lbl">Lugar / Place:</span><span class="dots">&nbsp;</span></div>
+    <div class="sign-line"><span class="lbl">Fecha / Date:</span><span class="dots">&nbsp;</span></div>
+    <div class="sign-line"><span class="lbl">Firmante:</span><span class="dots">&nbsp;</span></div>
+    <div class="sign-line"><span class="lbl">DNI · Cargo:</span><span class="dots">&nbsp;</span></div>
   </div>
-  <div class="signature-box">
-    <div class="title">FIRMA Y SELLO DEL ACREEDOR</div>
-    <div class="small">ROOTFLOW HYDROPONICS S.L.</div>
-    <div class="line"></div>
-    <div class="small">Pedro Domecq Vergara</div>
-    <div class="small" style="margin-top: 4px;">Administrador</div>
-    <div class="small" style="margin-top: 12px;">Fecha de emisión: ${fechaEmision}</div>
-    <div class="small" style="margin-top: 8px;">Sello de la empresa:</div>
+  <div class="sign-box">
+    <div class="h">FIRMA DEL ACREEDOR <span class="en">/ Creditor's signature</span></div>
+    <div style="height:32px;"></div>
+    <div class="sign-line"><span class="lbl">Lugar / Place:</span><span class="dots">Las Rozas de Madrid</span></div>
+    <div class="sign-line"><span class="lbl">Fecha / Date:</span><span class="dots">&nbsp;</span></div>
+    <div class="sign-line"><span class="lbl">Firmante:</span><span class="dots">Pedro Domecq Vergara</span></div>
+    <div class="sign-line"><span class="lbl">Cargo:</span><span class="dots">Administrador único</span></div>
   </div>
 </div>
 
 <div class="footer">
-  <strong>ROOTFLOW HYDROPONICS S.L.</strong> · CIF B27535137 · C. Nueva 16 P6, 28231 Las Rozas de Madrid<br>
-  Tel: 694 918 481 · info@rootflow.es · www.rootflow.es<br>
-  <em>Documento generado por el ERP de RootFlow el ${fechaEmision} — Referencia ${referencia}</em>
+  <strong>ROOTFLOW HYDROPONICS S.L.</strong> · CIF B27535137 · C. Nueva 16 P6, 28231 Las Rozas de Madrid · Tel. 694 918 481 · info@rootflow.es
 </div>
 
 </body>
 </html>`;
     
-    // Abrir en nueva ventana para que el usuario pueda imprimir o guardar como PDF
     const w = window.open('', '_blank');
     if (!w) {
-      alert('⚠️ El navegador bloqueó la ventana emergente. Permite pop-ups para rootflow-erp.vercel.app y vuelve a intentarlo.');
+      alert('⚠️ El navegador bloqueó la ventana emergente. Permite pop-ups y vuelve a intentarlo.');
       return;
     }
     w.document.write(html);
     w.document.close();
     
-    // Registrar el mandato en BD
+    // Registrar en BD
     (async () => {
       try {
         await supabase.from('mandatos_sepa').insert({
@@ -18724,6 +19864,64 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
             <p className="text-neutral-500 font-medium">Configuración del ERP</p>
           </div>
         </div>
+
+        {/* V56: Configuración Slack */}
+        <Card className="p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-purple-100 rounded-xl text-2xl">📲</div>
+            <div className="flex-1">
+              <h3 className="text-lg font-bold text-neutral-900">Notificaciones Slack</h3>
+              <p className="text-xs text-neutral-500">Avisos al móvil con resumen diario de tareas y eventos clave</p>
+            </div>
+            {configSlack?.activo && configSlack?.webhook_url && (
+              <Badge className="bg-green-100 text-green-700">✓ Activo</Badge>
+            )}
+          </div>
+          
+          <ConfigSlackEditor config={configSlack} onSave={async (form) => {
+            try {
+              if (configSlack?.id) {
+                const { error } = await supabase.from('config_slack').update(form).eq('id', configSlack.id);
+                if (error) throw error;
+              } else {
+                const { error } = await supabase.from('config_slack').insert(form);
+                if (error) throw error;
+              }
+              refetchConfigSlack();
+              alert('✅ Configuración guardada');
+            } catch (e) {
+              if (e.code === '42P01') {
+                alert('❌ Falta ejecutar SQL V56 en Supabase');
+              } else {
+                alert('❌ Error: ' + e.message);
+              }
+            }
+          }} onTest={async (webhookUrl) => {
+            try {
+              await fetch(webhookUrl, {
+                method: 'POST',
+                mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  text: `🌱 *Test de RootFlow ERP*\n\nSi ves este mensaje, la integración funciona correctamente. ¡Listo para recibir tus resúmenes diarios! 🎉`,
+                  username: 'RootFlow ERP',
+                  icon_emoji: ':seedling:',
+                }),
+              });
+              alert('✅ Mensaje de prueba enviado.\n\nRevisa tu Slack — debería llegar en unos segundos.\n\nSi no llega, verifica que:\n• La URL del webhook es correcta\n• El webhook está activo en Slack\n• El canal existe');
+            } catch (e) {
+              alert('❌ Error: ' + e.message);
+            }
+          }} onProbarResumen={async () => {
+            const msg = generarResumenDiario();
+            const r = await enviarASlack(msg, 'test');
+            if (r.ok) {
+              alert('✅ Resumen enviado. Revisa Slack.');
+            } else {
+              alert('❌ ' + r.error);
+            }
+          }} />
+        </Card>
 
         {/* Info de la empresa */}
         <Card className="p-5">
@@ -20146,8 +21344,33 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
       return true;
     });
 
+    // V57: Helper para leer items de un presupuesto (JSON embebido primero, fallback a tabla)
+    const getItemsPresupuesto = (presupuesto) => {
+      if (!presupuesto) return [];
+      if (presupuesto.items_json && Array.isArray(presupuesto.items_json) && presupuesto.items_json.length > 0) {
+        return presupuesto.items_json;
+      }
+      return presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+    };
+
     const crearPresupuesto = async (form, esEdicion = false) => {
       try {
+        // Validaciones previas
+        if (!form.cliente_id) {
+          alert('❌ Selecciona un cliente');
+          return;
+        }
+        if (!Array.isArray(form.items) || form.items.length === 0) {
+          alert('❌ El presupuesto debe tener al menos un producto');
+          return;
+        }
+        // Filtrar items vacíos
+        const itemsValidos = form.items.filter(it => it.producto_id && it.cantidad > 0);
+        if (itemsValidos.length === 0) {
+          alert('❌ No hay productos válidos. Añade al menos uno con cantidad > 0.');
+          return;
+        }
+        
         let presupuestoId = form.id;
         
         if (!esEdicion) {
@@ -20156,13 +21379,22 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
           presupuestoId = `P-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
         }
         
-        // Calcular totales
+        // Calcular totales con precios actuales
         let subtotal = 0;
-        const itemsConPrecio = form.items.map(item => {
-          const precio = getPrecioCliente(item.producto_id, form.cliente_id);
-          const itemSubtotal = precio * item.cantidad;
+        const itemsConPrecio = itemsValidos.map(item => {
+          const producto = productos.find(p => p.id === parseInt(item.producto_id));
+          const precio = getPrecioCliente(parseInt(item.producto_id), form.cliente_id);
+          const cantidad = parseInt(item.cantidad) || 1;
+          const itemSubtotal = precio * cantidad;
           subtotal += itemSubtotal;
-          return { ...item, precio_unitario: precio, subtotal: itemSubtotal };
+          return { 
+            producto_id: parseInt(item.producto_id),
+            producto_nombre: producto?.nombre || 'Producto',
+            producto_unidad: producto?.unidad || 'ud',
+            cantidad, 
+            precio_unitario: precio, 
+            subtotal: itemSubtotal 
+          };
         });
         
         const cliente = clientes.find(c => c.id === form.cliente_id);
@@ -20190,43 +21422,69 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
           re_importe: reImporte,
           total,
           notas: form.notas || '',
+          items_json: itemsConPrecio,  // V57: items embebidos
         };
 
+        console.log('📤 Guardando presupuesto:', presupuestoData);
+
         if (esEdicion) {
-          // Actualizar presupuesto existente
-          await supabase.from('presupuestos').update(presupuestoData).eq('id', presupuestoId);
-          // Eliminar items anteriores
-          await supabase.from('presupuesto_items').delete().eq('presupuesto_id', presupuestoId);
+          const { error: updErr } = await supabase.from('presupuestos').update(presupuestoData).eq('id', presupuestoId);
+          if (updErr) {
+            if (updErr.code === '42703' && updErr.message?.includes('items_json')) {
+              alert('⚠️ Falta ejecutar el SQL V57 (columna items_json en presupuestos).\n\nGuardado parcial sin items_json.');
+              // Reintentar sin items_json
+              delete presupuestoData.items_json;
+              await supabase.from('presupuestos').update(presupuestoData).eq('id', presupuestoId);
+            } else throw updErr;
+          }
         } else {
-          // Insertar nuevo presupuesto
-          const { error } = await supabase.from('presupuestos').insert(presupuestoData);
-          if (error) throw error;
+          const { error: insErr } = await supabase.from('presupuestos').insert(presupuestoData);
+          if (insErr) {
+            if (insErr.code === '42703' && insErr.message?.includes('items_json')) {
+              alert('⚠️ Falta ejecutar el SQL V57 (columna items_json en presupuestos).\n\nIntentando guardar sin items_json...');
+              delete presupuestoData.items_json;
+              const { error: insErr2 } = await supabase.from('presupuestos').insert(presupuestoData);
+              if (insErr2) throw insErr2;
+            } else throw insErr;
+          }
         }
         
-        // Insertar items
-        for (const item of itemsConPrecio) {
-          await supabase.from('presupuesto_items').insert({
+        // Compatibilidad: también guardar en tabla presupuesto_items
+        try {
+          await supabase.from('presupuesto_items').delete().eq('presupuesto_id', presupuestoId);
+          const rows = itemsConPrecio.map(it => ({
             presupuesto_id: presupuestoId,
-            producto_id: item.producto_id,
-            cantidad: item.cantidad,
-            precio_unitario: item.precio_unitario,
-            subtotal: item.subtotal,
-          });
+            producto_id: it.producto_id,
+            cantidad: it.cantidad,
+            precio_unitario: it.precio_unitario,
+            subtotal: it.subtotal,
+          }));
+          const { error: itemsErr } = await supabase.from('presupuesto_items').insert(rows);
+          if (itemsErr) {
+            console.warn('ℹ️ presupuesto_items no actualizada (no es crítico, usa items_json):', itemsErr.message);
+          }
+        } catch (e) {
+          console.warn('ℹ️ Error tabla presupuesto_items (no es crítico):', e.message);
         }
         
         refetchPresupuestos();
         refetchPresupuestoItems();
         setShowModal(null);
         setPresupuestoEditar(null);
-        alert(`✅ Presupuesto ${presupuestoId} ${esEdicion ? 'actualizado' : 'creado'} correctamente`);
+        alert(`✅ Presupuesto ${presupuestoId} ${esEdicion ? 'actualizado' : 'creado'} con ${itemsConPrecio.length} producto${itemsConPrecio.length !== 1 ? 's' : ''}`);
       } catch (error) {
-        console.error('Error:', error);
-        alert('❌ Error: ' + error.message);
+        console.error('❌ Error completo:', error);
+        let mensaje = `❌ Error al guardar presupuesto:\n\n${error.message || String(error)}`;
+        if (error.code) mensaje += `\n\nCódigo: ${error.code}`;
+        if (error.code === '42P01') {
+          mensaje += `\n\n🛠️ SOLUCIÓN: La tabla "presupuestos" no existe. Ejecuta los SQLs base.`;
+        }
+        alert(mensaje);
       }
     };
 
     const duplicarPresupuesto = async (presupuesto) => {
-      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const items = getItemsPresupuesto(presupuesto);
       const form = {
         cliente_id: presupuesto.cliente_id,
         validez: presupuesto.validez,
@@ -20247,7 +21505,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
       if (!confirm(`¿Convertir presupuesto ${presupuesto.id} en pedido?`)) return;
       
       try {
-        const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+        const items = getItemsPresupuesto(presupuesto);
         
         const form = {
           cliente_id: presupuesto.cliente_id,
@@ -20272,7 +21530,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
     // Imprimir presupuesto
     const imprimirPresupuesto = (presupuesto) => {
       const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
-      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const items = getItemsPresupuesto(presupuesto);
       const fechaValidez = new Date(presupuesto.fecha);
       fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
       const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
@@ -20380,9 +21638,11 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
             <tbody>
               ${items.map(item => {
                 const prod = productos.find(p => p.id === item.producto_id);
+                const nombre = item.producto_nombre || prod?.nombre || 'Producto';
+                const unidad = item.producto_unidad || prod?.unidad || 'ud';
                 return `<tr>
-                  <td>${prod?.nombre || 'Producto'}</td>
-                  <td class="text-center">${item.cantidad} ${prod?.unidad || 'ud'}</td>
+                  <td>${nombre}</td>
+                  <td class="text-center">${item.cantidad} ${unidad}</td>
                   <td class="text-right">${formatCurrency(item.precio_unitario)}</td>
                   <td class="text-right">${formatCurrency(item.subtotal)}</td>
                 </tr>`;
@@ -20426,7 +21686,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
     // Formulario de presupuesto mejorado
     const PresupuestoForm = ({ onSave, onCancel, presupuestoExistente }) => {
       const itemsIniciales = presupuestoExistente 
-        ? presupuestoItems.filter(i => i.presupuesto_id === presupuestoExistente.id).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }))
+        ? getItemsPresupuesto(presupuestoExistente).map(i => ({ producto_id: i.producto_id, cantidad: i.cantidad }))
         : (productos.length > 0 ? [{ producto_id: productos[0].id, cantidad: 1 }] : []);
 
       const [form, setForm] = useState({
@@ -20573,7 +21833,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
     // Modal detalle presupuesto
     const DetallePresupuesto = ({ presupuesto, onClose }) => {
       const cliente = clientes.find(c => c.id === presupuesto.cliente_id);
-      const items = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id);
+      const items = getItemsPresupuesto(presupuesto);
       const config = estadoPresupuestoConfig[presupuesto.estado];
       const fechaValidez = new Date(presupuesto.fecha);
       fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
@@ -20628,12 +21888,14 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
                 </tr>
               </thead>
               <tbody>
-                {items.map(item => {
+                {items.map((item, idx) => {
                   const prod = productos.find(p => p.id === item.producto_id);
+                  const nombre = item.producto_nombre || prod?.nombre || 'Producto';
+                  const unidad = item.producto_unidad || prod?.unidad || 'ud';
                   return (
-                    <tr key={item.id} className="border-b">
-                      <td className="p-3 font-medium">{prod?.nombre}</td>
-                      <td className="p-3 text-center">{item.cantidad} {prod?.unidad}</td>
+                    <tr key={item.id || idx} className="border-b">
+                      <td className="p-3 font-medium">{nombre}</td>
+                      <td className="p-3 text-center">{item.cantidad} {unidad}</td>
                       <td className="p-3 text-right">{formatCurrency(item.precio_unitario)}</td>
                       <td className="p-3 text-right font-semibold">{formatCurrency(item.subtotal)}</td>
                     </tr>
@@ -20799,7 +22061,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
                     const fechaValidez = new Date(presupuesto.fecha);
                     fechaValidez.setDate(fechaValidez.getDate() + (presupuesto.validez || 15));
                     const expirado = fechaValidez < new Date() && (presupuesto.estado === 'pendiente' || presupuesto.estado === 'enviado');
-                    const numItems = presupuestoItems.filter(i => i.presupuesto_id === presupuesto.id).length;
+                    const numItems = getItemsPresupuesto(presupuesto).length;
                     
                     return (
                       <tr key={presupuesto.id} className={`border-t hover:bg-neutral-50 cursor-pointer ${expirado ? 'bg-red-50' : ''}`} onClick={() => setPresupuestoDetalle(presupuesto)}>
@@ -21520,6 +22782,11 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
           <NavItem icon={Euro} label="Contabilidad" section="contabilidad" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
           <NavItem icon={Sprout} label="Producción" section="produccion" badge={lotesActivos} />
+          <NavItem icon={Calendar} label="Planificación" section="planificacion" badge={(() => {
+            const hoyIso = new Date().toISOString().slice(0,10);
+            const n = tareasCalendario.filter(t => t.fecha === hoyIso && t.estado === 'pendiente').length;
+            return n > 0 ? n : null;
+          })()} />
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
           <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
           <NavItem icon={Sun} label="Ambiente" section="ambiente" />
@@ -21895,6 +23162,7 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
           {activeSection === 'informes' && renderInformes()}
           {activeSection === 'contabilidad' && renderContabilidad()}
           {activeSection === 'produccion' && renderProduccion()}
+          {activeSection === 'planificacion' && renderPlanificacion()}
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
@@ -22345,6 +23613,45 @@ Mediante la firma de este formulario de Orden de Domiciliación, usted autoriza 
           </Modal>
         );
       })()}
+      
+      {/* Modal Plan Producción V54 */}
+      {showModal === 'planProduccion' && (
+        <Modal 
+          title={editingItem?.id ? 'Editar plan de producción' : 'Nuevo plan de producción'} 
+          onClose={() => { setShowModal(null); setEditingItem(null); }} 
+          size="max-w-3xl"
+        >
+          <PlanProduccionForm 
+            plan={editingItem?.id ? editingItem : null}
+            onSave={async (form) => {
+              try {
+                const payload = { 
+                  ...form, 
+                  dias_entrega: JSON.stringify(form.dias_entrega),
+                };
+                if (editingItem?.id) {
+                  const { error } = await supabase.from('planes_produccion').update(payload).eq('id', editingItem.id);
+                  if (error) throw error;
+                } else {
+                  const { error } = await supabase.from('planes_produccion').insert(payload);
+                  if (error) throw error;
+                }
+                refetchPlanesProduccion();
+                setShowModal(null);
+                setEditingItem(null);
+                alert(`✅ Plan ${editingItem?.id ? 'actualizado' : 'creado'}. Pulsa "Generar 8 sem." para crear las tareas en el calendario.`);
+              } catch (e) {
+                if (e.code === '42P01') {
+                  alert('❌ Falta ejecutar el SQL V54 en Supabase (tabla planes_produccion no existe).');
+                } else {
+                  alert('❌ Error: ' + e.message);
+                }
+              }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
       
       {showModal === 'reembolso' && <Modal title={editingItem?.id ? 'Editar Reembolso' : 'Registrar Reembolso a Socio'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
         <ReembolsoSocioForm 
