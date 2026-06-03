@@ -1614,6 +1614,9 @@ const MainApp = () => {
   const { data: tareasCalendarioData, refetch: refetchTareasCalendario } = useRealtime('tareas_calendario');
   // V56 - Slack
   const { data: configSlackData, refetch: refetchConfigSlack } = useRealtime('config_slack');
+  // V58 - Albaranes
+  const { data: albaranesData, refetch: refetchAlbaranes } = useRealtime('albaranes');
+  const { data: albaranPedidosData, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1731,6 +1734,9 @@ const MainApp = () => {
   const tareasCalendario = tareasCalendarioData || [];
   // V56 - Slack
   const configSlack = (configSlackData && configSlackData[0]) || null;
+  // V58 - Albaranes
+  const albaranes = albaranesData || [];
+  const albaranPedidos = albaranPedidosData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -9435,7 +9441,28 @@ ${pedidoLinea ? `^FO260,244
                             default: return null;
                           }
                         })}
-                        <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1"><button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button></div></td>
+                        <td className="px-3 md:px-5 py-3 md:py-4"><div className="flex justify-end gap-1">
+                          {(() => {
+                            const totalmenteEntregado = pedidoTotalmenteEntregado(pedido);
+                            const albaranesDelPedido = albaranPedidos.filter(ap => ap.pedido_id === pedido.id);
+                            if (totalmenteEntregado) {
+                              return <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-[10px] font-bold" title="Pedido totalmente entregado vía albaranes">✓ Entregado</span>;
+                            }
+                            if (albaranesDelPedido.length > 0) {
+                              return <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-[10px] font-bold" title={`${albaranesDelPedido.length} albarán(es) parcial(es)`}>⏳ Parcial</span>;
+                            }
+                            return null;
+                          })()}
+                          <button 
+                            onClick={() => { setPedidoParaAlbaran(pedido); setEditingItem(null); setShowModal('albaran'); }} 
+                            className="p-2 text-neutral-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" 
+                            title="Generar albarán"
+                          >
+                            <FileText size={16} />
+                          </button>
+                          <button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
+                          <button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                        </div></td>
                       </tr>
                     );
                   })}
@@ -11800,6 +11827,8 @@ ${transacciones}
   const [mapaModo, setMapaModo] = useState('variedad'); // 'variedad' | 'dias' | 'fase'
   // V49: data para modal de etiquetas tras empaquetar
   const [etiquetasEmpaquetadoData, setEtiquetasEmpaquetadoData] = useState(null);
+  // V58: pedido preseleccionado para generar albarán
+  const [pedidoParaAlbaran, setPedidoParaAlbaran] = useState(null);
   
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
@@ -12118,6 +12147,225 @@ ${logoRootflow}^FS
     };
 
   // V54: Vista de planificación de producción
+  // V58: Función auxiliar para crear/actualizar albarán en BD
+  const guardarAlbaran = async (form, idExistente = null) => {
+    try {
+      let albaranId = idExistente;
+      
+      if (!albaranId) {
+        const year = new Date().getFullYear();
+        const { count } = await supabase.from('albaranes').select('*', { count: 'exact', head: true });
+        albaranId = `A-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+      }
+      
+      const cliente = clientes.find(c => c.id === parseInt(form.cliente_id));
+      
+      const albaranData = {
+        id: albaranId,
+        cliente_id: parseInt(form.cliente_id),
+        fecha_emision: form.fecha_emision || new Date().toISOString().slice(0, 10),
+        fecha_entrega_prevista: form.fecha_entrega_prevista || null,
+        estado: form.estado || 'generado',
+        valorado: !!form.valorado,
+        items_json: form.items,
+        cliente_nombre: cliente?.nombre || '',
+        cliente_cif: cliente?.cif || '',
+        direccion_entrega: cliente?.direccion || '',
+        subtotal: form.subtotal || 0,
+        descuento_aplicado: form.descuento_aplicado || 0,
+        base_imponible: form.base_imponible || 0,
+        iva_porcentaje: IVA_VENTAS,
+        iva: form.iva || 0,
+        recargo_equivalencia: cliente?.recargo_equivalencia || false,
+        re_importe: form.re_importe || 0,
+        total: form.total || 0,
+        repartidor: form.repartidor || '',
+        vehiculo: form.vehiculo || '',
+        notas: form.notas || '',
+      };
+      
+      if (idExistente) {
+        const { error } = await supabase.from('albaranes').update(albaranData).eq('id', idExistente);
+        if (error) throw error;
+        // Borrar relaciones previas
+        await supabase.from('albaran_pedidos').delete().eq('albaran_id', idExistente);
+      } else {
+        const { error } = await supabase.from('albaranes').insert(albaranData);
+        if (error) throw error;
+      }
+      
+      // Insertar relaciones pedido↔albarán con qué se entregó de cada pedido
+      const pedidosSel = form.pedidos_seleccionados || [];
+      if (pedidosSel.length > 0) {
+        const relaciones = pedidosSel.map(pedidoId => {
+          const itemsDelPedido = form.items.filter(it => it.de_pedido_id === pedidoId);
+          return {
+            albaran_id: albaranId,
+            pedido_id: pedidoId,
+            items_entregados_json: itemsDelPedido.map(it => ({ producto_id: it.producto_id, cantidad: it.cantidad })),
+          };
+        });
+        const { error: relErr } = await supabase.from('albaran_pedidos').insert(relaciones);
+        if (relErr) console.warn('No se pudo guardar relaciones:', relErr);
+      }
+      
+      // Vincular el albarán principal a los pedidos (informativo)
+      if (pedidosSel.length === 1 && !idExistente) {
+        try {
+          await supabase.from('pedidos').update({ albaran_principal_id: albaranId }).eq('id', pedidosSel[0]);
+        } catch (e) { console.warn(e); }
+      }
+      
+      refetchAlbaranes();
+      refetchAlbaranPedidos();
+      refetchPedidos();
+      
+      return albaranId;
+    } catch (error) {
+      console.error('Error guardando albarán:', error);
+      if (error.code === '42P01') {
+        alert('❌ Falta ejecutar el SQL V58 (tabla albaranes no existe).');
+      } else {
+        alert('❌ Error: ' + (error.message || String(error)));
+      }
+      throw error;
+    }
+  };
+
+  // V58: Vista Albaranes
+  const renderAlbaranes = () => {
+    const estadoCfg = {
+      generado:  { label: 'Generado',  color: 'bg-blue-100 text-blue-700',     icon: '📋' },
+      entregado: { label: 'Entregado', color: 'bg-green-100 text-green-700',   icon: '✓' },
+      facturado: { label: 'Facturado', color: 'bg-purple-100 text-purple-700', icon: '🧾' },
+      anulado:   { label: 'Anulado',   color: 'bg-red-100 text-red-700',       icon: '✗' },
+    };
+    
+    const albaranesFiltrados = albaranes
+      .filter(a => {
+        if (busqueda) {
+          const q = busqueda.toLowerCase();
+          const cli = clientes.find(c => c.id === a.cliente_id);
+          return a.id.toLowerCase().includes(q) || (cli?.nombre || '').toLowerCase().includes(q);
+        }
+        return true;
+      })
+      .sort((a, b) => new Date(b.fecha_emision) - new Date(a.fecha_emision));
+    
+    // KPIs
+    const totalGenerados = albaranes.filter(a => a.estado === 'generado').length;
+    const totalEntregados = albaranes.filter(a => a.estado === 'entregado').length;
+    const totalPendientesFacturar = albaranes.filter(a => a.estado === 'entregado' && !a.factura_semanal_id && !a.numero_factura).length;
+    const mesActual = new Date().toISOString().slice(0,7);
+    const totalMesActual = albaranes.filter(a => a.fecha_emision?.startsWith(mesActual)).length;
+    
+    return (
+      <div className="space-y-4 max-w-screen-2xl mx-auto px-2 sm:px-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">📋 Albaranes</h1>
+            <p className="text-xs text-neutral-500 mt-1">Documentos de entrega · vinculan pedidos con facturas</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('albaran'); }}>
+            <Plus size={16} /> Nuevo albarán
+          </Button>
+        </div>
+        
+        {/* KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Generados</p><p className="text-2xl font-black text-blue-600">{totalGenerados}</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Entregados</p><p className="text-2xl font-black text-green-600">{totalEntregados}</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Sin facturar</p><p className="text-2xl font-black text-amber-600">{totalPendientesFacturar}</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Mes actual</p><p className="text-2xl font-black">{totalMesActual}</p></Card>
+        </div>
+        
+        {/* Buscador */}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={busqueda}
+            onChange={e => setBusqueda(e.target.value)}
+            placeholder="Buscar por nº albarán o cliente..."
+            className="flex-1 px-4 py-2 rounded-xl border border-neutral-300"
+          />
+        </div>
+        
+        {/* Lista */}
+        <Card>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-neutral-50">
+                <tr>
+                  <th className="text-left p-3 text-xs font-semibold">Nº</th>
+                  <th className="text-left p-3 text-xs font-semibold">Fecha</th>
+                  <th className="text-left p-3 text-xs font-semibold">Cliente</th>
+                  <th className="text-center p-3 text-xs font-semibold">Líneas</th>
+                  <th className="text-center p-3 text-xs font-semibold">Pedidos</th>
+                  <th className="text-right p-3 text-xs font-semibold">Total</th>
+                  <th className="text-center p-3 text-xs font-semibold">Estado</th>
+                  <th className="text-right p-3 text-xs font-semibold">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {albaranesFiltrados.length === 0 ? (
+                  <tr><td colSpan={8} className="p-8 text-center text-neutral-500">No hay albaranes</td></tr>
+                ) : (
+                  albaranesFiltrados.map(alb => {
+                    const cli = clientes.find(c => c.id === alb.cliente_id);
+                    const cfg = estadoCfg[alb.estado] || estadoCfg.generado;
+                    const itemsArr = Array.isArray(alb.items_json) ? alb.items_json : [];
+                    const pedidosVinc = albaranPedidos.filter(ap => ap.albaran_id === alb.id);
+                    
+                    return (
+                      <tr key={alb.id} className="border-t hover:bg-neutral-50">
+                        <td className="p-3 font-mono font-bold text-orange-600">{alb.id}</td>
+                        <td className="p-3 text-sm">{formatDate(alb.fecha_emision)}</td>
+                        <td className="p-3 font-medium text-sm">{cli?.nombre || alb.cliente_nombre || '—'}</td>
+                        <td className="p-3 text-center"><Badge className="bg-neutral-100">{itemsArr.length}</Badge></td>
+                        <td className="p-3 text-center text-xs text-neutral-500">{pedidosVinc.map(ap => `#${ap.pedido_id}`).join(', ') || '—'}</td>
+                        <td className="p-3 text-right font-bold">
+                          {alb.valorado ? formatCurrency(alb.total) : <span className="text-neutral-400 italic text-xs">sin valorar</span>}
+                        </td>
+                        <td className="p-3 text-center">
+                          <Badge className={cfg.color}>{cfg.icon} {cfg.label}</Badge>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex justify-end gap-1">
+                            <button onClick={() => generarPDFAlbaran(alb)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver/imprimir PDF"><Printer size={16} /></button>
+                            {alb.estado === 'generado' && (
+                              <button 
+                                onClick={async () => {
+                                  await supabase.from('albaranes').update({ estado: 'entregado', fecha_entrega_real: new Date().toISOString().slice(0,10) }).eq('id', alb.id);
+                                  refetchAlbaranes();
+                                }} 
+                                className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como entregado">
+                                <CheckCircle size={16} />
+                              </button>
+                            )}
+                            {alb.estado !== 'anulado' && (
+                              <button onClick={() => { setEditingItem(alb); setShowModal('albaran'); }} className="p-2 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Editar"><Edit2 size={16} /></button>
+                            )}
+                            <button onClick={async () => {
+                              if (window.confirm(`¿Eliminar el albarán ${alb.id}?`)) {
+                                await supabase.from('albaran_pedidos').delete().eq('albaran_id', alb.id);
+                                await supabase.from('albaranes').delete().eq('id', alb.id);
+                                refetchAlbaranes(); refetchAlbaranPedidos();
+                              }
+                            }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
   const renderPlanificacion = () => {
     const hoy = new Date(); hoy.setHours(0,0,0,0);
     const hoyIso = hoy.toISOString().slice(0,10);
@@ -18454,6 +18702,483 @@ SELECT cron.schedule(
     return mensaje;
   };
 
+  // ==================== V58 — ALBARANES ====================
+  
+  // Generador de PDF de albarán (HTML imprimible)
+  const generarPDFAlbaran = (albaran) => {
+    if (!albaran) return;
+    const cliente = clientes.find(c => c.id === albaran.cliente_id);
+    const itemsArr = Array.isArray(albaran.items_json) ? albaran.items_json : [];
+    const valorado = !!albaran.valorado;
+    const pedidosVinculados = albaranPedidos
+      .filter(ap => ap.albaran_id === albaran.id)
+      .map(ap => ap.pedido_id);
+    
+    const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
+    const fechaEmStr = albaran.fecha_emision ? new Date(albaran.fecha_emision).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
+    const fechaEntStr = albaran.fecha_entrega_prevista ? new Date(albaran.fecha_entrega_prevista).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
+    
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Albarán ${albaran.id}</title>
+<style>
+@page { size: A4; margin: 14mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.4; padding: 0; }
+
+.header { display: flex; justify-content: space-between; align-items: start; border-bottom: 3px solid #ED7E1F; padding-bottom: 14px; margin-bottom: 22px; }
+.brand-block { display: flex; align-items: center; gap: 12px; }
+.brand-block img { height: 42px; }
+.brand { font-weight: 800; font-size: 22pt; letter-spacing: -0.5px; }
+.brand .o { color: #ED7E1F; }
+.brand-sub { font-size: 8pt; letter-spacing: 1.5px; color: #555; margin-top: 2px; }
+.alb-num { text-align: right; }
+.alb-num h1 { font-size: 26pt; color: #ED7E1F; font-weight: 800; margin: 0; }
+.alb-num .ref { font-family: monospace; font-size: 13pt; font-weight: 700; margin-top: 2px; }
+.alb-num .dates { font-size: 9pt; color: #666; margin-top: 4px; }
+
+${!valorado ? `
+.sin-valor { background: #fef3c7; border: 2px solid #f59e0b; padding: 10px 16px; border-radius: 6px; margin-bottom: 18px; text-align: center; }
+.sin-valor strong { color: #92400e; }` : `
+.valorado { background: #ecfdf5; border: 2px solid #10b981; padding: 10px 16px; border-radius: 6px; margin-bottom: 18px; text-align: center; }
+.valorado strong { color: #065f46; }`}
+
+.addresses { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 22px; }
+.addr-box { padding: 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid #ED7E1F; }
+.addr-box h3 { font-size: 9pt; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.addr-box p { font-size: 10.5pt; line-height: 1.5; margin: 0; }
+.addr-box strong { font-size: 12pt; }
+
+table.items { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
+table.items th { background: #ED7E1F; color: white; padding: 9px 11px; text-align: left; font-size: 10pt; text-transform: uppercase; letter-spacing: 0.5px; }
+table.items th.right { text-align: right; }
+table.items th.center { text-align: center; }
+table.items td { padding: 9px 11px; border-bottom: 1px solid #eee; font-size: 10.5pt; }
+table.items td.right { text-align: right; }
+table.items td.center { text-align: center; }
+table.items .codigo { color: #888; font-family: monospace; font-size: 9pt; }
+
+${valorado ? `
+.totals { margin-left: auto; width: 300px; margin-bottom: 22px; }
+.totals-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #eee; font-size: 11pt; }
+.totals-row.total { border-top: 2px solid #ED7E1F; border-bottom: none; padding-top: 12px; margin-top: 8px; font-size: 16pt; font-weight: 800; color: #ED7E1F; }` : ''}
+
+.notas { margin: 18px 0; padding: 12px 16px; background: #fffbeb; border-left: 4px solid #ED7E1F; font-size: 10pt; }
+.notas h4 { font-size: 10pt; color: #92400e; text-transform: uppercase; margin-bottom: 4px; }
+
+.firma-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 32px; }
+.firma-box { border: 1px solid #444; padding: 12px; min-height: 110px; }
+.firma-box .title { font-size: 9pt; font-weight: 700; color: #444; border-bottom: 1px solid #444; padding-bottom: 5px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
+.firma-box .small { font-size: 8.5pt; color: #666; line-height: 1.6; margin-top: 30px; }
+
+.footer { margin-top: 22px; padding-top: 12px; border-top: 1px solid #ccc; font-size: 8pt; color: #666; text-align: center; line-height: 1.5; }
+
+.no-print { position: fixed; top: 14px; right: 14px; background: #ED7E1F; color: white; padding: 9px 16px; border: none; border-radius: 5px; font-weight: 700; cursor: pointer; font-size: 11pt; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 999; }
+.no-print:hover { background: #c75d0e; }
+@media print { .no-print { display: none; } }
+</style>
+</head>
+<body>
+<button class="no-print" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+
+<div class="header">
+  <div class="brand-block">
+    <img src="${logoUrl}" alt="RootFlow" onerror="this.style.display='none'">
+    <div>
+      <div class="brand">Root<span class="o">Flow</span></div>
+      <div class="brand-sub">HYDROPONICS S.L.</div>
+    </div>
+  </div>
+  <div class="alb-num">
+    <h1>ALBARÁN</h1>
+    <div class="ref">${albaran.id}</div>
+    <div class="dates">
+      Emisión: ${fechaEmStr}
+      ${fechaEntStr ? `<br>Entrega prevista: ${fechaEntStr}` : ''}
+    </div>
+  </div>
+</div>
+
+${!valorado ? `<div class="sin-valor">📋 <strong>ALBARÁN SIN VALORAR</strong> — Los importes se reflejarán en la factura correspondiente</div>` : `<div class="valorado">💰 <strong>ALBARÁN VALORADO</strong></div>`}
+
+<div class="addresses">
+  <div class="addr-box">
+    <h3>Emisor</h3>
+    <p><strong>${(typeof EMPRESA !== 'undefined' && EMPRESA?.nombre) || 'ROOTFLOW HYDROPONICS S.L.'}</strong></p>
+    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.direccion) || 'C. Nueva 16 P6'}</p>
+    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.cp) || '28231'} ${(typeof EMPRESA !== 'undefined' && EMPRESA?.ciudad) || 'Las Rozas de Madrid'}</p>
+    <p>CIF: ${(typeof EMPRESA !== 'undefined' && EMPRESA?.cif) || 'B27535137'}</p>
+    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.telefono) || '694 918 481'}</p>
+  </div>
+  <div class="addr-box">
+    <h3>Destinatario</h3>
+    <p><strong>${albaran.cliente_nombre || cliente?.nombre || 'Cliente'}</strong></p>
+    <p>${albaran.direccion_entrega || cliente?.direccion || ''}</p>
+    ${cliente?.codigo_postal || cliente?.ciudad ? `<p>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}</p>` : ''}
+    ${(albaran.cliente_cif || cliente?.cif) ? `<p>CIF: ${albaran.cliente_cif || cliente?.cif}</p>` : ''}
+    ${cliente?.telefono ? `<p>${cliente.telefono}</p>` : ''}
+  </div>
+</div>
+
+${pedidosVinculados.length > 0 ? `<p style="font-size: 9pt; color: #666; margin-bottom: 10px;">📦 Pedidos asociados: ${pedidosVinculados.map(pid => `#${pid}`).join(', ')}</p>` : ''}
+
+<table class="items">
+  <thead>
+    <tr>
+      <th>Descripción</th>
+      <th class="center">Cantidad</th>
+      ${valorado ? `<th class="right">Precio Unit.</th><th class="right">Importe</th>` : ''}
+    </tr>
+  </thead>
+  <tbody>
+    ${itemsArr.map(it => {
+      const prod = productos.find(p => p.id === parseInt(it.producto_id));
+      const nombre = it.producto_nombre || prod?.nombre || 'Producto';
+      const unidad = it.producto_unidad || prod?.unidad || 'ud';
+      return `<tr>
+        <td>${nombre}</td>
+        <td class="center">${it.cantidad} ${unidad}</td>
+        ${valorado ? `<td class="right">${formatCurrency(it.precio_unitario || 0)}</td><td class="right">${formatCurrency(it.subtotal || 0)}</td>` : ''}
+      </tr>`;
+    }).join('')}
+  </tbody>
+</table>
+
+${valorado ? `
+<div class="totals">
+  <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(albaran.subtotal || 0)}</span></div>
+  ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span>Descuento</span><span>-${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
+  <div class="totals-row"><span>Base imponible</span><span>${formatCurrency(albaran.base_imponible || 0)}</span></div>
+  <div class="totals-row"><span>IVA (${albaran.iva_porcentaje || 4}%)</span><span>${formatCurrency(albaran.iva || 0)}</span></div>
+  ${(albaran.re_importe || 0) > 0 ? `<div class="totals-row"><span>Recargo equiv.</span><span>${formatCurrency(albaran.re_importe)}</span></div>` : ''}
+  <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(albaran.total || 0)}</span></div>
+</div>` : ''}
+
+${albaran.notas ? `<div class="notas"><h4>Notas</h4><p>${albaran.notas}</p></div>` : ''}
+
+<div class="firma-grid">
+  <div class="firma-box">
+    <div class="title">Conforme cliente</div>
+    <div class="small">
+      Nombre/Sello: ____________________<br><br>
+      DNI: ____________________<br><br>
+      Fecha: ____________________
+    </div>
+  </div>
+  <div class="firma-box">
+    <div class="title">Entregado por</div>
+    <div class="small">
+      ${albaran.repartidor ? `Repartidor: ${albaran.repartidor}<br><br>` : 'Repartidor: ____________________<br><br>'}
+      ${albaran.vehiculo ? `Vehículo: ${albaran.vehiculo}<br><br>` : 'Vehículo: ____________________<br><br>'}
+      Fecha: ${albaran.fecha_entrega_real ? new Date(albaran.fecha_entrega_real).toLocaleDateString('es-ES') : '____________________'}
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <strong>${(typeof EMPRESA !== 'undefined' && EMPRESA?.nombre) || 'ROOTFLOW HYDROPONICS S.L.'}</strong> · CIF ${(typeof EMPRESA !== 'undefined' && EMPRESA?.cif) || 'B27535137'} · ${(typeof EMPRESA !== 'undefined' && EMPRESA?.direccion) || 'C. Nueva 16 P6, 28231 Las Rozas de Madrid'}<br>
+  Tel: ${(typeof EMPRESA !== 'undefined' && EMPRESA?.telefono) || '694 918 481'} · ${(typeof EMPRESA !== 'undefined' && EMPRESA?.email) || 'info@rootflow.es'}
+</div>
+
+</body>
+</html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { alert('⚠️ Permite pop-ups para ver el albarán'); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // Formulario AlbaranForm
+  const AlbaranForm = ({ albaran, pedidoPreseleccionado, onSave, onCancel }) => {
+    const esEdicion = !!albaran?.id;
+    
+    // Si viene un pedido preseleccionado, autocargar sus items pendientes
+    const initialFromPedido = (() => {
+      if (esEdicion) return null;
+      if (!pedidoPreseleccionado) return null;
+      const pendientes = getItemsPendientesPedido(pedidoPreseleccionado);
+      if (pendientes.length === 0) return null;
+      return {
+        cliente_id: pedidoPreseleccionado.cliente_id,
+        pedidos_seleccionados: [pedidoPreseleccionado.id],
+        items: pendientes.map(it => {
+          const prod = productos.find(p => p.id === it.producto_id);
+          return {
+            producto_id: it.producto_id,
+            cantidad: it.cantidad_pendiente,
+            precio_unitario: getPrecioCliente(it.producto_id, pedidoPreseleccionado.cliente_id),
+            producto_nombre: prod?.nombre || '',
+            producto_unidad: prod?.unidad || 'ud',
+            de_pedido_id: pedidoPreseleccionado.id,
+          };
+        }),
+      };
+    })();
+    
+    const itemsIniciales = (() => {
+      if (esEdicion) {
+        return Array.isArray(albaran.items_json) ? albaran.items_json : [];
+      }
+      if (initialFromPedido) return initialFromPedido.items;
+      return [];
+    })();
+    
+    const [form, setForm] = useState({
+      cliente_id: albaran?.cliente_id || initialFromPedido?.cliente_id || (clientes[0]?.id || null),
+      fecha_emision: albaran?.fecha_emision || new Date().toISOString().slice(0, 10),
+      fecha_entrega_prevista: albaran?.fecha_entrega_prevista || (() => {
+        const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0,10);
+      })(),
+      valorado: albaran?.valorado || false,
+      items: itemsIniciales,
+      pedidos_seleccionados: albaran ? (albaranPedidos.filter(ap => ap.albaran_id === albaran.id).map(ap => ap.pedido_id)) : (initialFromPedido?.pedidos_seleccionados || []),
+      repartidor: albaran?.repartidor || '',
+      vehiculo: albaran?.vehiculo || '',
+      notas: albaran?.notas || '',
+    });
+    
+    const clienteSel = clientes.find(c => c.id === parseInt(form.cliente_id));
+    
+    // Pedidos disponibles del cliente (pendientes o parcialmente entregados)
+    const pedidosDisponibles = pedidos
+      .filter(p => p.cliente_id === parseInt(form.cliente_id))
+      .filter(p => ['nuevo', 'confirmado', 'preparando', 'preparado', 'pendiente'].includes(p.estado))
+      .filter(p => !pedidoTotalmenteEntregado(p) || form.pedidos_seleccionados.includes(p.id))
+      .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    
+    // Toggle pedido y traer/quitar sus items pendientes
+    const togglePedido = (pedidoId) => {
+      const pedido = pedidos.find(p => p.id === pedidoId);
+      if (!pedido) return;
+      const yaSel = form.pedidos_seleccionados.includes(pedidoId);
+      
+      if (yaSel) {
+        // Quitar: filtrar items que vienen de ese pedido
+        setForm({
+          ...form,
+          pedidos_seleccionados: form.pedidos_seleccionados.filter(id => id !== pedidoId),
+          items: form.items.filter(it => it.de_pedido_id !== pedidoId),
+        });
+      } else {
+        // Añadir: traer items pendientes
+        const pendientes = getItemsPendientesPedido(pedido);
+        const nuevosItems = pendientes.map(it => {
+          const prod = productos.find(p => p.id === it.producto_id);
+          return {
+            producto_id: it.producto_id,
+            cantidad: it.cantidad_pendiente,
+            precio_unitario: getPrecioCliente(it.producto_id, pedido.cliente_id),
+            producto_nombre: prod?.nombre || '',
+            producto_unidad: prod?.unidad || 'ud',
+            de_pedido_id: pedidoId,
+          };
+        });
+        setForm({
+          ...form,
+          pedidos_seleccionados: [...form.pedidos_seleccionados, pedidoId],
+          items: [...form.items, ...nuevosItems],
+        });
+      }
+    };
+    
+    const updateItem = (idx, field, value) => {
+      const newItems = [...form.items];
+      newItems[idx] = { ...newItems[idx], [field]: value };
+      setForm({ ...form, items: newItems });
+    };
+    
+    const removeItem = (idx) => {
+      setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
+    };
+    
+    const addItem = () => {
+      if (productos.length === 0) return;
+      const prod = productos[0];
+      setForm({
+        ...form,
+        items: [...form.items, {
+          producto_id: prod.id,
+          cantidad: 1,
+          precio_unitario: getPrecioCliente(prod.id, form.cliente_id),
+          producto_nombre: prod.nombre,
+          producto_unidad: prod.unidad || 'ud',
+          de_pedido_id: null,
+        }],
+      });
+    };
+    
+    // Recalcular totales
+    const subtotal = form.items.reduce((s, it) => s + ((it.precio_unitario || 0) * (it.cantidad || 0)), 0);
+    const descuento = clienteSel?.descuento || 0;
+    const descuentoAplicado = subtotal * (descuento / 100);
+    const baseImponible = subtotal - descuentoAplicado;
+    const iva = baseImponible * (IVA_VENTAS / 100);
+    const re = (clienteSel?.recargo_equivalencia ? baseImponible * (RE_VENTAS / 100) : 0);
+    const total = baseImponible + iva + re;
+    
+    return (
+      <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2">
+        {/* Cliente, fechas */}
+        <div className="grid grid-cols-3 gap-3">
+          <Select 
+            label="Cliente *" 
+            value={form.cliente_id || ''} 
+            onChange={e => setForm({...form, cliente_id: parseInt(e.target.value), pedidos_seleccionados: [], items: []})}
+            options={clientes.map(c => ({ value: c.id, label: c.nombre }))}
+          />
+          <Input label="Fecha emisión" type="date" value={form.fecha_emision} onChange={e => setForm({...form, fecha_emision: e.target.value})} />
+          <Input label="Fecha entrega" type="date" value={form.fecha_entrega_prevista} onChange={e => setForm({...form, fecha_entrega_prevista: e.target.value})} />
+        </div>
+        
+        {/* Toggle valorado */}
+        <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 flex items-center justify-between">
+          <div>
+            <p className="font-semibold text-sm">¿Albarán valorado (con precios)?</p>
+            <p className="text-xs text-neutral-500">Por defecto sin valorar — los precios solo aparecen en la factura</p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" checked={form.valorado} onChange={e => setForm({...form, valorado: e.target.checked})} className="sr-only peer" />
+            <div className="w-11 h-6 bg-neutral-300 peer-checked:bg-green-500 rounded-full peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all" />
+          </label>
+        </div>
+        
+        {/* Pedidos disponibles del cliente */}
+        {form.cliente_id && pedidosDisponibles.length > 0 && (
+          <div className="border border-blue-200 bg-blue-50 rounded-xl p-3">
+            <p className="font-semibold text-sm text-blue-900 mb-2">📦 Pedidos pendientes de {clienteSel?.nombre}</p>
+            <p className="text-xs text-blue-700 mb-2">Marca los que quieras incluir en este albarán. Se autocargan las cantidades pendientes.</p>
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {pedidosDisponibles.map(p => {
+                const seleccionado = form.pedidos_seleccionados.includes(p.id);
+                const pendientes = getItemsPendientesPedido(p);
+                const totalPedido = pedidoItems.filter(it => it.pedido_id === p.id).reduce((s, it) => s + (it.cantidad || 0), 0);
+                const totalPendiente = pendientes.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+                const parcial = totalPendiente < totalPedido;
+                return (
+                  <label key={p.id} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer ${seleccionado ? 'bg-blue-100 border border-blue-400' : 'bg-white border border-transparent hover:border-blue-200'}`}>
+                    <input type="checkbox" checked={seleccionado} onChange={() => togglePedido(p.id)} />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-sm">Pedido #{p.id}</span>
+                      <span className="text-xs text-neutral-500 ml-2">{formatDate(p.fecha)} · entrega {formatDate(p.fecha_entrega)}</span>
+                      {parcial && <Badge className="bg-amber-100 text-amber-700 text-[10px] ml-2">Parcial: {totalPendiente}/{totalPedido}u</Badge>}
+                    </div>
+                    <Badge className="bg-neutral-100">{pendientes.length} líneas</Badge>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        
+        {/* Items del albarán */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <p className="font-semibold text-sm">Productos a entregar</p>
+            <button type="button" onClick={addItem} className="text-xs text-orange-600 font-semibold flex items-center gap-1">
+              <Plus size={14} /> Añadir línea
+            </button>
+          </div>
+          {form.items.length === 0 ? (
+            <div className="text-center py-6 text-neutral-400 text-sm border border-dashed border-neutral-300 rounded-xl">
+              Sin productos. Selecciona un pedido arriba o añade manualmente.
+            </div>
+          ) : (
+            <div className="space-y-1.5 bg-neutral-50 rounded-xl p-2 border">
+              {form.items.map((it, idx) => {
+                const prod = productos.find(p => p.id === parseInt(it.producto_id));
+                const subTot = (it.cantidad || 0) * (it.precio_unitario || 0);
+                return (
+                  <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border flex-wrap">
+                    <select 
+                      value={it.producto_id || ''} 
+                      onChange={e => {
+                        const pId = parseInt(e.target.value);
+                        const p = productos.find(pp => pp.id === pId);
+                        updateItem(idx, 'producto_id', pId);
+                        updateItem(idx, 'producto_nombre', p?.nombre || '');
+                        updateItem(idx, 'producto_unidad', p?.unidad || 'ud');
+                        updateItem(idx, 'precio_unitario', getPrecioCliente(pId, form.cliente_id));
+                      }} 
+                      className="flex-1 min-w-[180px] px-2 py-1 rounded border text-sm"
+                    >
+                      <option value="">— Producto —</option>
+                      {productos.map(p => <option key={p.id} value={p.id}>{p.nombre} ({p.unidad || 'ud'})</option>)}
+                    </select>
+                    <input 
+                      type="number" 
+                      value={it.cantidad} 
+                      onChange={e => updateItem(idx, 'cantidad', parseInt(e.target.value) || 0)}
+                      className="w-16 px-2 py-1 rounded border text-sm text-center" 
+                      min="0"
+                    />
+                    <span className="text-xs text-neutral-500 w-12">{prod?.unidad || 'ud'}</span>
+                    {form.valorado && (
+                      <>
+                        <input 
+                          type="number" step="0.01"
+                          value={it.precio_unitario || 0}
+                          onChange={e => updateItem(idx, 'precio_unitario', parseFloat(e.target.value) || 0)}
+                          className="w-20 px-2 py-1 rounded border text-sm text-right"
+                          title="Precio unitario"
+                        />
+                        <span className="text-xs font-semibold w-20 text-right">{formatCurrency(subTot)}</span>
+                      </>
+                    )}
+                    {it.de_pedido_id && <Badge className="bg-blue-100 text-blue-700 text-[10px]">#{it.de_pedido_id}</Badge>}
+                    <button type="button" onClick={() => removeItem(idx)} className="text-red-500 hover:bg-red-50 p-1 rounded">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        
+        {/* Totales (sólo si valorado) */}
+        {form.valorado && form.items.length > 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+            <div className="flex flex-col items-end space-y-1 text-sm">
+              <div className="flex justify-between w-64"><span>Subtotal:</span><span>{formatCurrency(subtotal)}</span></div>
+              {descuentoAplicado > 0 && <div className="flex justify-between w-64 text-green-700"><span>Descuento ({descuento}%):</span><span>-{formatCurrency(descuentoAplicado)}</span></div>}
+              <div className="flex justify-between w-64"><span>Base imponible:</span><span>{formatCurrency(baseImponible)}</span></div>
+              <div className="flex justify-between w-64"><span>IVA ({IVA_VENTAS}%):</span><span>{formatCurrency(iva)}</span></div>
+              {re > 0 && <div className="flex justify-between w-64"><span>R.E. ({RE_VENTAS}%):</span><span>{formatCurrency(re)}</span></div>}
+              <div className="flex justify-between w-64 text-lg font-black border-t pt-1 mt-1"><span>TOTAL:</span><span className="text-green-700">{formatCurrency(total)}</span></div>
+            </div>
+          </div>
+        )}
+        
+        {/* Logística */}
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Repartidor (opcional)" value={form.repartidor} onChange={e => setForm({...form, repartidor: e.target.value})} placeholder="Domingo, Nico, ..." />
+          <Input label="Vehículo (opcional)" value={form.vehiculo} onChange={e => setForm({...form, vehiculo: e.target.value})} placeholder="Matrícula o nombre" />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas / observaciones</label>
+          <textarea value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-neutral-300" rows={2} placeholder="Instrucciones de entrega, observaciones..." />
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.cliente_id) { alert('Selecciona un cliente'); return; }
+            if (form.items.length === 0) { alert('Añade al menos un producto'); return; }
+            const itemsValidos = form.items.filter(it => it.producto_id && (it.cantidad || 0) > 0);
+            if (itemsValidos.length === 0) { alert('Las cantidades deben ser mayores que 0'); return; }
+            onSave({ ...form, items: itemsValidos, subtotal, descuento_aplicado: descuentoAplicado, base_imponible: baseImponible, iva, re_importe: re, total });
+          }}>
+            {esEdicion ? 'Guardar albarán' : 'Crear albarán'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const PlanProduccionForm = ({ plan, onSave, onCancel }) => {
     const initialForm = plan || {
       nombre: '',
@@ -18618,6 +19343,47 @@ SELECT cron.schedule(
         </div>
       </div>
     );
+  };
+
+  // V58: Helpers para albaranes
+  // Calcula qué cantidad pendiente queda de cada item del pedido (no entregada aún en albaranes)
+  const getItemsPendientesPedido = (pedido) => {
+    if (!pedido) return [];
+    const itemsPed = pedidoItems.filter(i => i.pedido_id === pedido.id);
+    
+    // Albaranes vinculados al pedido (sin contar los anulados)
+    const albaranesVinculados = albaranPedidos.filter(ap => ap.pedido_id === pedido.id);
+    const albaranesActivos = albaranesVinculados.filter(ap => {
+      const alb = albaranes.find(a => a.id === ap.albaran_id);
+      return alb && alb.estado !== 'anulado';
+    });
+    
+    // Suma de cantidades entregadas por producto
+    const entregadoPorProducto = {};
+    albaranesActivos.forEach(ap => {
+      const itemsEnt = Array.isArray(ap.items_entregados_json) ? ap.items_entregados_json : [];
+      itemsEnt.forEach(it => {
+        const pid = parseInt(it.producto_id);
+        entregadoPorProducto[pid] = (entregadoPorProducto[pid] || 0) + (parseInt(it.cantidad) || 0);
+      });
+    });
+    
+    // Items con cantidad pendiente > 0
+    return itemsPed.map(it => {
+      const yaEntregado = entregadoPorProducto[it.producto_id] || 0;
+      const pendiente = (it.cantidad || 0) - yaEntregado;
+      return {
+        ...it,
+        cantidad_pendiente: Math.max(0, pendiente),
+        cantidad_entregada: yaEntregado,
+      };
+    }).filter(it => it.cantidad_pendiente > 0);
+  };
+  
+  // Determina si un pedido está totalmente entregado vía albaranes
+  const pedidoTotalmenteEntregado = (pedido) => {
+    return getItemsPendientesPedido(pedido).length === 0 && 
+           pedidoItems.filter(i => i.pedido_id === pedido.id).length > 0;
   };
 
   // V53: Generador de mandato SEPA B2B — formato oficial bilingüe, 1 página A4
@@ -22787,6 +23553,10 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             const n = tareasCalendario.filter(t => t.fecha === hoyIso && t.estado === 'pendiente').length;
             return n > 0 ? n : null;
           })()} />
+          <NavItem icon={FileText} label="Albaranes" section="albaranes" badge={(() => {
+            const n = albaranes.filter(a => a.estado === 'generado').length;
+            return n > 0 ? n : null;
+          })()} />
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
           <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
           <NavItem icon={Sun} label="Ambiente" section="ambiente" />
@@ -23163,6 +23933,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           {activeSection === 'contabilidad' && renderContabilidad()}
           {activeSection === 'produccion' && renderProduccion()}
           {activeSection === 'planificacion' && renderPlanificacion()}
+          {activeSection === 'albaranes' && renderAlbaranes()}
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
@@ -23613,6 +24384,37 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </Modal>
         );
       })()}
+      
+      {/* Modal Albarán V58 */}
+      {showModal === 'albaran' && (
+        <Modal 
+          title={editingItem?.id ? `Editar albarán ${editingItem.id}` : 'Nuevo albarán'} 
+          onClose={() => { setShowModal(null); setEditingItem(null); setPedidoParaAlbaran(null); }} 
+          size="max-w-4xl"
+        >
+          <AlbaranForm 
+            albaran={editingItem?.id ? editingItem : null}
+            pedidoPreseleccionado={pedidoParaAlbaran}
+            onSave={async (form) => {
+              try {
+                const id = await guardarAlbaran(form, editingItem?.id);
+                setShowModal(null);
+                setEditingItem(null);
+                setPedidoParaAlbaran(null);
+                const seguirAlPDF = window.confirm(`✅ Albarán ${id} ${editingItem?.id ? 'actualizado' : 'creado'} correctamente.\n\n¿Generar PDF para imprimir ahora?`);
+                if (seguirAlPDF) {
+                  // Esperar un momento a que se actualice el estado
+                  setTimeout(async () => {
+                    const { data } = await supabase.from('albaranes').select('*').eq('id', id).single();
+                    if (data) generarPDFAlbaran(data);
+                  }, 300);
+                }
+              } catch (e) { /* ya gestionado en guardarAlbaran */ }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); setPedidoParaAlbaran(null); }}
+          />
+        </Modal>
+      )}
       
       {/* Modal Plan Producción V54 */}
       {showModal === 'planProduccion' && (
