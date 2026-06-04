@@ -10470,6 +10470,9 @@ ${transacciones}
             <Button variant="secondary" size="sm" onClick={handleExportSelected}>
               <Download size={16} /> {selectedFacturas.length > 0 ? `Exportar (${selectedFacturas.length})` : 'Exportar'}
             </Button>
+            <Button size="sm" onClick={() => setShowModal('exportarAsesoria')} className="bg-purple-600 hover:bg-purple-700">
+              📊 Exportar asesoría
+            </Button>
           </div>
         </div>
 
@@ -11829,6 +11832,7 @@ ${transacciones}
   const [etiquetasEmpaquetadoData, setEtiquetasEmpaquetadoData] = useState(null);
   // V58: pedido preseleccionado para generar albarán
   const [pedidoParaAlbaran, setPedidoParaAlbaran] = useState(null);
+  const [busquedaAlbaranes, setBusquedaAlbaranes] = useState('');
   
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
@@ -12243,8 +12247,8 @@ ${logoRootflow}^FS
     
     const albaranesFiltrados = albaranes
       .filter(a => {
-        if (busqueda) {
-          const q = busqueda.toLowerCase();
+        if (busquedaAlbaranes) {
+          const q = busquedaAlbaranes.toLowerCase();
           const cli = clientes.find(c => c.id === a.cliente_id);
           return a.id.toLowerCase().includes(q) || (cli?.nombre || '').toLowerCase().includes(q);
         }
@@ -12283,8 +12287,8 @@ ${logoRootflow}^FS
         <div className="flex gap-2">
           <input
             type="text"
-            value={busqueda}
-            onChange={e => setBusqueda(e.target.value)}
+            value={busquedaAlbaranes}
+            onChange={e => setBusquedaAlbaranes(e.target.value)}
             placeholder="Buscar por nº albarán o cliente..."
             className="flex-1 px-4 py-2 rounded-xl border border-neutral-300"
           />
@@ -18702,9 +18706,280 @@ SELECT cron.schedule(
     return mensaje;
   };
 
+  // V59: Form exportar asesoría
+  const ExportarAsesoriaForm = ({ onExportar, onCancel }) => {
+    const [periodo, setPeriodo] = useState('mes_anterior');
+    
+    // Generar opciones de meses (últimos 12)
+    const mesesOpts = [];
+    const hoy = new Date();
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+      const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const label = d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+      mesesOpts.push({ val, label });
+    }
+    
+    return (
+      <div className="space-y-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm">
+          <p className="font-semibold text-blue-900 mb-1">📋 Excel multi-hoja para asesoría</p>
+          <p className="text-xs text-blue-700">Se incluyen: facturas emitidas, recibos TPV, albaranes valorados, gastos del periodo y un resumen ejecutivo con la liquidación de IVA.</p>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">¿Qué periodo?</label>
+          <div className="space-y-1">
+            <label className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer ${periodo === 'mes_anterior' ? 'bg-purple-50 border border-purple-300' : 'hover:bg-neutral-50'}`}>
+              <input type="radio" name="periodo" value="mes_anterior" checked={periodo === 'mes_anterior'} onChange={() => setPeriodo('mes_anterior')} />
+              <div>
+                <p className="font-medium text-sm">📅 Mes anterior cerrado (recomendado)</p>
+                <p className="text-xs text-neutral-500">El más típico para asesoría a principios de mes</p>
+              </div>
+            </label>
+            <label className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer ${periodo === 'mes_actual' ? 'bg-purple-50 border border-purple-300' : 'hover:bg-neutral-50'}`}>
+              <input type="radio" name="periodo" value="mes_actual" checked={periodo === 'mes_actual'} onChange={() => setPeriodo('mes_actual')} />
+              <div>
+                <p className="font-medium text-sm">📅 Mes en curso (parcial)</p>
+                <p className="text-xs text-neutral-500">Útil para revisar antes de cerrar</p>
+              </div>
+            </label>
+            <label className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer ${periodo.startsWith('20') ? 'bg-purple-50 border border-purple-300' : 'hover:bg-neutral-50'}`}>
+              <input type="radio" name="periodo" value="custom" checked={periodo.startsWith('20')} onChange={() => setPeriodo(mesesOpts[0]?.val || '')} />
+              <div className="flex-1">
+                <p className="font-medium text-sm">📆 Mes específico</p>
+                {periodo.startsWith('20') && (
+                  <select 
+                    value={periodo} 
+                    onChange={e => setPeriodo(e.target.value)} 
+                    className="mt-1 text-sm px-2 py-1 rounded border w-full"
+                  >
+                    {mesesOpts.map(o => <option key={o.val} value={o.val}>{o.label}</option>)}
+                  </select>
+                )}
+              </div>
+            </label>
+          </div>
+        </div>
+        
+        <div className="flex justify-end gap-2 pt-3 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onExportar(periodo)} className="bg-purple-600 hover:bg-purple-700">
+            <Download size={14} /> Descargar Excel
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  // V59: Exportar mes completo para asesoría (Excel multi-hoja)
+  const exportarMesParaAsesoria = (mesYYYYMM) => {
+    // mesYYYYMM = "2026-05" o "todo"
+    let inicio, fin, etiquetaMes;
+    if (mesYYYYMM === 'mes_actual') {
+      const hoy = new Date();
+      inicio = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+      fin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0, 23, 59, 59);
+      etiquetaMes = inicio.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    } else if (mesYYYYMM === 'mes_anterior') {
+      const hoy = new Date();
+      inicio = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+      fin = new Date(hoy.getFullYear(), hoy.getMonth(), 0, 23, 59, 59);
+      etiquetaMes = inicio.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    } else if (/^\d{4}-\d{2}$/.test(mesYYYYMM)) {
+      const [y, m] = mesYYYYMM.split('-').map(Number);
+      inicio = new Date(y, m - 1, 1);
+      fin = new Date(y, m, 0, 23, 59, 59);
+      etiquetaMes = inicio.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    } else {
+      alert('Periodo no válido');
+      return;
+    }
+    
+    const enRango = (fecha) => {
+      if (!fecha) return false;
+      const f = new Date(fecha);
+      return f >= inicio && f <= fin;
+    };
+    
+    // === HOJA 1: FACTURAS EMITIDAS ===
+    const facturasMes = facturas.filter(f => enRango(f.fecha));
+    const facturasRows = facturasMes
+      .sort((a,b) => new Date(a.fecha) - new Date(b.fecha))
+      .map(f => {
+        const cli = clientes.find(c => c.id === f.cliente_id);
+        return {
+          'Nº Factura': f.id || '',
+          'Fecha': f.fecha ? new Date(f.fecha).toLocaleDateString('es-ES') : '',
+          'Fecha Vto.': f.fecha_vencimiento ? new Date(f.fecha_vencimiento).toLocaleDateString('es-ES') : '',
+          'Cliente': cli?.nombre || f.cliente_nombre || '',
+          'CIF/NIF': cli?.cif || '',
+          'Dirección': cli?.direccion || '',
+          'CP': cli?.codigo_postal || '',
+          'Ciudad': cli?.ciudad || '',
+          'Base Imponible': parseFloat(f.subtotal || f.base_imponible || 0).toFixed(2),
+          'Descuento': parseFloat(f.descuento_aplicado || 0).toFixed(2),
+          'Base': parseFloat(f.base_imponible || f.subtotal || 0).toFixed(2),
+          'Tipo IVA (%)': parseFloat(f.iva_porcentaje || 4).toFixed(2),
+          'IVA (€)': parseFloat(f.iva || 0).toFixed(2),
+          'Recargo Eq. (€)': parseFloat(f.re_importe || 0).toFixed(2),
+          'Total (€)': parseFloat(f.total || 0).toFixed(2),
+          'Estado': f.estado || '',
+          'Forma Pago': f.forma_pago || '',
+        };
+      });
+    
+    // === HOJA 2: TPV / COBROS DIRECTOS ===
+    const tpvMes = (recibosTpv || []).filter(r => enRango(r.fecha));
+    const tpvRows = tpvMes
+      .sort((a,b) => new Date(a.fecha) - new Date(b.fecha))
+      .map(r => {
+        const cli = r.cliente_id ? clientes.find(c => c.id === r.cliente_id) : null;
+        return {
+          'Nº Recibo': r.id || '',
+          'Fecha': r.fecha ? new Date(r.fecha).toLocaleDateString('es-ES') : '',
+          'Cliente / Pagador': cli?.nombre || r.nombre_pagador || '',
+          'CIF/NIF': cli?.cif || r.dni_pagador || '',
+          'Método': r.metodo_pago || '',
+          'Concepto': r.concepto || '',
+          'Base Imponible': parseFloat(r.base_imponible || 0).toFixed(2),
+          'Tipo IVA (%)': parseFloat(r.iva_porcentaje || 4).toFixed(2),
+          'IVA (€)': parseFloat(r.iva || 0).toFixed(2),
+          'Total (€)': parseFloat(r.total || 0).toFixed(2),
+          'Referencia': r.referencia || '',
+        };
+      });
+    
+    // === HOJA 3: ALBARANES DEL MES (si existen y son valorados) ===
+    const albaranesMes = albaranes.filter(a => enRango(a.fecha_emision));
+    const albaranRows = albaranesMes
+      .sort((a,b) => new Date(a.fecha_emision) - new Date(b.fecha_emision))
+      .map(a => {
+        const cli = clientes.find(c => c.id === a.cliente_id);
+        return {
+          'Nº Albarán': a.id || '',
+          'Fecha': a.fecha_emision ? new Date(a.fecha_emision).toLocaleDateString('es-ES') : '',
+          'Fecha Entrega': a.fecha_entrega_real ? new Date(a.fecha_entrega_real).toLocaleDateString('es-ES') : '',
+          'Cliente': cli?.nombre || a.cliente_nombre || '',
+          'CIF/NIF': cli?.cif || a.cliente_cif || '',
+          'Estado': a.estado || '',
+          'Valorado': a.valorado ? 'Sí' : 'No',
+          'Base Imponible': parseFloat(a.base_imponible || 0).toFixed(2),
+          'IVA (€)': parseFloat(a.iva || 0).toFixed(2),
+          'Total (€)': parseFloat(a.total || 0).toFixed(2),
+          'Factura asociada': a.numero_factura || (a.factura_semanal_id ? `Semanal #${a.factura_semanal_id}` : ''),
+        };
+      });
+    
+    // === HOJA 4: GASTOS DEL MES (incluido para asesoría) ===
+    const gastosMes = (gastos || []).filter(g => enRango(g.fecha));
+    const gastosRows = gastosMes
+      .sort((a,b) => new Date(a.fecha) - new Date(b.fecha))
+      .map(g => ({
+        'Fecha': g.fecha ? new Date(g.fecha).toLocaleDateString('es-ES') : '',
+        'Proveedor': g.proveedor || '',
+        'CIF Proveedor': g.cif_proveedor || '',
+        'Concepto': g.concepto || '',
+        'Categoría': g.categoria || '',
+        'Base Imponible': parseFloat(g.base_imponible || g.importe || 0).toFixed(2),
+        'Tipo IVA (%)': parseFloat(g.iva_porcentaje || 0).toFixed(2),
+        'IVA (€)': parseFloat(g.iva || 0).toFixed(2),
+        'Total (€)': parseFloat(g.importe || 0).toFixed(2),
+        'Forma Pago': g.forma_pago || '',
+        'Nº Factura Proveedor': g.numero_factura || '',
+        'Notas': g.notas || '',
+      }));
+    
+    // === HOJA 5: RESUMEN EJECUTIVO ===
+    const totalFacturado = facturasMes.reduce((s, f) => s + (parseFloat(f.total) || 0), 0);
+    const totalBaseFact = facturasMes.reduce((s, f) => s + (parseFloat(f.base_imponible || f.subtotal) || 0), 0);
+    const totalIvaFact = facturasMes.reduce((s, f) => s + (parseFloat(f.iva) || 0), 0);
+    const totalTpv = tpvMes.reduce((s, r) => s + (parseFloat(r.total) || 0), 0);
+    const totalBaseTpv = tpvMes.reduce((s, r) => s + (parseFloat(r.base_imponible) || 0), 0);
+    const totalIvaTpv = tpvMes.reduce((s, r) => s + (parseFloat(r.iva) || 0), 0);
+    const totalGastos = gastosMes.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0);
+    const totalIvaGastos = gastosMes.reduce((s, g) => s + (parseFloat(g.iva) || 0), 0);
+    
+    const resumenRows = [
+      { 'Concepto': 'PERIODO', 'Valor': etiquetaMes, 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': '── INGRESOS ──', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'Facturas emitidas (nº)', 'Valor': facturasMes.length, 'Notas': '' },
+      { 'Concepto': 'Base imponible facturas', 'Valor': totalBaseFact.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'IVA repercutido facturas', 'Valor': totalIvaFact.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'Total facturado', 'Valor': totalFacturado.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'Recibos TPV (nº)', 'Valor': tpvMes.length, 'Notas': '' },
+      { 'Concepto': 'Base imponible TPV', 'Valor': totalBaseTpv.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'IVA repercutido TPV', 'Valor': totalIvaTpv.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'Total cobrado TPV', 'Valor': totalTpv.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'TOTAL INGRESOS (base + iva)', 'Valor': (totalFacturado + totalTpv).toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'TOTAL IVA REPERCUTIDO', 'Valor': (totalIvaFact + totalIvaTpv).toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': '── GASTOS ──', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'Gastos registrados (nº)', 'Valor': gastosMes.length, 'Notas': '' },
+      { 'Concepto': 'Total gastos', 'Valor': totalGastos.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': 'IVA soportado', 'Valor': totalIvaGastos.toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': '── LIQUIDACIÓN IVA ──', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'IVA repercutido', 'Valor': (totalIvaFact + totalIvaTpv).toFixed(2) + ' €', 'Notas': '(A ingresar)' },
+      { 'Concepto': 'IVA soportado', 'Valor': totalIvaGastos.toFixed(2) + ' €', 'Notas': '(A deducir)' },
+      { 'Concepto': 'IVA neto a liquidar', 'Valor': ((totalIvaFact + totalIvaTpv) - totalIvaGastos).toFixed(2) + ' €', 'Notas': '' },
+      { 'Concepto': '', 'Valor': '', 'Notas': '' },
+      { 'Concepto': '── EMPRESA ──', 'Valor': '', 'Notas': '' },
+      { 'Concepto': 'Razón social', 'Valor': 'ROOTFLOW HYDROPONICS S.L.', 'Notas': '' },
+      { 'Concepto': 'CIF', 'Valor': 'B27535137', 'Notas': '' },
+      { 'Concepto': 'Generado el', 'Valor': new Date().toLocaleDateString('es-ES'), 'Notas': '' },
+    ];
+    
+    // === CREAR EXCEL ===
+    const wb = XLSX.utils.book_new();
+    
+    const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
+    wsResumen['!cols'] = [{ wch: 36 }, { wch: 20 }, { wch: 24 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+    
+    if (facturasRows.length > 0) {
+      const ws = XLSX.utils.json_to_sheet(facturasRows);
+      ws['!cols'] = [{wch:14},{wch:11},{wch:11},{wch:30},{wch:13},{wch:34},{wch:6},{wch:18},{wch:12},{wch:10},{wch:12},{wch:9},{wch:10},{wch:11},{wch:11},{wch:12},{wch:14}];
+      XLSX.utils.book_append_sheet(wb, ws, 'Facturas');
+    }
+    
+    if (tpvRows.length > 0) {
+      const ws = XLSX.utils.json_to_sheet(tpvRows);
+      ws['!cols'] = [{wch:14},{wch:11},{wch:30},{wch:13},{wch:14},{wch:30},{wch:12},{wch:9},{wch:10},{wch:11},{wch:16}];
+      XLSX.utils.book_append_sheet(wb, ws, 'TPV');
+    }
+    
+    if (albaranRows.length > 0) {
+      const ws = XLSX.utils.json_to_sheet(albaranRows);
+      ws['!cols'] = [{wch:14},{wch:11},{wch:13},{wch:30},{wch:13},{wch:12},{wch:9},{wch:12},{wch:10},{wch:11},{wch:18}];
+      XLSX.utils.book_append_sheet(wb, ws, 'Albaranes');
+    }
+    
+    if (gastosRows.length > 0) {
+      const ws = XLSX.utils.json_to_sheet(gastosRows);
+      ws['!cols'] = [{wch:11},{wch:28},{wch:13},{wch:32},{wch:18},{wch:12},{wch:9},{wch:10},{wch:11},{wch:14},{wch:18},{wch:30}];
+      XLSX.utils.book_append_sheet(wb, ws, 'Gastos');
+    }
+    
+    const fechaIso = inicio.toISOString().slice(0, 7);
+    const fileName = `Rootflow_Asesoria_${fechaIso}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    
+    return {
+      facturas: facturasRows.length,
+      tpv: tpvRows.length,
+      albaranes: albaranRows.length,
+      gastos: gastosRows.length,
+      fileName,
+    };
+  };
+
   // ==================== V58 — ALBARANES ====================
   
-  // Generador de PDF de albarán (HTML imprimible)
+  // Generador de PDF de albarán (HTML imprimible) — formato profesional 1 hoja A4
   const generarPDFAlbaran = (albaran) => {
     if (!albaran) return;
     const cliente = clientes.find(c => c.id === albaran.cliente_id);
@@ -18714,9 +18989,11 @@ SELECT cron.schedule(
       .filter(ap => ap.albaran_id === albaran.id)
       .map(ap => ap.pedido_id);
     
-    const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
-    const fechaEmStr = albaran.fecha_emision ? new Date(albaran.fecha_emision).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
-    const fechaEntStr = albaran.fecha_entrega_prevista ? new Date(albaran.fecha_entrega_prevista).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
+    const fmtFecha = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}`;
+    };
     
     const html = `<!DOCTYPE html>
 <html lang="es">
@@ -18724,58 +19001,88 @@ SELECT cron.schedule(
 <meta charset="UTF-8">
 <title>Albarán ${albaran.id}</title>
 <style>
-@page { size: A4; margin: 14mm; }
+@page { size: A4; margin: 14mm 16mm; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; color: #222; font-size: 11pt; line-height: 1.4; padding: 0; }
+html, body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 10pt; line-height: 1.4; color: #1a1a1a; }
 
-.header { display: flex; justify-content: space-between; align-items: start; border-bottom: 3px solid #ED7E1F; padding-bottom: 14px; margin-bottom: 22px; }
-.brand-block { display: flex; align-items: center; gap: 12px; }
-.brand-block img { height: 42px; }
-.brand { font-weight: 800; font-size: 22pt; letter-spacing: -0.5px; }
+/* ─── Cabecera ─── */
+.header { display: table; width: 100%; margin-bottom: 22px; }
+.header > div { display: table-cell; vertical-align: top; }
+.header-left { width: 60%; }
+.header-right { width: 40%; text-align: right; }
+
+.brand { font-size: 22pt; font-weight: 800; letter-spacing: -0.5px; line-height: 1; color: #1a1a1a; }
 .brand .o { color: #ED7E1F; }
-.brand-sub { font-size: 8pt; letter-spacing: 1.5px; color: #555; margin-top: 2px; }
-.alb-num { text-align: right; }
-.alb-num h1 { font-size: 26pt; color: #ED7E1F; font-weight: 800; margin: 0; }
-.alb-num .ref { font-family: monospace; font-size: 13pt; font-weight: 700; margin-top: 2px; }
-.alb-num .dates { font-size: 9pt; color: #666; margin-top: 4px; }
+.brand-sub { font-size: 8pt; letter-spacing: 1.8px; color: #666; margin-top: 4px; }
 
-${!valorado ? `
-.sin-valor { background: #fef3c7; border: 2px solid #f59e0b; padding: 10px 16px; border-radius: 6px; margin-bottom: 18px; text-align: center; }
-.sin-valor strong { color: #92400e; }` : `
-.valorado { background: #ecfdf5; border: 2px solid #10b981; padding: 10px 16px; border-radius: 6px; margin-bottom: 18px; text-align: center; }
-.valorado strong { color: #065f46; }`}
+.emisor { margin-top: 10px; font-size: 9pt; line-height: 1.5; color: #444; }
+.emisor strong { color: #1a1a1a; font-size: 9.5pt; }
 
-.addresses { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 22px; }
-.addr-box { padding: 14px; background: #f8f9fa; border-radius: 6px; border-left: 3px solid #ED7E1F; }
-.addr-box h3 { font-size: 9pt; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
-.addr-box p { font-size: 10.5pt; line-height: 1.5; margin: 0; }
-.addr-box strong { font-size: 12pt; }
+.doc-title { font-size: 17pt; font-weight: 800; color: #ED7E1F; letter-spacing: 1px; }
+.doc-num { font-size: 13pt; font-weight: 700; font-family: 'Courier New', monospace; margin-top: 2px; }
+.doc-dates { font-size: 9pt; color: #666; margin-top: 8px; line-height: 1.6; }
+.doc-dates .label { color: #888; text-transform: uppercase; font-size: 7.5pt; letter-spacing: 0.5px; }
+.doc-dates .val { color: #1a1a1a; font-weight: 600; }
 
+/* ─── Banner tipo ─── */
+.tipo-banner { padding: 6px 12px; margin-bottom: 16px; text-align: center; font-size: 8.5pt; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 700; border: 1px solid; }
+.tipo-banner.sin-valor { background: #fefbf0; border-color: #d4a655; color: #8a6516; }
+.tipo-banner.valorado { background: #f0faf3; border-color: #5cb37a; color: #1f5d35; }
+
+/* ─── Cliente ─── */
+.cliente-box { border: 1.5px solid #1a1a1a; padding: 12px 14px; margin-bottom: 18px; }
+.cliente-box .label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1.2px; color: #666; margin-bottom: 4px; }
+.cliente-box .nombre { font-size: 13pt; font-weight: 700; color: #1a1a1a; margin-bottom: 3px; }
+.cliente-box .data { font-size: 9.5pt; line-height: 1.5; color: #333; }
+
+/* ─── Referencias ─── */
+.refs { font-size: 8.5pt; color: #666; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid #ddd; }
+.refs strong { color: #1a1a1a; }
+
+/* ─── Tabla items ─── */
 table.items { width: 100%; border-collapse: collapse; margin-bottom: 18px; }
-table.items th { background: #ED7E1F; color: white; padding: 9px 11px; text-align: left; font-size: 10pt; text-transform: uppercase; letter-spacing: 0.5px; }
+table.items thead { background: #1a1a1a; color: white; }
+table.items th { padding: 8px 10px; text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
 table.items th.right { text-align: right; }
 table.items th.center { text-align: center; }
-table.items td { padding: 9px 11px; border-bottom: 1px solid #eee; font-size: 10.5pt; }
-table.items td.right { text-align: right; }
-table.items td.center { text-align: center; }
-table.items .codigo { color: #888; font-family: monospace; font-size: 9pt; }
+table.items tbody tr { border-bottom: 1px solid #e5e5e5; }
+table.items tbody tr:nth-child(even) { background: #fafafa; }
+table.items td { padding: 9px 10px; font-size: 10pt; }
+table.items td.right { text-align: right; font-variant-numeric: tabular-nums; }
+table.items td.center { text-align: center; font-variant-numeric: tabular-nums; }
+table.items td.desc { font-weight: 600; }
+table.items .item-from { font-size: 7.5pt; color: #888; margin-left: 6px; }
 
-${valorado ? `
-.totals { margin-left: auto; width: 300px; margin-bottom: 22px; }
-.totals-row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #eee; font-size: 11pt; }
-.totals-row.total { border-top: 2px solid #ED7E1F; border-bottom: none; padding-top: 12px; margin-top: 8px; font-size: 16pt; font-weight: 800; color: #ED7E1F; }` : ''}
+/* ─── Totales ─── */
+.totals { float: right; width: 280px; margin-bottom: 24px; font-size: 10pt; }
+.totals-row { display: table; width: 100%; padding: 5px 0; border-bottom: 1px dotted #ccc; }
+.totals-row .l { display: table-cell; color: #555; }
+.totals-row .v { display: table-cell; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.totals-row.total { border: none; border-top: 2px solid #1a1a1a; padding-top: 9px; margin-top: 6px; font-size: 14pt; font-weight: 800; }
+.totals-row.total .l { color: #1a1a1a; }
+.totals-row.total .v { color: #ED7E1F; }
 
-.notas { margin: 18px 0; padding: 12px 16px; background: #fffbeb; border-left: 4px solid #ED7E1F; font-size: 10pt; }
-.notas h4 { font-size: 10pt; color: #92400e; text-transform: uppercase; margin-bottom: 4px; }
+.clearfix::after { content: ""; display: table; clear: both; }
 
-.firma-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 32px; }
-.firma-box { border: 1px solid #444; padding: 12px; min-height: 110px; }
-.firma-box .title { font-size: 9pt; font-weight: 700; color: #444; border-bottom: 1px solid #444; padding-bottom: 5px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px; }
-.firma-box .small { font-size: 8.5pt; color: #666; line-height: 1.6; margin-top: 30px; }
+/* ─── Notas ─── */
+.notas { margin-bottom: 22px; padding: 10px 12px; background: #fafafa; border-left: 3px solid #ED7E1F; font-size: 9pt; }
+.notas .label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 3px; }
 
-.footer { margin-top: 22px; padding-top: 12px; border-top: 1px solid #ccc; font-size: 8pt; color: #666; text-align: center; line-height: 1.5; }
+/* ─── Firmas ─── */
+.firmas { display: table; width: 100%; margin-top: 18px; }
+.firmas > div { display: table-cell; vertical-align: top; padding-right: 20px; }
+.firmas > div:last-child { padding-right: 0; padding-left: 10px; }
+.firma-box { border: 1px solid #1a1a1a; padding: 10px 12px; min-height: 95px; }
+.firma-box .head { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1.2px; color: #666; border-bottom: 1px solid #1a1a1a; padding-bottom: 4px; margin-bottom: 6px; font-weight: 600; }
+.firma-box .field { font-size: 8.5pt; color: #333; margin-bottom: 4px; }
+.firma-box .field .lbl { color: #888; display: inline-block; width: 65px; }
+.firma-box .signature-space { height: 50px; }
 
-.no-print { position: fixed; top: 14px; right: 14px; background: #ED7E1F; color: white; padding: 9px 16px; border: none; border-radius: 5px; font-weight: 700; cursor: pointer; font-size: 11pt; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 999; }
+/* ─── Pie ─── */
+.footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #ccc; font-size: 7.5pt; color: #888; text-align: center; line-height: 1.5; }
+
+/* ─── Botón imprimir ─── */
+.no-print { position: fixed; top: 14px; right: 14px; background: #ED7E1F; color: white; padding: 10px 18px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 11pt; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 999; }
 .no-print:hover { background: #c75d0e; }
 @media print { .no-print { display: none; } }
 </style>
@@ -18783,53 +19090,56 @@ ${valorado ? `
 <body>
 <button class="no-print" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
 
+<!-- CABECERA -->
 <div class="header">
-  <div class="brand-block">
-    <img src="${logoUrl}" alt="RootFlow" onerror="this.style.display='none'">
-    <div>
-      <div class="brand">Root<span class="o">Flow</span></div>
-      <div class="brand-sub">HYDROPONICS S.L.</div>
+  <div class="header-left">
+    <div class="brand">Root<span class="o">Flow</span></div>
+    <div class="brand-sub">HYDROPONICS S.L.</div>
+    <div class="emisor">
+      <strong>ROOTFLOW HYDROPONICS S.L.</strong><br>
+      C. Nueva 16 P6 · 28231 Las Rozas de Madrid<br>
+      CIF: B27535137 · Tel: 694 918 481<br>
+      info@rootflow.es
     </div>
   </div>
-  <div class="alb-num">
-    <h1>ALBARÁN</h1>
-    <div class="ref">${albaran.id}</div>
-    <div class="dates">
-      Emisión: ${fechaEmStr}
-      ${fechaEntStr ? `<br>Entrega prevista: ${fechaEntStr}` : ''}
+  <div class="header-right">
+    <div class="doc-title">ALBARÁN</div>
+    <div class="doc-num">${albaran.id}</div>
+    <div class="doc-dates">
+      <span class="label">Emisión</span><br><span class="val">${fmtFecha(albaran.fecha_emision)}</span>
+      ${albaran.fecha_entrega_prevista ? `<br><br><span class="label">Entrega prevista</span><br><span class="val">${fmtFecha(albaran.fecha_entrega_prevista)}</span>` : ''}
     </div>
   </div>
 </div>
 
-${!valorado ? `<div class="sin-valor">📋 <strong>ALBARÁN SIN VALORAR</strong> — Los importes se reflejarán en la factura correspondiente</div>` : `<div class="valorado">💰 <strong>ALBARÁN VALORADO</strong></div>`}
+<!-- BANNER TIPO -->
+<div class="tipo-banner ${valorado ? 'valorado' : 'sin-valor'}">
+  ${valorado ? 'Albarán Valorado' : 'Albarán sin valorar — los importes constarán en factura'}
+</div>
 
-<div class="addresses">
-  <div class="addr-box">
-    <h3>Emisor</h3>
-    <p><strong>${(typeof EMPRESA !== 'undefined' && EMPRESA?.nombre) || 'ROOTFLOW HYDROPONICS S.L.'}</strong></p>
-    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.direccion) || 'C. Nueva 16 P6'}</p>
-    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.cp) || '28231'} ${(typeof EMPRESA !== 'undefined' && EMPRESA?.ciudad) || 'Las Rozas de Madrid'}</p>
-    <p>CIF: ${(typeof EMPRESA !== 'undefined' && EMPRESA?.cif) || 'B27535137'}</p>
-    <p>${(typeof EMPRESA !== 'undefined' && EMPRESA?.telefono) || '694 918 481'}</p>
-  </div>
-  <div class="addr-box">
-    <h3>Destinatario</h3>
-    <p><strong>${albaran.cliente_nombre || cliente?.nombre || 'Cliente'}</strong></p>
-    <p>${albaran.direccion_entrega || cliente?.direccion || ''}</p>
-    ${cliente?.codigo_postal || cliente?.ciudad ? `<p>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}</p>` : ''}
-    ${(albaran.cliente_cif || cliente?.cif) ? `<p>CIF: ${albaran.cliente_cif || cliente?.cif}</p>` : ''}
-    ${cliente?.telefono ? `<p>${cliente.telefono}</p>` : ''}
+<!-- CLIENTE -->
+<div class="cliente-box">
+  <div class="label">Cliente</div>
+  <div class="nombre">${albaran.cliente_nombre || cliente?.nombre || 'Cliente sin nombre'}</div>
+  <div class="data">
+    ${albaran.direccion_entrega || cliente?.direccion || ''}
+    ${(cliente?.codigo_postal || cliente?.ciudad) ? `<br>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}` : ''}
+    ${(albaran.cliente_cif || cliente?.cif) ? `<br>CIF: ${albaran.cliente_cif || cliente?.cif}` : ''}
+    ${cliente?.telefono ? `<br>Tel: ${cliente.telefono}` : ''}
   </div>
 </div>
 
-${pedidosVinculados.length > 0 ? `<p style="font-size: 9pt; color: #666; margin-bottom: 10px;">📦 Pedidos asociados: ${pedidosVinculados.map(pid => `#${pid}`).join(', ')}</p>` : ''}
+<!-- REFERENCIAS -->
+${pedidosVinculados.length > 0 ? `<div class="refs"><strong>Pedidos asociados:</strong> ${pedidosVinculados.map(pid => `#${pid}`).join(' · ')}</div>` : ''}
 
+<!-- TABLA -->
 <table class="items">
   <thead>
     <tr>
-      <th>Descripción</th>
-      <th class="center">Cantidad</th>
-      ${valorado ? `<th class="right">Precio Unit.</th><th class="right">Importe</th>` : ''}
+      <th style="width: 60%">Descripción</th>
+      <th class="center" style="width: 12%">Cantidad</th>
+      <th class="center" style="width: 8%">Ud.</th>
+      ${valorado ? `<th class="right" style="width: 10%">Precio</th><th class="right" style="width: 10%">Importe</th>` : ''}
     </tr>
   </thead>
   <tbody>
@@ -18838,48 +19148,57 @@ ${pedidosVinculados.length > 0 ? `<p style="font-size: 9pt; color: #666; margin-
       const nombre = it.producto_nombre || prod?.nombre || 'Producto';
       const unidad = it.producto_unidad || prod?.unidad || 'ud';
       return `<tr>
-        <td>${nombre}</td>
-        <td class="center">${it.cantidad} ${unidad}</td>
+        <td class="desc">${nombre}</td>
+        <td class="center">${it.cantidad || 0}</td>
+        <td class="center">${unidad}</td>
         ${valorado ? `<td class="right">${formatCurrency(it.precio_unitario || 0)}</td><td class="right">${formatCurrency(it.subtotal || 0)}</td>` : ''}
       </tr>`;
     }).join('')}
+    ${itemsArr.length === 0 ? `<tr><td colspan="${valorado ? 5 : 3}" style="text-align:center;color:#999;padding:20px;font-style:italic;">Sin productos</td></tr>` : ''}
   </tbody>
 </table>
 
+<!-- TOTALES (sólo si valorado) -->
 ${valorado ? `
-<div class="totals">
-  <div class="totals-row"><span>Subtotal</span><span>${formatCurrency(albaran.subtotal || 0)}</span></div>
-  ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span>Descuento</span><span>-${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
-  <div class="totals-row"><span>Base imponible</span><span>${formatCurrency(albaran.base_imponible || 0)}</span></div>
-  <div class="totals-row"><span>IVA (${albaran.iva_porcentaje || 4}%)</span><span>${formatCurrency(albaran.iva || 0)}</span></div>
-  ${(albaran.re_importe || 0) > 0 ? `<div class="totals-row"><span>Recargo equiv.</span><span>${formatCurrency(albaran.re_importe)}</span></div>` : ''}
-  <div class="totals-row total"><span>TOTAL</span><span>${formatCurrency(albaran.total || 0)}</span></div>
+<div class="clearfix">
+  <div class="totals">
+    <div class="totals-row"><span class="l">Subtotal</span><span class="v">${formatCurrency(albaran.subtotal || 0)}</span></div>
+    ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span class="l">Descuento</span><span class="v">−${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
+    <div class="totals-row"><span class="l">Base imponible</span><span class="v">${formatCurrency(albaran.base_imponible || 0)}</span></div>
+    <div class="totals-row"><span class="l">IVA (${albaran.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(albaran.iva || 0)}</span></div>
+    ${(albaran.re_importe || 0) > 0 ? `<div class="totals-row"><span class="l">R.E. (${RE_VENTAS}%)</span><span class="v">${formatCurrency(albaran.re_importe)}</span></div>` : ''}
+    <div class="totals-row total"><span class="l">TOTAL</span><span class="v">${formatCurrency(albaran.total || 0)}</span></div>
+  </div>
 </div>` : ''}
 
-${albaran.notas ? `<div class="notas"><h4>Notas</h4><p>${albaran.notas}</p></div>` : ''}
+<!-- NOTAS -->
+${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${albaran.notas}</div>` : ''}
 
-<div class="firma-grid">
-  <div class="firma-box">
-    <div class="title">Conforme cliente</div>
-    <div class="small">
-      Nombre/Sello: ____________________<br><br>
-      DNI: ____________________<br><br>
-      Fecha: ____________________
+<!-- FIRMAS -->
+<div class="firmas">
+  <div>
+    <div class="firma-box">
+      <div class="head">Recibí · Conforme cliente</div>
+      <div class="signature-space"></div>
+      <div class="field"><span class="lbl">Nombre:</span> ____________________</div>
+      <div class="field"><span class="lbl">DNI:</span> ____________________</div>
+      <div class="field"><span class="lbl">Fecha:</span> ____ / ____ / 2026</div>
     </div>
   </div>
-  <div class="firma-box">
-    <div class="title">Entregado por</div>
-    <div class="small">
-      ${albaran.repartidor ? `Repartidor: ${albaran.repartidor}<br><br>` : 'Repartidor: ____________________<br><br>'}
-      ${albaran.vehiculo ? `Vehículo: ${albaran.vehiculo}<br><br>` : 'Vehículo: ____________________<br><br>'}
-      Fecha: ${albaran.fecha_entrega_real ? new Date(albaran.fecha_entrega_real).toLocaleDateString('es-ES') : '____________________'}
+  <div>
+    <div class="firma-box">
+      <div class="head">Entregado por · RootFlow</div>
+      <div class="signature-space"></div>
+      <div class="field"><span class="lbl">Repartidor:</span> ${albaran.repartidor || '____________________'}</div>
+      <div class="field"><span class="lbl">Vehículo:</span> ${albaran.vehiculo || '____________________'}</div>
+      <div class="field"><span class="lbl">Fecha:</span> ${albaran.fecha_entrega_real ? fmtFecha(albaran.fecha_entrega_real) : '____ / ____ / 2026'}</div>
     </div>
   </div>
 </div>
 
+<!-- PIE -->
 <div class="footer">
-  <strong>${(typeof EMPRESA !== 'undefined' && EMPRESA?.nombre) || 'ROOTFLOW HYDROPONICS S.L.'}</strong> · CIF ${(typeof EMPRESA !== 'undefined' && EMPRESA?.cif) || 'B27535137'} · ${(typeof EMPRESA !== 'undefined' && EMPRESA?.direccion) || 'C. Nueva 16 P6, 28231 Las Rozas de Madrid'}<br>
-  Tel: ${(typeof EMPRESA !== 'undefined' && EMPRESA?.telefono) || '694 918 481'} · ${(typeof EMPRESA !== 'undefined' && EMPRESA?.email) || 'info@rootflow.es'}
+  ROOTFLOW HYDROPONICS S.L. · CIF B27535137 · C. Nueva 16 P6, 28231 Las Rozas de Madrid · Tel. 694 918 481 · info@rootflow.es
 </div>
 
 </body>
@@ -24384,6 +24703,22 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </Modal>
         );
       })()}
+      
+      {/* Modal Exportar para Asesoría V59 */}
+      {showModal === 'exportarAsesoria' && (
+        <Modal title="📊 Exportar para asesoría" onClose={() => setShowModal(null)} size="max-w-md">
+          <ExportarAsesoriaForm 
+            onExportar={(mes) => {
+              const res = exportarMesParaAsesoria(mes);
+              if (res) {
+                setShowModal(null);
+                alert(`✅ Excel generado: ${res.fileName}\n\n📋 Contenido:\n• ${res.facturas} factura(s)\n• ${res.tpv} recibo(s) TPV\n• ${res.albaranes} albarán(es)\n• ${res.gastos} gasto(s)\n\nRevisa la pestaña "Resumen" del Excel para los totales mensuales.`);
+              }
+            }}
+            onCancel={() => setShowModal(null)}
+          />
+        </Modal>
+      )}
       
       {/* Modal Albarán V58 */}
       {showModal === 'albaran' && (
