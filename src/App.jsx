@@ -4349,6 +4349,97 @@ ${pedidoLinea ? `^FO260,244
           )}
         </div>
         
+        {/* V60: Notas y preferencias del cliente */}
+        <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-200 rounded-xl space-y-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={18} className="text-amber-700" />
+            <span className="font-bold text-amber-900">📝 Notas y preferencias del cliente</span>
+          </div>
+          <p className="text-xs text-amber-700">Acordarse de exigencias, matices y particularidades. El "aviso importante" sale destacado al crear pedidos.</p>
+          
+          {/* Aviso importante (destacado) */}
+          <div>
+            <label className="block text-sm font-bold text-red-700 mb-1.5 flex items-center gap-1">
+              <AlertCircle size={14} /> ⚠️ Aviso importante (sale destacado al hacer pedidos)
+            </label>
+            <textarea
+              value={form.aviso_importante || ''}
+              onChange={e => setForm({...form, aviso_importante: e.target.value})}
+              placeholder="Ej: 'Solo aceptan entregas antes de las 11h' o 'No llamar al teléfono fijo, sólo whatsapp'"
+              className="w-full px-3 py-2 rounded-xl border-2 border-red-300 bg-red-50 text-sm focus:ring-2 focus:ring-red-200"
+              rows={2}
+            />
+          </div>
+          
+          {/* Logística de entrega */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-neutral-700 mb-1">🕒 Horario entrega preferido</label>
+              <input
+                type="text"
+                value={form.horario_entrega_preferido || ''}
+                onChange={e => setForm({...form, horario_entrega_preferido: e.target.value})}
+                placeholder="Ej: 8:00-10:30"
+                className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-neutral-700 mb-1">👤 Contacto en recepción</label>
+              <input
+                type="text"
+                value={form.contacto_recepcion || ''}
+                onChange={e => setForm({...form, contacto_recepcion: e.target.value})}
+                placeholder="Ej: Marta (cocinera), tlf cocina"
+                className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm"
+              />
+            </div>
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-neutral-700 mb-1">🚚 Preferencias / instrucciones de entrega</label>
+            <textarea
+              value={form.preferencias_entrega || ''}
+              onChange={e => setForm({...form, preferencias_entrega: e.target.value})}
+              placeholder="Ej: 'Llamar al timbre del sótano, no de la calle' · 'Entrar por callejón trasero' · 'No dejar nunca sin firma'"
+              className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm"
+              rows={2}
+            />
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-neutral-700 mb-1">🥬 Exigencias del producto</label>
+            <textarea
+              value={form.exigencias_producto || ''}
+              onChange={e => setForm({...form, exigencias_producto: e.target.value})}
+              placeholder="Ej: 'Le gustan los brotes más largos' · 'Prefiere envase de 50g, no de 30g' · 'No quieren cilantro nunca'"
+              className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm"
+              rows={2}
+            />
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-neutral-700 mb-1">🚫 Restricciones / alergias</label>
+            <textarea
+              value={form.restricciones || ''}
+              onChange={e => setForm({...form, restricciones: e.target.value})}
+              placeholder="Ej: 'Cliente celíaco, evitar contaminación cruzada' · 'No tolera mostaza'"
+              className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm"
+              rows={2}
+            />
+          </div>
+          
+          <div>
+            <label className="block text-xs font-semibold text-neutral-700 mb-1">📓 Notas internas (privadas)</label>
+            <textarea
+              value={form.notas_internas || ''}
+              onChange={e => setForm({...form, notas_internas: e.target.value})}
+              placeholder="Notas para nosotros que NO se ven en ningún documento. Ej: 'Maitre antipático, mejor hablar con el chef' · 'Paga siempre tarde pero es buen cliente'"
+              className="w-full px-3 py-2 rounded-lg border border-neutral-300 bg-neutral-50 text-sm"
+              rows={2}
+            />
+          </div>
+        </div>
+        
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
           <Button onClick={() => handleSaveWithClear(form)}>{cliente ? 'Guardar' : 'Crear'}</Button>
@@ -4865,6 +4956,51 @@ ${pedidoLinea ? `^FO260,244
     
     return (
       <div className="space-y-4">
+        {/* V60: Aviso importante del cliente */}
+        {cliente && (cliente.aviso_importante || cliente.preferencias_entrega || cliente.exigencias_producto || cliente.restricciones || cliente.horario_entrega_preferido || cliente.contacto_recepcion) && (
+          <Card className="p-3 bg-amber-50 border-2 border-amber-300">
+            <div className="flex items-start gap-2 mb-2">
+              <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <p className="font-bold text-amber-900 text-sm">📝 Acordarse de este cliente:</p>
+            </div>
+            <div className="space-y-1.5 text-xs">
+              {cliente.aviso_importante && (
+                <div className="p-2 bg-red-50 border border-red-300 rounded-lg">
+                  <p className="font-bold text-red-700 mb-0.5">⚠️ AVISO IMPORTANTE</p>
+                  <p className="text-red-900 whitespace-pre-wrap">{cliente.aviso_importante}</p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                {cliente.horario_entrega_preferido && (
+                  <div className="bg-white border border-amber-200 rounded p-2">
+                    <span className="font-semibold text-amber-900">🕒 Horario:</span> <span className="text-neutral-700">{cliente.horario_entrega_preferido}</span>
+                  </div>
+                )}
+                {cliente.contacto_recepcion && (
+                  <div className="bg-white border border-amber-200 rounded p-2">
+                    <span className="font-semibold text-amber-900">👤 Contacto:</span> <span className="text-neutral-700">{cliente.contacto_recepcion}</span>
+                  </div>
+                )}
+              </div>
+              {cliente.preferencias_entrega && (
+                <div className="bg-white border border-amber-200 rounded p-2">
+                  <span className="font-semibold text-amber-900">🚚 Entrega:</span> <span className="text-neutral-700 whitespace-pre-wrap">{cliente.preferencias_entrega}</span>
+                </div>
+              )}
+              {cliente.exigencias_producto && (
+                <div className="bg-white border border-amber-200 rounded p-2">
+                  <span className="font-semibold text-amber-900">🥬 Producto:</span> <span className="text-neutral-700 whitespace-pre-wrap">{cliente.exigencias_producto}</span>
+                </div>
+              )}
+              {cliente.restricciones && (
+                <div className="bg-orange-50 border border-orange-300 rounded p-2">
+                  <span className="font-semibold text-orange-700">🚫 Restricciones:</span> <span className="text-orange-900 whitespace-pre-wrap">{cliente.restricciones}</span>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+        
         {/* Acciones rápidas */}
         {!pedido && (
           <Card className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
@@ -19340,6 +19476,25 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
     
     return (
       <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2">
+        {/* V60: Aviso importante del cliente */}
+        {clienteSel && (clienteSel.aviso_importante || clienteSel.preferencias_entrega || clienteSel.horario_entrega_preferido) && (
+          <Card className="p-3 bg-amber-50 border-2 border-amber-300">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <p className="font-bold text-amber-900 mb-1">📝 Acordarse de {clienteSel.nombre}:</p>
+                {clienteSel.aviso_importante && (
+                  <div className="p-2 bg-red-50 border border-red-300 rounded mb-1">
+                    <p className="text-red-900 font-medium whitespace-pre-wrap">⚠️ {clienteSel.aviso_importante}</p>
+                  </div>
+                )}
+                {clienteSel.horario_entrega_preferido && <p>🕒 <strong>Horario:</strong> {clienteSel.horario_entrega_preferido}</p>}
+                {clienteSel.preferencias_entrega && <p className="whitespace-pre-wrap">🚚 {clienteSel.preferencias_entrega}</p>}
+              </div>
+            </div>
+          </Card>
+        )}
+        
         {/* Cliente, fechas */}
         <div className="grid grid-cols-3 gap-3">
           <Select 
