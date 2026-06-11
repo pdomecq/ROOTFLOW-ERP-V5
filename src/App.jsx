@@ -12523,207 +12523,28 @@ ${logoRootflow}^FS
     };
     
     const completarTarea = async (tarea, nuevoEstado = 'hecho') => {
-      // Si se marca como omitida/pendiente, no tocar lotes
-      if (nuevoEstado !== 'hecho') {
-        try {
-          await supabase.from('tareas_calendario').update({ 
-            estado: nuevoEstado, 
-            fecha_completado: null 
-          }).eq('id', tarea.id);
-          refetchTareasCalendario();
-        } catch (e) { alert('Error: ' + e.message); }
-        return;
-      }
-      
+      // V61: Solo marca la tarea (sin crear/mover lotes automáticamente).
+      // El socio de producción crea los lotes manualmente cuando le toca.
       try {
-        const variedadT = variedades.find(v => v.id === tarea.variedad_id);
-        if (!variedadT) {
-          alert('❌ No se encuentra la variedad de esta tarea');
-          return;
-        }
-        
-        let loteId = tarea.lote_id;
-        
-        // === SEMBRAR: crear el lote ===
-        if (tarea.tipo === 'sembrar' && !loteId) {
-          // Calcular cosecha prevista: fecha_entrega_origen
-          const fechaCosecha = tarea.fecha_entrega_origen || (() => {
-            const f = new Date(tarea.fecha);
-            const diasGerm = variedadT.dias_germinacion || 6;
-            const diasLuz = variedadT.dias_luz || 10;
-            f.setDate(f.getDate() + diasGerm + diasLuz);
-            return f.toISOString().slice(0,10);
-          })();
-          
-          // Código auto: VARIEDAD-YYYYMMDD-NN
-          const fechaSiembraISO = new Date().toISOString().slice(0,10);
-          const codigo = `${(variedadT.nombre || 'LOTE').substring(0,3).toUpperCase()}-${fechaSiembraISO.replace(/-/g,'')}-${tarea.id}`;
-          
-          const loteData = {
-            variedad_id: tarea.variedad_id,
-            fecha_siembra: fechaSiembraISO,
-            fecha_cosecha_prevista: fechaCosecha,
-            bandejas: tarea.trays,
-            estado: 'sembrado',
-            fase: 'germinacion',
-            codigo,
-            notas: `Auto-creado desde plan #${tarea.plan_id} · Entrega prevista ${fechaCosecha}`,
-          };
-          
-          const { data: nuevoLote, error: errL } = await supabase.from('lotes').insert(loteData).select().single();
-          if (errL) {
-            if (errL.code === '42703') {
-              // Reintento sin el campo 'fase' (por si la columna no existe)
-              delete loteData.fase;
-              const { data: nuevoLote2, error: errL2 } = await supabase.from('lotes').insert(loteData).select().single();
-              if (errL2) throw errL2;
-              loteId = nuevoLote2.id;
-            } else throw errL;
-          } else {
-            loteId = nuevoLote.id;
-          }
-          
-          refetchLotes();
-        }
-        
-        // === PASAR A LUZ: mover lote de germinación a crecimiento ===
-        if (tarea.tipo === 'pasar_luz') {
-          // Si no hay lote_id directo, buscarlo por la tarea de siembra previa del mismo plan+entrega
-          if (!loteId) {
-            const tareaSiembra = tareasCalendario.find(t => 
-              t.plan_id === tarea.plan_id && 
-              t.fecha_entrega_origen === tarea.fecha_entrega_origen && 
-              t.tipo === 'sembrar'
-            );
-            if (tareaSiembra?.lote_id) {
-              loteId = tareaSiembra.lote_id;
-            }
-          }
-          
-          if (loteId) {
-            try {
-              await supabase.from('lotes').update({ fase: 'crecimiento' }).eq('id', loteId);
-              refetchLotes();
-            } catch (e) {
-              if (e.code !== '42703') console.warn('No se pudo actualizar fase:', e);
-            }
-          }
-        }
-        
-        // === COSECHAR: marcar lote como cosechado + entrada al granel ===
-        if (tarea.tipo === 'cosechar') {
-          // Buscar lote
-          if (!loteId) {
-            const tareaSiembra = tareasCalendario.find(t => 
-              t.plan_id === tarea.plan_id && 
-              t.fecha_entrega_origen === tarea.fecha_entrega_origen && 
-              t.tipo === 'sembrar'
-            );
-            if (tareaSiembra?.lote_id) loteId = tareaSiembra.lote_id;
-          }
-          
-          if (loteId) {
-            const fechaCosechaISO = new Date().toISOString().slice(0,10);
-            try {
-              await supabase.from('lotes').update({ 
-                fase: 'granel',
-                estado: 'cosechado',
-                fecha_cosecha_real: fechaCosechaISO 
-              }).eq('id', loteId);
-            } catch (e) {
-              // Fallback sin 'fase'
-              try {
-                await supabase.from('lotes').update({ 
-                  estado: 'cosechado',
-                  fecha_cosecha_real: fechaCosechaISO 
-                }).eq('id', loteId);
-              } catch (e2) { console.warn(e2); }
-            }
-            
-            // Crear entrada de cosecha en stock (granel)
-            // Buscar producto granel asociado a la variedad
-            const productoGranel = productos.find(p => 
-              p.variedad_id === tarea.variedad_id && 
-              p.estado_inventario === 'listo_sin_empaquetar'
-            );
-            
-            if (productoGranel) {
-              const gramosCosechados = tarea.trays * (variedadT.gramos_produccion_por_tray || 100);
-              try {
-                // Sumar al granel
-                const gramosNuevos = (productoGranel.gramos_disponibles || productoGranel.stock || 0) + gramosCosechados;
-                await supabase.from('productos').update({ 
-                  gramos_disponibles: gramosNuevos,
-                  stock: gramosNuevos
-                }).eq('id', productoGranel.id);
-                
-                // Movimiento de cosecha
-                await supabase.from('movimientos_stock').insert({
-                  producto_id: productoGranel.id,
-                  tipo: 'entrada_cosecha',
-                  cantidad: gramosCosechados,
-                  lote_id: loteId,
-                  notas: `Cosecha de ${tarea.trays} trays · Plan #${tarea.plan_id}`,
-                });
-                
-                refetchProductos();
-                refetchMovimientosStock();
-              } catch (e) {
-                console.warn('No se pudo registrar entrada de cosecha:', e);
-              }
-            } else {
-              console.warn('No hay producto granel para esta variedad. Crea uno antes para que la cosecha se registre en stock.');
-            }
-            
-            refetchLotes();
-          }
-        }
-        
-        // Actualizar la tarea con estado hecho + lote_id (si se creó uno)
         await supabase.from('tareas_calendario').update({ 
-          estado: 'hecho', 
-          fecha_completado: new Date().toISOString(),
-          lote_id: loteId || tarea.lote_id || null
+          estado: nuevoEstado, 
+          fecha_completado: nuevoEstado === 'hecho' ? new Date().toISOString() : null 
         }).eq('id', tarea.id);
-        
-        // Si era una siembra, propagar el lote_id a las tareas hermanas (pasar_luz y cosechar de la misma entrega)
-        if (tarea.tipo === 'sembrar' && loteId) {
-          await supabase.from('tareas_calendario')
-            .update({ lote_id: loteId })
-            .eq('plan_id', tarea.plan_id)
-            .eq('fecha_entrega_origen', tarea.fecha_entrega_origen)
-            .neq('id', tarea.id);
-        }
-        
         refetchTareasCalendario();
         
         // V56: Notificar a Slack si está habilitado
-        if (configSlack && configSlack.activo && configSlack.notificar_al_completar_tarea) {
+        if (nuevoEstado === 'hecho' && configSlack && configSlack.activo && configSlack.notificar_al_completar_tarea) {
+          const variedadT = variedades.find(v => v.id === tarea.variedad_id);
           const tipoEmoji = { sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚' };
           const tipoLabel = { sembrar: 'Sembrado', pasar_luz: 'Pasado a luz', cosechar: 'Cosechado', entregar: 'Entregado' };
-          let msg = `${tipoEmoji[tarea.tipo] || '✅'} *${tipoLabel[tarea.tipo] || 'Tarea completada'}*: ${tarea.trays} trays ${variedadT.nombre}`;
-          if (tarea.tipo === 'sembrar' && loteId) {
-            const loteCreado = lotes.find(l => l.id === loteId);
-            msg += `\n_Lote creado: ${loteCreado?.codigo || `#${loteId}`}_`;
-          }
-          if (tarea.tipo === 'cosechar') {
-            const g = tarea.trays * (variedadT.gramos_produccion_por_tray || 100);
-            msg += `\n_+${g}g añadidos al granel_`;
+          let msg = `${tipoEmoji[tarea.tipo] || '✅'} *${tipoLabel[tarea.tipo] || 'Tarea completada'}*: ${tarea.trays} trays ${variedadT?.nombre || ''}`;
+          if (tarea.tipo === 'cosechar' && tarea.bandejas_venta > 0) {
+            msg += ` _(→ ${tarea.bandejas_venta} cajitas)_`;
           }
           enviarASlack(msg, 'tarea_completada');
         }
-        
-        // Mensaje de éxito según tipo
-        const mensajes = {
-          sembrar: `✅ Lote creado en germinación (${tarea.trays} trays)`,
-          pasar_luz: `✅ Lote movido a fase de crecimiento`,
-          cosechar: `✅ Cosecha registrada (${tarea.trays} trays → granel)`,
-        };
-        // Sin alert para no interrumpir flujo, pero log claro
-        console.log(mensajes[tarea.tipo] || '✅ Tarea completada');
       } catch (e) {
-        console.error(e);
-        alert('❌ Error al completar tarea: ' + (e.message || String(e)));
+        alert('Error: ' + e.message);
       }
     };
     
@@ -12788,44 +12609,25 @@ ${logoRootflow}^FS
           </div>
         </div>
         
-        {/* V54 Fase 2: Avisos preflight */}
+        {/* V54: Avisos preflight (solo ciclo de cultivo) */}
         {(() => {
           const variedadesActivasIds = [...new Set(planesProduccion.filter(p => p.activo).map(p => p.variedad_id))];
           const variedadesSinCiclo = variedadesActivasIds
             .map(id => variedades.find(v => v.id === id))
             .filter(v => v && (!v.dias_germinacion || !v.dias_luz || !v.gramos_produccion_por_tray));
-          const variedadesSinGranel = variedadesActivasIds
-            .map(id => variedades.find(v => v.id === id))
-            .filter(v => v && !productos.some(p => p.variedad_id === v.id && p.estado_inventario === 'listo_sin_empaquetar'));
           
-          if (variedadesSinCiclo.length === 0 && variedadesSinGranel.length === 0) return null;
+          if (variedadesSinCiclo.length === 0) return null;
           
           return (
             <Card className="p-4 bg-amber-50 border-2 border-amber-300">
-              <div className="flex items-start gap-2 mb-2">
+              <div className="flex items-start gap-2">
                 <AlertTriangle size={20} className="text-amber-600 flex-shrink-0" />
-                <div>
-                  <h3 className="font-bold text-amber-900">Avisos de configuración</h3>
-                  <p className="text-xs text-amber-700">Estos detalles pueden hacer que el calendario o la integración con lotes no funcione bien.</p>
+                <div className="flex-1">
+                  <h3 className="font-bold text-amber-900">⚠️ Variedades sin ciclo configurado</h3>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    {variedadesSinCiclo.map(v => v.nombre).join(', ')} — edita cada una y completa la sección "🌱 Ciclo de cultivo" para que el calendario calcule bien las fechas.
+                  </p>
                 </div>
-              </div>
-              <div className="space-y-2 text-sm">
-                {variedadesSinCiclo.length > 0 && (
-                  <div className="bg-white border border-amber-200 rounded-lg p-2">
-                    <p className="font-semibold text-amber-900">⚠️ Variedades sin ciclo configurado:</p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      {variedadesSinCiclo.map(v => v.nombre).join(', ')} — edita cada una y completa "🌱 Ciclo de cultivo".
-                    </p>
-                  </div>
-                )}
-                {variedadesSinGranel.length > 0 && (
-                  <div className="bg-white border border-amber-200 rounded-lg p-2">
-                    <p className="font-semibold text-amber-900">⚠️ Variedades sin producto granel:</p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      {variedadesSinGranel.map(v => v.nombre).join(', ')} — sin un producto "listo_sin_empaquetar" para esta variedad, las cosechas no entrarán al stock automáticamente. Crea un producto granel desde Productos → "Nuevo".
-                    </p>
-                  </div>
-                )}
               </div>
             </Card>
           );
@@ -18789,46 +18591,63 @@ SELECT cron.schedule(
     const tareasAtrasadas = tareasCalendario.filter(t => t.fecha < hoyIso && t.estado === 'pendiente');
     const tareasManana = tareasCalendario.filter(t => t.fecha === mananaIso && t.estado === 'pendiente');
     
-    const tipoEmoji = {
-      sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚',
-    };
-    const tipoLabel = {
-      sembrar: 'Sembrar', pasar_luz: 'Pasar a luz', cosechar: 'Cosechar', entregar: 'Entregar',
+    const tipoEmoji = { sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚' };
+    const tipoLabel = { sembrar: 'SEMBRAR', pasar_luz: 'PASAR A LUZ', cosechar: 'COSECHAR', entregar: 'ENTREGAR' };
+    const ordenTipos = ['cosechar', 'pasar_luz', 'sembrar', 'entregar'];  // orden operativo del día
+    
+    // Detalle de una tarea: variedad, trays, semilla, cliente, entrega destino
+    const detalleTarea = (t, conFecha = false) => {
+      const v = variedades.find(vv => vv.id === t.variedad_id);
+      const c = t.cliente_id ? clientes.find(cc => cc.id === t.cliente_id) : null;
+      let txt = `• *${t.trays} trays* de *${v?.nombre || '?'}*`;
+      if (t.tipo === 'sembrar' && t.semilla_g > 0) txt += ` — ${parseFloat(t.semilla_g).toFixed(0)}g de semilla`;
+      if (t.tipo === 'cosechar' && t.bandejas_venta > 0) txt += ` → ${t.bandejas_venta} cajitas`;
+      if (c) txt += ` _(${c.nombre})_`;
+      if (t.fecha_entrega_origen && t.tipo !== 'cosechar') {
+        const fe = new Date(t.fecha_entrega_origen);
+        txt += ` _[entrega ${String(fe.getDate()).padStart(2,'0')}/${String(fe.getMonth()+1).padStart(2,'0')}]_`;
+      }
+      if (conFecha) {
+        const dias = Math.ceil((hoy - new Date(t.fecha)) / (1000*60*60*24));
+        txt += ` ⏰ _hace ${dias}d_`;
+      }
+      return txt;
     };
     
-    const formatTarea = (t) => {
-      const v = variedades.find(vv => vv.id === t.variedad_id);
-      let txt = `${tipoEmoji[t.tipo] || '•'} ${tipoLabel[t.tipo] || t.tipo} *${t.trays} trays* ${v?.nombre || ''}`;
-      if (t.tipo === 'sembrar' && t.semilla_g > 0) txt += ` _(${parseFloat(t.semilla_g).toFixed(0)}g semilla)_`;
-      if (t.tipo === 'cosechar' && t.bandejas_venta > 0) txt += ` _(→ ${t.bandejas_venta} cajitas)_`;
-      return txt;
+    // Agrupar lista de tareas por tipo en orden operativo
+    const formatGrupo = (lista, conFecha = false) => {
+      let out = '';
+      ordenTipos.forEach(tipo => {
+        const delTipo = lista.filter(t => t.tipo === tipo);
+        if (delTipo.length === 0) return;
+        out += `${tipoEmoji[tipo]} *${tipoLabel[tipo]}*\n`;
+        delTipo.forEach(t => { out += `  ${detalleTarea(t, conFecha)}\n`; });
+      });
+      return out;
     };
     
     const fechaStr = hoy.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
     
-    let mensaje = `🌱 *Buenos días — Rootflow*\n📅 *${fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1)}*\n\n`;
+    let mensaje = `🌱 *PRODUCCIÓN ROOTFLOW — ${fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1)}*\n\n`;
     
     if (tareasAtrasadas.length > 0) {
-      mensaje += `⚠️ *Atrasadas (${tareasAtrasadas.length}):*\n`;
-      tareasAtrasadas.slice(0, 10).forEach(t => {
-        const dias = Math.ceil((hoy - new Date(t.fecha)) / (1000*60*60*24));
-        mensaje += `  ${formatTarea(t)} _(hace ${dias}d)_\n`;
-      });
-      if (tareasAtrasadas.length > 10) mensaje += `  _...y ${tareasAtrasadas.length - 10} más_\n`;
+      mensaje += `🔴 *ATRASADAS (${tareasAtrasadas.length}) — hacer cuanto antes:*\n`;
+      mensaje += formatGrupo(tareasAtrasadas.slice(0, 12), true);
+      if (tareasAtrasadas.length > 12) mensaje += `  _...y ${tareasAtrasadas.length - 12} más en el ERP_\n`;
       mensaje += `\n`;
     }
     
     if (tareasHoy.length === 0) {
-      mensaje += `✓ *Hoy:* Sin tareas pendientes\n\n`;
+      mensaje += `✅ *HOY: sin tareas de producción*\n\n`;
     } else {
-      mensaje += `📋 *Hoy (${tareasHoy.length}):*\n`;
-      tareasHoy.forEach(t => { mensaje += `  ${formatTarea(t)}\n`; });
+      mensaje += `📋 *HOY TOCA (${tareasHoy.length}):*\n`;
+      mensaje += formatGrupo(tareasHoy);
       mensaje += `\n`;
     }
     
     if (tareasManana.length > 0) {
-      mensaje += `🔜 *Mañana (${tareasManana.length}):*\n`;
-      tareasManana.forEach(t => { mensaje += `  ${formatTarea(t)}\n`; });
+      mensaje += `🔜 *MAÑANA (${tareasManana.length}):*\n`;
+      mensaje += formatGrupo(tareasManana);
     }
     
     // Resumen de semilla del día
@@ -18836,11 +18655,61 @@ SELECT cron.schedule(
       .filter(t => t.tipo === 'sembrar')
       .reduce((s, t) => s + (parseFloat(t.semilla_g) || 0), 0);
     if (semillaHoy > 0) {
-      mensaje += `\n_💧 Semilla a usar hoy: *${semillaHoy.toFixed(0)}g*_`;
+      mensaje += `\n💧 _Semilla total a usar hoy: *${semillaHoy.toFixed(0)}g*_`;
     }
+    
+    mensaje += `\n\n👉 Marca las tareas como hechas en el ERP → Planificación`;
     
     return mensaje;
   };
+
+  // V61: Auto-envío del resumen diario a Slack la primera vez que se abre la app cada día.
+  // No requiere pg_cron: usa ultimo_resumen_enviado para no duplicar.
+  useEffect(() => {
+    const intentarEnvioAutomatico = async () => {
+      if (!configSlack || !configSlack.activo || !configSlack.webhook_url || !configSlack.enviar_resumen_diario) return;
+      
+      // ¿Ya se envió hoy?
+      const hoyIso = new Date().toISOString().slice(0, 10);
+      const ultimoEnvio = configSlack.ultimo_resumen_enviado ? new Date(configSlack.ultimo_resumen_enviado).toISOString().slice(0, 10) : null;
+      if (ultimoEnvio === hoyIso) return;  // ya enviado hoy
+      
+      // ¿Hay datos de tareas cargados? (esperar a que el realtime traiga datos)
+      if (!tareasCalendarioData) return;
+      
+      // ¿Hay algo que contar? (si no hay tareas hoy ni atrasadas ni mañana, no spamear)
+      const hoy = new Date(); hoy.setHours(0,0,0,0);
+      const hoyStr = hoy.toISOString().slice(0,10);
+      const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
+      const mananaStr = manana.toISOString().slice(0,10);
+      const hayTareas = tareasCalendario.some(t => 
+        t.estado === 'pendiente' && (t.fecha <= hoyStr || t.fecha === mananaStr)
+      );
+      if (!hayTareas) {
+        // Marcar como enviado igualmente para no comprobar en cada render
+        try {
+          await supabase.from('config_slack').update({ ultimo_resumen_enviado: new Date().toISOString() }).eq('id', configSlack.id);
+          refetchConfigSlack();
+        } catch (e) { /* ignorar */ }
+        return;
+      }
+      
+      // Enviar el resumen
+      const msg = generarResumenDiario();
+      const r = await enviarASlack(msg, 'resumen_diario');
+      if (r.ok) {
+        try {
+          await supabase.from('config_slack').update({ ultimo_resumen_enviado: new Date().toISOString() }).eq('id', configSlack.id);
+          refetchConfigSlack();
+          console.log('📲 Resumen diario enviado automáticamente a Slack');
+        } catch (e) { console.warn(e); }
+      }
+    };
+    
+    // Pequeño delay para que carguen los datos del realtime
+    const timer = setTimeout(intentarEnvioAutomatico, 3000);
+    return () => clearTimeout(timer);
+  }, [configSlackData, tareasCalendarioData]);
 
   // V59: Form exportar asesoría
   const ExportarAsesoriaForm = ({ onExportar, onCancel }) => {
