@@ -3835,7 +3835,15 @@ ${pedidoLinea ? `^FO260,244
       }
 
       // Crear factura automáticamente si es pedido nuevo
-      if (!editingItem) {
+      // V63: EXCEPTO si el cliente factura agrupado (semanal/quincenal/mensual)
+      const clientePeriod = clientes.find(c => c.id === form.cliente_id);
+      const facturaAgrupada = ['semanal', 'quincenal', 'mensual'].includes(clientePeriod?.periodicidad_facturacion);
+      
+      if (!editingItem && facturaAgrupada) {
+        console.log(`ℹ️ Cliente con facturación ${clientePeriod.periodicidad_facturacion}: no se crea factura individual. Se agrupará con los albaranes del periodo.`);
+      }
+      
+      if (!editingItem && !facturaAgrupada) {
         const year = new Date().getFullYear();
         const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
         const facturaId = `F-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
@@ -4300,6 +4308,32 @@ ${pedidoLinea ? `^FO260,244
                 </div>
               </div>
             </label>
+          </div>
+          
+          {/* V63: Periodicidad de facturación */}
+          <div className="mt-3 pt-3 border-t border-blue-200">
+            <p className="text-xs font-bold text-blue-900 mb-2">📅 ¿Cada cuánto se factura a este cliente?</p>
+            <p className="text-[10px] text-blue-700 mb-2">Si eliges semanal/quincenal/mensual, los pedidos NO generan factura individual — se agrupan los albaranes entregados del periodo en una sola factura.</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {[
+                { val: 'por_pedido', emoji: '🧾', label: 'Por pedido', desc: '1 pedido = 1 factura' },
+                { val: 'semanal', emoji: '📆', label: 'Semanal', desc: 'Albaranes de la semana' },
+                { val: 'quincenal', emoji: '🗓️', label: 'Quincenal', desc: 'Días 1-15 / 16-fin' },
+                { val: 'mensual', emoji: '📅', label: 'Mensual', desc: 'Mes natural completo' },
+              ].map(opt => {
+                const sel = (form.periodicidad_facturacion || 'por_pedido') === opt.val;
+                return (
+                  <button
+                    key={opt.val} type="button"
+                    onClick={() => setForm({...form, periodicidad_facturacion: opt.val})}
+                    className={`p-2.5 rounded-xl border-2 text-left transition-all ${sel ? 'border-blue-500 bg-blue-100 shadow-sm' : 'border-neutral-200 bg-white hover:border-blue-200'}`}
+                  >
+                    <p className="font-bold text-xs">{opt.emoji} {opt.label}</p>
+                    <p className="text-[9px] text-neutral-500 mt-0.5">{opt.desc}</p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           
           {/* Datos SEPA si aplica */}
@@ -10606,6 +10640,13 @@ ${transacciones}
             <Button variant="secondary" size="sm" onClick={handleExportSelected}>
               <Download size={16} /> {selectedFacturas.length > 0 ? `Exportar (${selectedFacturas.length})` : 'Exportar'}
             </Button>
+            <Button size="sm" onClick={() => setShowModal('facturasAgrupadas')} className="bg-green-600 hover:bg-green-700">
+              🧾 Facturas agrupadas
+              {(() => {
+                const n = calcularGruposFacturables().length;
+                return n > 0 ? <span className="ml-1 px-1.5 py-0.5 bg-white/25 rounded-full text-[10px]">{n}</span> : null;
+              })()}
+            </Button>
             <Button size="sm" onClick={() => setShowModal('exportarAsesoria')} className="bg-purple-600 hover:bg-purple-700">
               📊 Exportar asesoría
             </Button>
@@ -11024,6 +11065,9 @@ ${transacciones}
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
+                        {factura.tipo === 'agrupada' && (
+                          <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
+                        )}
                         {factura.estado === 'pendiente' && (
                           <button 
                             onClick={() => registrarCobro(factura.id)} 
@@ -18711,6 +18755,319 @@ SELECT cron.schedule(
     return () => clearTimeout(timer);
   }, [configSlackData, tareasCalendarioData]);
 
+  // ==================== V63 — FACTURAS AGRUPADAS ====================
+  
+  // Calcula los grupos de albaranes facturables por cliente según su periodicidad
+  const calcularGruposFacturables = () => {
+    const clientesAgrupados = clientes.filter(c => 
+      ['semanal', 'quincenal', 'mensual'].includes(c.periodicidad_facturacion)
+    );
+    
+    const grupos = [];
+    clientesAgrupados.forEach(cli => {
+      // Albaranes entregados sin facturar de este cliente
+      const albsPendientes = albaranes.filter(a => 
+        a.cliente_id === cli.id && 
+        a.estado === 'entregado' && 
+        !a.numero_factura && 
+        !a.factura_semanal_id
+      ).sort((a, b) => new Date(a.fecha_entrega_real || a.fecha_emision) - new Date(b.fecha_entrega_real || b.fecha_emision));
+      
+      if (albsPendientes.length === 0) return;
+      
+      const subtotal = albsPendientes.reduce((s, a) => s + (parseFloat(a.subtotal) || 0), 0);
+      const descuento = albsPendientes.reduce((s, a) => s + (parseFloat(a.descuento_aplicado) || 0), 0);
+      const base = albsPendientes.reduce((s, a) => s + (parseFloat(a.base_imponible) || 0), 0);
+      const iva = albsPendientes.reduce((s, a) => s + (parseFloat(a.iva) || 0), 0);
+      const re = albsPendientes.reduce((s, a) => s + (parseFloat(a.re_importe) || 0), 0);
+      const total = albsPendientes.reduce((s, a) => s + (parseFloat(a.total) || 0), 0);
+      
+      const fechas = albsPendientes.map(a => a.fecha_entrega_real || a.fecha_emision).filter(Boolean).sort();
+      
+      grupos.push({
+        cliente: cli,
+        albaranes: albsPendientes,
+        subtotal, descuento, base, iva, re, total,
+        desde: fechas[0] || null,
+        hasta: fechas[fechas.length - 1] || null,
+      });
+    });
+    
+    return grupos.sort((a, b) => b.total - a.total);
+  };
+  
+  // Genera la factura agrupada de un grupo (factura normal F-2026-XXXX)
+  const generarFacturaAgrupada = async (grupo, contadorOffset = 0) => {
+    const year = new Date().getFullYear();
+    const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
+    const facturaId = `F-${year}-${String((count || 0) + 1 + contadorOffset).padStart(4, '0')}`;
+    
+    const fechaHoy = new Date().toISOString().split('T')[0];
+    const fechaVto = new Date(); fechaVto.setDate(fechaVto.getDate() + 30);
+    
+    const periodLabel = { semanal: 'semana', quincenal: 'quincena', mensual: 'mes' }[grupo.cliente.periodicidad_facturacion] || 'periodo';
+    const concepto = `Factura agrupada (${periodLabel}) · ${grupo.albaranes.length} albarán${grupo.albaranes.length !== 1 ? 'es' : ''} del ${formatDate(grupo.desde)} al ${formatDate(grupo.hasta)}`;
+    
+    const facturaData = {
+      id: facturaId,
+      pedido_id: null,
+      cliente_id: grupo.cliente.id,
+      fecha: fechaHoy,
+      fecha_vencimiento: fechaVto.toISOString().split('T')[0],
+      estado: 'pendiente',
+      subtotal: grupo.subtotal,
+      descuento_aplicado: grupo.descuento,
+      base_imponible: grupo.base,
+      iva_porcentaje: IVA_VENTAS,
+      iva: grupo.iva,
+      recargo_equivalencia: grupo.re > 0,
+      re_porcentaje: grupo.re > 0 ? RE_VENTAS : 0,
+      re_importe: grupo.re,
+      total: grupo.total,
+      tipo: 'agrupada',
+      albaranes_ids: grupo.albaranes.map(a => a.id),
+      periodo_desde: grupo.desde,
+      periodo_hasta: grupo.hasta,
+      concepto,
+    };
+    
+    const { error } = await supabase.from('facturas').insert(facturaData);
+    if (error) {
+      // Reintento sin columnas V63 si no existe (por si falta SQL)
+      if (error.code === '42703') {
+        const { tipo, albaranes_ids, periodo_desde, periodo_hasta, concepto: c2, ...basico } = facturaData;
+        const { error: e2 } = await supabase.from('facturas').insert(basico);
+        if (e2) throw e2;
+      } else throw error;
+    }
+    
+    // Marcar albaranes como facturados
+    for (const alb of grupo.albaranes) {
+      await supabase.from('albaranes').update({ 
+        estado: 'facturado', 
+        numero_factura: facturaId 
+      }).eq('id', alb.id);
+    }
+    
+    // Asiento contable (si existe la función)
+    try {
+      if (typeof crearAsientoDesdeFactura === 'function') {
+        await crearAsientoDesdeFactura(facturaData, grupo.cliente);
+      }
+    } catch (e) { console.warn('Asiento no creado:', e); }
+    
+    return facturaId;
+  };
+  
+  // PDF de factura agrupada (lista de albaranes como líneas)
+  const generarPDFFacturaAgrupada = (factura) => {
+    const cliente = clientes.find(c => c.id === factura.cliente_id);
+    const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
+    const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
+    
+    const fmtF = (d) => d ? `${String(new Date(d).getDate()).padStart(2,'0')}/${String(new Date(d).getMonth()+1).padStart(2,'0')}/${new Date(d).getFullYear()}` : '';
+    
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><title>Factura ${factura.id}</title>
+<style>
+@page { size: A4; margin: 14mm 16mm; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.4; }
+.header { display: table; width: 100%; margin-bottom: 22px; }
+.header > div { display: table-cell; vertical-align: top; }
+.brand { font-size: 22pt; font-weight: 800; }
+.brand .o { color: #ED7E1F; }
+.brand-sub { font-size: 8pt; letter-spacing: 1.8px; color: #666; margin-top: 4px; }
+.emisor { margin-top: 10px; font-size: 9pt; line-height: 1.5; color: #444; }
+.doc-r { text-align: right; }
+.doc-title { font-size: 17pt; font-weight: 800; color: #ED7E1F; }
+.doc-num { font-size: 13pt; font-weight: 700; font-family: 'Courier New', monospace; margin-top: 2px; }
+.doc-dates { font-size: 9pt; color: #666; margin-top: 8px; line-height: 1.6; }
+.cliente-box { border: 1.5px solid #1a1a1a; padding: 12px 14px; margin-bottom: 16px; }
+.cliente-box .label { font-size: 7.5pt; text-transform: uppercase; letter-spacing: 1.2px; color: #666; margin-bottom: 4px; }
+.cliente-box .nombre { font-size: 13pt; font-weight: 700; }
+.cliente-box .data { font-size: 9.5pt; color: #333; line-height: 1.5; }
+.concepto { background: #fafafa; border-left: 3px solid #ED7E1F; padding: 8px 12px; font-size: 9.5pt; margin-bottom: 14px; }
+table.lines { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+table.lines thead { background: #1a1a1a; color: white; }
+table.lines th { padding: 8px 10px; text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.8px; }
+table.lines th.r { text-align: right; }
+table.lines td { padding: 8px 10px; border-bottom: 1px solid #e5e5e5; font-size: 9.5pt; }
+table.lines td.r { text-align: right; font-variant-numeric: tabular-nums; }
+table.lines tbody tr:nth-child(even) { background: #fafafa; }
+.totals { float: right; width: 280px; font-size: 10pt; margin-bottom: 20px; }
+.trow { display: table; width: 100%; padding: 5px 0; border-bottom: 1px dotted #ccc; }
+.trow .l { display: table-cell; color: #555; }
+.trow .v { display: table-cell; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.trow.tot { border: none; border-top: 2px solid #1a1a1a; padding-top: 9px; margin-top: 6px; font-size: 14pt; font-weight: 800; }
+.trow.tot .v { color: #ED7E1F; }
+.clear::after { content: ""; display: table; clear: both; }
+.pago { font-size: 9pt; color: #444; background: #f5f8ff; border: 1px solid #c9d8f0; padding: 10px 12px; margin-bottom: 16px; }
+.footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #ccc; font-size: 7.5pt; color: #888; text-align: center; }
+.no-print { position: fixed; top: 14px; right: 14px; background: #ED7E1F; color: white; padding: 10px 18px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 11pt; z-index: 999; }
+@media print { .no-print { display: none; } }
+</style></head>
+<body>
+<button class="no-print" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
+<div class="header">
+  <div style="width:60%">
+    <div class="brand">Root<span class="o">Flow</span></div>
+    <div class="brand-sub">HYDROPONICS S.L.</div>
+    <div class="emisor"><strong>ROOTFLOW HYDROPONICS S.L.</strong><br>C. Nueva 16 P6 · 28231 Las Rozas de Madrid<br>CIF: B27535137 · Tel: 694 918 481<br>info@rootflow.es</div>
+  </div>
+  <div class="doc-r" style="width:40%">
+    <div class="doc-title">FACTURA</div>
+    <div class="doc-num">${factura.id}</div>
+    <div class="doc-dates">
+      <span style="color:#888;text-transform:uppercase;font-size:7.5pt">Fecha</span><br><strong>${fmtF(factura.fecha)}</strong><br><br>
+      <span style="color:#888;text-transform:uppercase;font-size:7.5pt">Vencimiento</span><br><strong>${fmtF(factura.fecha_vencimiento)}</strong>
+    </div>
+  </div>
+</div>
+
+<div class="cliente-box">
+  <div class="label">Cliente</div>
+  <div class="nombre">${cliente?.nombre || ''}</div>
+  <div class="data">
+    ${cliente?.direccion || ''}
+    ${(cliente?.codigo_postal || cliente?.ciudad) ? `<br>${cliente?.codigo_postal || ''} ${cliente?.ciudad || ''}` : ''}
+    ${cliente?.cif ? `<br>CIF: ${cliente.cif}` : ''}
+  </div>
+</div>
+
+${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura.concepto}</div>` : ''}
+
+<table class="lines">
+  <thead><tr><th>Albarán</th><th>Fecha entrega</th><th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
+  <tbody>
+    ${albs.map(a => `<tr>
+      <td style="font-family:'Courier New',monospace;font-weight:600">${a.id}</td>
+      <td>${fmtF(a.fecha_entrega_real || a.fecha_emision)}</td>
+      <td class="r">${formatCurrency(a.base_imponible || 0)}</td>
+      <td class="r">${formatCurrency((parseFloat(a.iva)||0) + (parseFloat(a.re_importe)||0))}</td>
+      <td class="r">${formatCurrency(a.total || 0)}</td>
+    </tr>`).join('')}
+  </tbody>
+</table>
+
+<div class="clear">
+  <div class="totals">
+    <div class="trow"><span class="l">Base imponible</span><span class="v">${formatCurrency(factura.base_imponible || 0)}</span></div>
+    <div class="trow"><span class="l">IVA (${factura.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(factura.iva || 0)}</span></div>
+    ${(factura.re_importe || 0) > 0 ? `<div class="trow"><span class="l">Recargo Eq. (${RE_VENTAS}%)</span><span class="v">${formatCurrency(factura.re_importe)}</span></div>` : ''}
+    <div class="trow tot"><span class="l">TOTAL</span><span class="v">${formatCurrency(factura.total || 0)}</span></div>
+  </div>
+</div>
+
+<div class="pago">
+  <strong>Forma de pago:</strong> ${cliente?.modalidad_cobro === 'sepa_b2b_semanal' ? `Adeudo SEPA B2B${cliente?.mandato_sepa_b2b ? ` · Mandato ${cliente.mandato_sepa_b2b}` : ''}` : cliente?.modalidad_cobro === 'prepago' ? 'Transferencia anticipada' : cliente?.modalidad_cobro === 'contraentrega' ? 'Pago contra entrega' : 'Transferencia bancaria'}<br>
+  <strong>Cuenta de abono:</strong> ES58 0182 4015 6002 0261 4010 (BBVA) · SWIFT: BBVAESMMXXX
+</div>
+
+<div class="footer">ROOTFLOW HYDROPONICS S.L. · CIF B27535137 · C. Nueva 16 P6, 28231 Las Rozas de Madrid · Tel. 694 918 481 · info@rootflow.es</div>
+</body></html>`;
+    
+    const w = window.open('', '_blank');
+    if (!w) { alert('⚠️ Permite pop-ups'); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+  
+  // Modal/Form de facturas agrupadas
+  const FacturasAgrupadasForm = ({ onCerrar }) => {
+    const grupos = calcularGruposFacturables();
+    const [seleccionados, setSeleccionados] = useState(grupos.map((_, i) => i));
+    const [generando, setGenerando] = useState(false);
+    
+    const toggleGrupo = (idx) => {
+      setSeleccionados(seleccionados.includes(idx) 
+        ? seleccionados.filter(i => i !== idx) 
+        : [...seleccionados, idx]);
+    };
+    
+    const periodEmoji = { semanal: '📆', quincenal: '🗓️', mensual: '📅' };
+    
+    return (
+      <div className="space-y-4">
+        {grupos.length === 0 ? (
+          <div className="text-center py-8 text-neutral-500">
+            <p className="text-4xl mb-2">✓</p>
+            <p className="font-semibold">No hay nada que facturar</p>
+            <p className="text-xs mt-1">No hay albaranes entregados sin facturar de clientes con facturación agrupada.</p>
+            <p className="text-[10px] text-neutral-400 mt-2">Recuerda: los albaranes deben estar en estado "entregado" y el cliente con periodicidad semanal/quincenal/mensual.</p>
+          </div>
+        ) : (
+          <>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
+              <p className="font-semibold mb-1">Se generará 1 factura por cliente con todos sus albaranes entregados pendientes.</p>
+              <p>Cada factura sale con numeración normal (F-{new Date().getFullYear()}-XXXX), entra en contabilidad y en el export de asesoría. Los albaranes pasan a estado "facturado".</p>
+            </div>
+            
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {grupos.map((g, idx) => (
+                <label key={g.cliente.id} className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${seleccionados.includes(idx) ? 'border-green-400 bg-green-50' : 'border-neutral-200 bg-white'}`}>
+                  <input type="checkbox" checked={seleccionados.includes(idx)} onChange={() => toggleGrupo(idx)} className="mt-1" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold">{g.cliente.nombre}</span>
+                      <Badge className="bg-blue-100 text-blue-700 text-[10px]">
+                        {periodEmoji[g.cliente.periodicidad_facturacion]} {g.cliente.periodicidad_facturacion}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-neutral-500 mt-0.5">
+                      {g.albaranes.length} albarán{g.albaranes.length !== 1 ? 'es' : ''} · del {formatDate(g.desde)} al {formatDate(g.hasta)}
+                    </p>
+                    <p className="text-[10px] text-neutral-400 mt-0.5">
+                      {g.albaranes.map(a => a.id).join(' · ')}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="font-black text-green-700">{formatCurrency(g.total)}</p>
+                    <p className="text-[10px] text-neutral-400">base {formatCurrency(g.base)}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            
+            <div className="flex justify-between items-center pt-3 border-t">
+              <p className="text-sm">
+                <strong>{seleccionados.length}</strong> factura{seleccionados.length !== 1 ? 's' : ''} · Total: <strong className="text-green-700">{formatCurrency(seleccionados.reduce((s, idx) => s + grupos[idx].total, 0))}</strong>
+              </p>
+              <div className="flex gap-2">
+                <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+                <Button 
+                  disabled={seleccionados.length === 0 || generando}
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={async () => {
+                    setGenerando(true);
+                    const generadas = [];
+                    try {
+                      for (let i = 0; i < seleccionados.length; i++) {
+                        const g = grupos[seleccionados[i]];
+                        const fid = await generarFacturaAgrupada(g, i);
+                        generadas.push(`${fid} → ${g.cliente.nombre} (${formatCurrency(g.total)})`);
+                      }
+                      refetchFacturas();
+                      refetchAlbaranes();
+                      alert(`✅ ${generadas.length} factura(s) generada(s):\n\n${generadas.join('\n')}\n\nLos albaranes han pasado a estado "facturado".`);
+                      onCerrar();
+                    } catch (e) {
+                      alert('❌ Error: ' + (e.message || String(e)) + (generadas.length > 0 ? `\n\nYa se generaron: ${generadas.join(', ')}` : ''));
+                    } finally {
+                      setGenerando(false);
+                    }
+                  }}
+                >
+                  {generando ? '⏳ Generando...' : `🧾 Generar ${seleccionados.length} factura${seleccionados.length !== 1 ? 's' : ''}`}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   // V59: Form exportar asesoría
   const ExportarAsesoriaForm = ({ onExportar, onCancel }) => {
     const [periodo, setPeriodo] = useState('mes_anterior');
@@ -24727,6 +25084,13 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </Modal>
         );
       })()}
+      
+      {/* Modal Facturas Agrupadas V63 */}
+      {showModal === 'facturasAgrupadas' && (
+        <Modal title="🧾 Generar facturas agrupadas" onClose={() => setShowModal(null)} size="max-w-2xl">
+          <FacturasAgrupadasForm onCerrar={() => setShowModal(null)} />
+        </Modal>
+      )}
       
       {/* Modal Exportar para Asesoría V59 */}
       {showModal === 'exportarAsesoria' && (
