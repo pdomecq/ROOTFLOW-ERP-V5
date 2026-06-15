@@ -326,6 +326,7 @@ const TIPOS_IVA = {
 // IVA para productos alimenticios (microbrotes) = 4%
 const IVA_VENTAS = 4; // Superreducido para alimentos
 const RE_VENTAS = 0.5; // Recargo de equivalencia para alimentos
+const TARIFA_KM = 0.13; // €/km para notas de gasto por kilometraje de reparto
 
 const zonaConfig = {
   norte: { label: "Norte", color: "bg-sky-100 text-sky-700" },
@@ -1617,6 +1618,11 @@ const MainApp = () => {
   // V58 - Albaranes
   const { data: albaranesData, refetch: refetchAlbaranes } = useRealtime('albaranes');
   const { data: albaranPedidosData, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
+  // V64 - Inventario de insumos
+  const { data: insumosData, refetch: refetchInsumos } = useRealtime('insumos');
+  const { data: insumoMovimientosData, refetch: refetchInsumoMovimientos } = useRealtime('insumo_movimientos');
+  // V64 - Notas de kilometraje
+  const { data: notasKmData, refetch: refetchNotasKm } = useRealtime('notas_kilometraje');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1694,6 +1700,8 @@ const MainApp = () => {
     notif_stock_critico: true,
     notif_cosecha_lista: true,
     notif_siembra_pendiente: true,
+    resumen_produccion_diario: true,
+    notif_tarea_completada: false,
     notif_turno_asignado: true,
     notif_turno_recordatorio: true,
     notif_turno_conflicto: true,
@@ -1737,6 +1745,11 @@ const MainApp = () => {
   // V58 - Albaranes
   const albaranes = albaranesData || [];
   const albaranPedidos = albaranPedidosData || [];
+  // V64 - Insumos
+  const insumos = insumosData || [];
+  const insumoMovimientos = insumoMovimientosData || [];
+  // V64 - Notas kilometraje
+  const notasKm = notasKmData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -7388,6 +7401,8 @@ ${pedidoLinea ? `^FO260,244
       notif_stock_critico: config.notif_stock_critico !== false,
       notif_cosecha_lista: config.notif_cosecha_lista !== false,
       notif_siembra_pendiente: config.notif_siembra_pendiente !== false,
+      resumen_produccion_diario: config.resumen_produccion_diario !== false,
+      notif_tarea_completada: config.notif_tarea_completada === true,
       notif_turno_asignado: config.notif_turno_asignado !== false,
       notif_turno_recordatorio: config.notif_turno_recordatorio !== false,
       notif_turno_conflicto: config.notif_turno_conflicto !== false,
@@ -7440,6 +7455,8 @@ ${pedidoLinea ? `^FO260,244
       {
         categoria: '🌱 Producción',
         eventos: [
+          { key: 'resumen_produccion_diario', label: '📋 Resumen diario de tareas (al abrir la app)' },
+          { key: 'notif_tarea_completada', label: 'Cuando se completa una tarea de planificación' },
           { key: 'notif_cosecha_lista', label: 'Cosecha lista para hoy' },
           { key: 'notif_siembra_pendiente', label: 'Siembra urgente pendiente', critico: true },
         ],
@@ -12013,6 +12030,12 @@ ${transacciones}
   // V58: pedido preseleccionado para generar albarán
   const [pedidoParaAlbaran, setPedidoParaAlbaran] = useState(null);
   const [busquedaAlbaranes, setBusquedaAlbaranes] = useState('');
+  // V64: estados inventario insumos
+  const [insumoBusqueda, setInsumoBusqueda] = useState('');
+  const [insumoCategoria, setInsumoCategoria] = useState('todos');
+  const [insumoSoloReponer, setInsumoSoloReponer] = useState(false);
+  // V64: albarán preseleccionado para nota de kilometraje
+  const [albaranParaKm, setAlbaranParaKm] = useState(null);
   
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
@@ -12450,9 +12473,19 @@ ${logoRootflow}^FS
             <h1 className="text-3xl font-black text-neutral-900">📋 Albaranes</h1>
             <p className="text-xs text-neutral-500 mt-1">Documentos de entrega · vinculan pedidos con facturas</p>
           </div>
-          <Button onClick={() => { setEditingItem(null); setShowModal('albaran'); }}>
-            <Plus size={16} /> Nuevo albarán
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setShowModal('resumenKm')} className="relative">
+              🚗 Gastos km
+              {(() => {
+                const pendientes = notasKm.filter(n => !n.reembolsado);
+                const totalPend = pendientes.reduce((s, n) => s + (parseFloat(n.importe_total) || 0), 0);
+                return totalPend > 0 ? <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded-full text-[10px] font-bold">{formatCurrency(totalPend)}</span> : null;
+              })()}
+            </Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('albaran'); }}>
+              <Plus size={16} /> Nuevo albarán
+            </Button>
+          </div>
         </div>
         
         {/* KPIs */}
@@ -12516,6 +12549,22 @@ ${logoRootflow}^FS
                         <td className="p-3">
                           <div className="flex justify-end gap-1">
                             <button onClick={() => generarPDFAlbaran(alb)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver/imprimir PDF"><Printer size={16} /></button>
+                            {(() => {
+                              const notaExistente = notasKm.find(n => n.albaran_id === alb.id);
+                              return (
+                                <button 
+                                  onClick={() => { 
+                                    if (notaExistente) { setEditingItem(notaExistente); setAlbaranParaKm(null); }
+                                    else { setAlbaranParaKm(alb); setEditingItem(null); }
+                                    setShowModal('notaKm'); 
+                                  }} 
+                                  className={`p-2 rounded-lg ${notaExistente ? 'text-green-600 hover:bg-green-50' : 'text-neutral-400 hover:text-amber-600 hover:bg-amber-50'}`}
+                                  title={notaExistente ? `Gasto km registrado: ${formatCurrency(notaExistente.importe_total)}` : 'Añadir gasto de kilometraje'}
+                                >
+                                  🚗
+                                </button>
+                              );
+                            })()}
                             {alb.estado === 'generado' && (
                               <button 
                                 onClick={async () => {
@@ -12576,8 +12625,8 @@ ${logoRootflow}^FS
         }).eq('id', tarea.id);
         refetchTareasCalendario();
         
-        // V56: Notificar a Slack si está habilitado
-        if (nuevoEstado === 'hecho' && configSlack && configSlack.activo && configSlack.notificar_al_completar_tarea) {
+        // V64: Notificar a Slack al completar (usa sistema principal)
+        if (nuevoEstado === 'hecho' && notificacionesConfig?.slack_activo && notificacionesConfig?.notif_tarea_completada) {
           const variedadT = variedades.find(v => v.id === tarea.variedad_id);
           const tipoEmoji = { sembrar: '🌱', pasar_luz: '☀️', cosechar: '✂️', entregar: '🚚' };
           const tipoLabel = { sembrar: 'Sembrado', pasar_luz: 'Pasado a luz', cosechar: 'Cosechado', entregar: 'Entregado' };
@@ -12585,7 +12634,7 @@ ${logoRootflow}^FS
           if (tarea.tipo === 'cosechar' && tarea.bandejas_venta > 0) {
             msg += ` _(→ ${tarea.bandejas_venta} cajitas)_`;
           }
-          enviarASlack(msg, 'tarea_completada');
+          enviarSlack({ titulo: 'Tarea de producción completada', mensaje: msg, prioridad: 'baja' });
         }
       } catch (e) {
         alert('Error: ' + e.message);
@@ -12630,19 +12679,23 @@ ${logoRootflow}^FS
             <p className="text-xs text-neutral-500 mt-1">Calendario automático de siembras, traslados y cosechas</p>
           </div>
           <div className="flex gap-2">
-            {configSlack && configSlack.webhook_url && configSlack.activo && (
+            {notificacionesConfig?.slack_activo && (
               <Button 
                 variant="secondary" 
                 onClick={async () => {
                   const msg = generarResumenDiario();
-                  const r = await enviarASlack(msg, 'manual');
-                  if (r.ok) {
-                    alert('📲 Resumen enviado a Slack');
+                  const r = await enviarSlack({ 
+                    titulo: '🌱 Tareas de producción de hoy', 
+                    mensaje: msg, 
+                    prioridad: 'media' 
+                  });
+                  if (r.success) {
+                    alert('📲 Resumen de producción enviado a Slack');
                   } else {
-                    alert('❌ Error: ' + r.error);
+                    alert('❌ No se pudo enviar: ' + (r.error || 'revisa la configuración de Slack en Ajustes'));
                   }
                 }}
-                title="Enviar resumen del día a Slack"
+                title="Enviar las tareas de hoy a Slack"
               >
                 📲 Enviar a Slack
               </Button>
@@ -18707,21 +18760,22 @@ SELECT cron.schedule(
     return mensaje;
   };
 
-  // V61: Auto-envío del resumen diario a Slack la primera vez que se abre la app cada día.
-  // No requiere pg_cron: usa ultimo_resumen_enviado para no duplicar.
+  // V64: Auto-envío del resumen de PLANIFICACIÓN a Slack, 1 vez al día al abrir la app.
+  // Usa el sistema enviarSlack (config principal) que es el que está configurado y funciona.
   useEffect(() => {
     const intentarEnvioAutomatico = async () => {
-      if (!configSlack || !configSlack.activo || !configSlack.webhook_url || !configSlack.enviar_resumen_diario) return;
+      const cfg = notificacionesConfig;
+      if (!cfg || !cfg.slack_activo) return;
+      if (cfg.resumen_produccion_diario === false) return; // por defecto activado
+      if (!cfg.slack_usar_edge_function && !cfg.slack_webhook_url) return;
       
-      // ¿Ya se envió hoy?
+      // ¿Ya se envió hoy? (localStorage, sencillo y sin tocar BD)
       const hoyIso = new Date().toISOString().slice(0, 10);
-      const ultimoEnvio = configSlack.ultimo_resumen_enviado ? new Date(configSlack.ultimo_resumen_enviado).toISOString().slice(0, 10) : null;
-      if (ultimoEnvio === hoyIso) return;  // ya enviado hoy
+      const ultimoEnvio = localStorage.getItem('rootflow_resumen_prod_enviado');
+      if (ultimoEnvio === hoyIso) return;
       
-      // ¿Hay datos de tareas cargados? (esperar a que el realtime traiga datos)
       if (!tareasCalendarioData) return;
       
-      // ¿Hay algo que contar? (si no hay tareas hoy ni atrasadas ni mañana, no spamear)
       const hoy = new Date(); hoy.setHours(0,0,0,0);
       const hoyStr = hoy.toISOString().slice(0,10);
       const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
@@ -18730,30 +18784,28 @@ SELECT cron.schedule(
         t.estado === 'pendiente' && (t.fecha <= hoyStr || t.fecha === mananaStr)
       );
       if (!hayTareas) {
-        // Marcar como enviado igualmente para no comprobar en cada render
-        try {
-          await supabase.from('config_slack').update({ ultimo_resumen_enviado: new Date().toISOString() }).eq('id', configSlack.id);
-          refetchConfigSlack();
-        } catch (e) { /* ignorar */ }
+        localStorage.setItem('rootflow_resumen_prod_enviado', hoyIso);
         return;
       }
       
-      // Enviar el resumen
-      const msg = generarResumenDiario();
-      const r = await enviarASlack(msg, 'resumen_diario');
-      if (r.ok) {
-        try {
-          await supabase.from('config_slack').update({ ultimo_resumen_enviado: new Date().toISOString() }).eq('id', configSlack.id);
-          refetchConfigSlack();
-          console.log('📲 Resumen diario enviado automáticamente a Slack');
-        } catch (e) { console.warn(e); }
+      const mensaje = generarResumenDiario();
+      const r = await enviarSlack({ 
+        titulo: '🌱 Tareas de producción de hoy', 
+        mensaje, 
+        prioridad: 'media',
+        tipoEvento: null,
+      });
+      if (r.success) {
+        localStorage.setItem('rootflow_resumen_prod_enviado', hoyIso);
+        console.log('📲 Resumen de producción enviado automáticamente a Slack');
+      } else {
+        console.warn('No se pudo enviar resumen de producción:', r.error);
       }
     };
     
-    // Pequeño delay para que carguen los datos del realtime
-    const timer = setTimeout(intentarEnvioAutomatico, 3000);
+    const timer = setTimeout(intentarEnvioAutomatico, 3500);
     return () => clearTimeout(timer);
-  }, [configSlackData, tareasCalendarioData]);
+  }, [notificacionesConfig, tareasCalendarioData]);
 
   // ==================== V63 — FACTURAS AGRUPADAS ====================
   
@@ -19341,6 +19393,337 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
 
   // ==================== V58 — ALBARANES ====================
   
+  // ==================== V64 — INVENTARIO DE INSUMOS ====================
+  
+  const CATEGORIAS_INSUMO = {
+    semillas:    { label: 'Semillas',          emoji: '🌱', color: '#22C55E' },
+    sustrato:    { label: 'Sustrato',          emoji: '🪴', color: '#A16207' },
+    envases:     { label: 'Envases',           emoji: '📦', color: '#F59E0B' },
+    etiquetas:   { label: 'Etiquetas',         emoji: '🏷️', color: '#EAB308' },
+    limpieza:    { label: 'Limpieza',          emoji: '🧽', color: '#06B6D4' },
+    consumibles: { label: 'Consumibles',       emoji: '🧰', color: '#8B5CF6' },
+    epi:         { label: 'EPI / Seguridad',   emoji: '🧤', color: '#EC4899' },
+    otros:       { label: 'Otros',             emoji: '📌', color: '#94A3B8' },
+  };
+  
+  const UNIDADES_INSUMO = ['ud', 'kg', 'g', 'L', 'ml', 'rollo', 'caja', 'saco', 'paquete', 'bolsa'];
+
+  const InsumoForm = ({ insumo, onSave, onCancel }) => {
+    const [form, setForm] = useState(insumo || {
+      nombre: '',
+      categoria: 'semillas',
+      stock_actual: 0,
+      unidad: 'ud',
+      stock_minimo: 0,
+      proveedor: '',
+      precio_unitario: 0,
+      url_compra: '',
+      referencia_proveedor: '',
+      variedad_id: null,
+      ubicacion: '',
+      notas: '',
+      activo: true,
+    });
+    
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Nombre *" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} placeholder="Ej: Semilla cilantro, Tarrina 250ml, Etiquetas térmicas..." />
+        </div>
+        
+        {/* Categoría */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Categoría</label>
+          <div className="grid grid-cols-4 gap-2">
+            {Object.entries(CATEGORIAS_INSUMO).map(([k, c]) => {
+              const sel = form.categoria === k;
+              return (
+                <button key={k} type="button" onClick={() => setForm({...form, categoria: k})}
+                  className={`p-2 rounded-xl border-2 text-center transition-all ${sel ? 'shadow-sm' : 'hover:shadow-sm'}`}
+                  style={{ borderColor: sel ? c.color : '#E5E7EB', backgroundColor: sel ? c.color + '15' : 'white' }}>
+                  <div className="text-xl">{c.emoji}</div>
+                  <p className="text-[10px] font-medium mt-0.5">{c.label}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Stock y unidad */}
+        <div className="grid grid-cols-3 gap-3">
+          <Input label="Stock actual" type="number" step="0.01" value={form.stock_actual} onChange={e => setForm({...form, stock_actual: parseFloat(e.target.value) || 0})} />
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Unidad</label>
+            <select value={form.unidad} onChange={e => setForm({...form, unidad: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300">
+              {UNIDADES_INSUMO.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+          <Input label="⚠️ Stock mínimo" type="number" step="0.01" value={form.stock_minimo} onChange={e => setForm({...form, stock_minimo: parseFloat(e.target.value) || 0})} placeholder="Avisa al bajar" />
+        </div>
+        
+        {form.stock_minimo > 0 && form.stock_actual <= form.stock_minimo && (
+          <div className="p-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+            ⚠️ Con estos valores, este insumo ya estaría marcado para reponer.
+          </div>
+        )}
+        
+        {/* Vinculación con variedad si es semilla */}
+        {form.categoria === 'semillas' && (
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Variedad asociada (opcional)</label>
+            <select value={form.variedad_id || ''} onChange={e => setForm({...form, variedad_id: e.target.value ? parseInt(e.target.value) : null})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300">
+              <option value="">— Sin asociar —</option>
+              {variedades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}
+            </select>
+          </div>
+        )}
+        
+        {/* Compra */}
+        <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 space-y-3">
+          <p className="text-sm font-semibold text-neutral-700">🛒 Datos de compra</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Proveedor" value={form.proveedor} onChange={e => setForm({...form, proveedor: e.target.value})} placeholder="Ej: Semillas El Huerto" />
+            <Input label="Precio por unidad (€)" type="number" step="0.01" value={form.precio_unitario} onChange={e => setForm({...form, precio_unitario: parseFloat(e.target.value) || 0})} />
+          </div>
+          <Input label="Referencia / SKU proveedor" value={form.referencia_proveedor} onChange={e => setForm({...form, referencia_proveedor: e.target.value})} placeholder="Opcional" />
+          <Input label="🔗 Link de compra" value={form.url_compra} onChange={e => setForm({...form, url_compra: e.target.value})} placeholder="https://... (para recomprar rápido)" />
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="📍 Ubicación" value={form.ubicacion} onChange={e => setForm({...form, ubicacion: e.target.value})} placeholder="Ej: Estantería A, nevera..." />
+          <Input label="Notas" value={form.notas} onChange={e => setForm({...form, notas: e.target.value})} />
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.nombre.trim()) { alert('Pon un nombre'); return; }
+            onSave(form);
+          }}>{insumo?.id ? 'Guardar' : 'Crear'}</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // Modal de movimiento rápido de insumo (entrada/salida)
+  const InsumoMovimientoForm = ({ insumo, onSave, onCancel }) => {
+    const [tipo, setTipo] = useState('entrada');
+    const [cantidad, setCantidad] = useState(0);
+    const [motivo, setMotivo] = useState('');
+    
+    const stockNuevo = tipo === 'entrada' 
+      ? (insumo.stock_actual || 0) + cantidad 
+      : Math.max(0, (insumo.stock_actual || 0) - cantidad);
+    
+    return (
+      <div className="space-y-4">
+        <div className="bg-neutral-50 rounded-xl p-3 text-center">
+          <p className="text-sm text-neutral-500">{insumo.nombre}</p>
+          <p className="text-2xl font-black">{insumo.stock_actual} {insumo.unidad}</p>
+          <p className="text-xs text-neutral-400">stock actual</p>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-2">
+          <button type="button" onClick={() => setTipo('entrada')}
+            className={`p-3 rounded-xl border-2 ${tipo === 'entrada' ? 'border-green-500 bg-green-50' : 'border-neutral-200'}`}>
+            <p className="font-bold text-green-700">📥 Entrada</p>
+            <p className="text-xs text-neutral-500">Compra / reposición</p>
+          </button>
+          <button type="button" onClick={() => setTipo('salida')}
+            className={`p-3 rounded-xl border-2 ${tipo === 'salida' ? 'border-orange-500 bg-orange-50' : 'border-neutral-200'}`}>
+            <p className="font-bold text-orange-700">📤 Salida</p>
+            <p className="text-xs text-neutral-500">Consumo / merma</p>
+          </button>
+        </div>
+        
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <Input label={`Cantidad (${insumo.unidad})`} type="number" step="0.01" value={cantidad} onChange={e => setCantidad(parseFloat(e.target.value) || 0)} />
+          </div>
+          <div className="pb-2.5 text-sm text-neutral-500">
+            → quedan <strong className={stockNuevo <= (insumo.stock_minimo || 0) ? 'text-red-600' : 'text-neutral-900'}>{stockNuevo} {insumo.unidad}</strong>
+          </div>
+        </div>
+        
+        <Input label="Motivo (opcional)" value={motivo} onChange={e => setMotivo(e.target.value)} placeholder={tipo === 'entrada' ? 'Ej: Compra mensual' : 'Ej: Siembra del lunes'} />
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (cantidad <= 0) { alert('Cantidad debe ser > 0'); return; }
+            onSave({ tipo, cantidad, motivo, stockNuevo });
+          }} className={tipo === 'entrada' ? 'bg-green-600 hover:bg-green-700' : 'bg-orange-600 hover:bg-orange-700'}>
+            Registrar {tipo}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const guardarMovimientoInsumo = async (insumo, mov) => {
+    try {
+      const costeTotal = mov.tipo === 'entrada' ? mov.cantidad * (insumo.precio_unitario || 0) : null;
+      // Actualizar stock
+      const updateData = { stock_actual: mov.stockNuevo };
+      if (mov.tipo === 'entrada') updateData.fecha_ultima_compra = new Date().toISOString().slice(0,10);
+      await supabase.from('insumos').update(updateData).eq('id', insumo.id);
+      // Registrar movimiento
+      await supabase.from('insumo_movimientos').insert({
+        insumo_id: insumo.id,
+        tipo: mov.tipo,
+        cantidad: mov.cantidad,
+        stock_resultante: mov.stockNuevo,
+        motivo: mov.motivo || null,
+        coste_total: costeTotal,
+      });
+      refetchInsumos();
+      refetchInsumoMovimientos();
+    } catch (e) {
+      alert('❌ Error: ' + e.message);
+    }
+  };
+
+  const renderInsumos = () => {
+    const [busq, cat, soloReponer] = [insumoBusqueda, insumoCategoria, insumoSoloReponer];
+    
+    let lista = insumos.filter(i => i.activo !== false);
+    if (cat !== 'todos') lista = lista.filter(i => i.categoria === cat);
+    if (busq) {
+      const q = busq.toLowerCase();
+      lista = lista.filter(i => (i.nombre || '').toLowerCase().includes(q) || (i.proveedor || '').toLowerCase().includes(q));
+    }
+    const necesitanReposicion = insumos.filter(i => i.activo !== false && (i.stock_minimo || 0) > 0 && (i.stock_actual || 0) <= (i.stock_minimo || 0));
+    if (soloReponer) lista = lista.filter(i => (i.stock_minimo || 0) > 0 && (i.stock_actual || 0) <= (i.stock_minimo || 0));
+    
+    lista = lista.sort((a, b) => {
+      // Primero los que necesitan reposición
+      const aRep = (a.stock_minimo || 0) > 0 && (a.stock_actual || 0) <= (a.stock_minimo || 0);
+      const bRep = (b.stock_minimo || 0) > 0 && (b.stock_actual || 0) <= (b.stock_minimo || 0);
+      if (aRep !== bRep) return aRep ? -1 : 1;
+      return (a.nombre || '').localeCompare(b.nombre || '');
+    });
+    
+    // Valor total del inventario
+    const valorTotal = insumos.filter(i => i.activo !== false).reduce((s, i) => s + (i.stock_actual || 0) * (i.precio_unitario || 0), 0);
+    
+    return (
+      <div className="space-y-4 max-w-screen-2xl mx-auto px-2 sm:px-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">🧰 Insumos</h1>
+            <p className="text-xs text-neutral-500 mt-1">Control de semillas, sustrato, envases, etiquetas, limpieza...</p>
+          </div>
+          <Button onClick={() => { setEditingItem(null); setShowModal('insumo'); }}>
+            <Plus size={16} /> Nuevo insumo
+          </Button>
+        </div>
+        
+        {/* KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Total insumos</p><p className="text-2xl font-black">{insumos.filter(i => i.activo !== false).length}</p></Card>
+          <Card className={`p-3 ${necesitanReposicion.length > 0 ? 'bg-red-50 border-red-300' : ''}`}>
+            <p className="text-xs text-neutral-500 uppercase font-bold">A reponer</p>
+            <p className={`text-2xl font-black ${necesitanReposicion.length > 0 ? 'text-red-600' : 'text-green-600'}`}>{necesitanReposicion.length}</p>
+          </Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Valor inventario</p><p className="text-2xl font-black">{formatCurrency(valorTotal)}</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Categorías</p><p className="text-2xl font-black">{[...new Set(insumos.filter(i => i.activo !== false).map(i => i.categoria))].length}</p></Card>
+        </div>
+        
+        {/* Banner de reposición */}
+        {necesitanReposicion.length > 0 && !soloReponer && (
+          <Card className="p-3 bg-red-50 border-2 border-red-300">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={20} className="text-red-600" />
+                <div>
+                  <p className="font-bold text-red-900 text-sm">⚠️ {necesitanReposicion.length} insumo(s) necesitan reposición</p>
+                  <p className="text-xs text-red-700">{necesitanReposicion.slice(0, 4).map(i => i.nombre).join(', ')}{necesitanReposicion.length > 4 ? '...' : ''}</p>
+                </div>
+              </div>
+              <Button size="sm" variant="secondary" onClick={() => setInsumoSoloReponer(true)}>Ver solo estos</Button>
+            </div>
+          </Card>
+        )}
+        
+        {/* Filtros */}
+        <div className="flex gap-2 flex-wrap items-center">
+          <input type="text" value={busq} onChange={e => setInsumoBusqueda(e.target.value)} placeholder="Buscar insumo o proveedor..." className="flex-1 min-w-[200px] px-4 py-2 rounded-xl border border-neutral-300" />
+          <button onClick={() => setInsumoCategoria('todos')} className={`px-3 py-2 rounded-xl text-sm font-medium ${cat === 'todos' ? 'bg-orange-500 text-white' : 'bg-neutral-100 text-neutral-600'}`}>Todas</button>
+          {Object.entries(CATEGORIAS_INSUMO).map(([k, c]) => (
+            <button key={k} onClick={() => setInsumoCategoria(k)} className={`px-3 py-2 rounded-xl text-sm font-medium ${cat === k ? 'text-white' : 'bg-neutral-100 text-neutral-600'}`} style={cat === k ? { backgroundColor: c.color } : {}}>
+              {c.emoji} {c.label}
+            </button>
+          ))}
+          {soloReponer && (
+            <button onClick={() => setInsumoSoloReponer(false)} className="px-3 py-2 rounded-xl text-sm font-medium bg-red-500 text-white">⚠️ Solo a reponer ✕</button>
+          )}
+        </div>
+        
+        {/* Lista */}
+        {lista.length === 0 ? (
+          <Card className="p-8 text-center text-neutral-400">
+            <p className="text-4xl mb-2">🧰</p>
+            <p>{insumos.length === 0 ? 'No hay insumos todavía. Crea el primero.' : 'Ningún insumo coincide con el filtro.'}</p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {lista.map(ins => {
+              const c = CATEGORIAS_INSUMO[ins.categoria] || CATEGORIAS_INSUMO.otros;
+              const reponer = (ins.stock_minimo || 0) > 0 && (ins.stock_actual || 0) <= (ins.stock_minimo || 0);
+              const pct = ins.stock_minimo > 0 ? Math.min(100, ((ins.stock_actual || 0) / (ins.stock_minimo * 2)) * 100) : 100;
+              return (
+                <Card key={ins.id} className={`p-4 ${reponer ? 'border-2 border-red-300 bg-red-50/30' : ''}`} style={{ borderTopWidth: '3px', borderTopColor: c.color }}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-lg">{c.emoji}</span>
+                        <h3 className="font-bold text-neutral-900 truncate">{ins.nombre}</h3>
+                      </div>
+                      <p className="text-[10px] text-neutral-400">{c.label}{ins.ubicacion ? ` · 📍 ${ins.ubicacion}` : ''}</p>
+                    </div>
+                    {reponer && <Badge className="bg-red-100 text-red-700 flex-shrink-0">⚠️ Reponer</Badge>}
+                  </div>
+                  
+                  <div className="flex items-baseline gap-1 my-2">
+                    <span className={`text-2xl font-black ${reponer ? 'text-red-600' : 'text-neutral-900'}`}>{ins.stock_actual}</span>
+                    <span className="text-sm text-neutral-500">{ins.unidad}</span>
+                    {ins.stock_minimo > 0 && <span className="text-[10px] text-neutral-400 ml-1">/ mín. {ins.stock_minimo}</span>}
+                  </div>
+                  
+                  {ins.stock_minimo > 0 && (
+                    <div className="w-full bg-neutral-100 rounded-full h-1.5 mb-2">
+                      <div className="h-1.5 rounded-full transition-all" style={{ width: pct + '%', backgroundColor: reponer ? '#DC2626' : c.color }} />
+                    </div>
+                  )}
+                  
+                  {ins.proveedor && <p className="text-xs text-neutral-500 truncate">🛒 {ins.proveedor}{ins.precio_unitario > 0 ? ` · ${formatCurrency(ins.precio_unitario)}/${ins.unidad}` : ''}</p>}
+                  
+                  <div className="flex gap-1 mt-3 pt-2 border-t">
+                    <button onClick={() => { setEditingItem(ins); setShowModal('insumoMovimiento'); }} className="flex-1 px-2 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs font-semibold hover:bg-green-200">
+                      📥📤 Movimiento
+                    </button>
+                    {ins.url_compra && (
+                      <a href={ins.url_compra} target="_blank" rel="noopener noreferrer" className="px-2 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-200" title="Ir a comprar">🔗</a>
+                    )}
+                    <button onClick={() => { setEditingItem(ins); setShowModal('insumo'); }} className="px-2 py-1.5 text-neutral-500 hover:bg-neutral-100 rounded-lg"><Edit2 size={14} /></button>
+                    <button onClick={async () => {
+                      if (window.confirm(`¿Eliminar "${ins.nombre}"?`)) {
+                        await supabase.from('insumos').delete().eq('id', ins.id);
+                        refetchInsumos();
+                      }
+                    }} className="px-2 py-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // ==================== V64 — INVENTARIO DE INSUMOS (fin) ====================
+
   // Generador de PDF de albarán (HTML imprimible) — formato profesional 1 hoja A4
   const generarPDFAlbaran = (albaran) => {
     if (!albaran) return;
@@ -19573,6 +19956,192 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
   };
 
   // Formulario AlbaranForm
+  // ==================== V64 — NOTAS DE KILOMETRAJE ====================
+  
+  // "Backend" (en esta arquitectura React+Supabase, la lógica de guardado va aquí):
+  // recibe los km y calcula el importe con la tarifa fija de 0,13 €/km.
+  const guardarNotaKm = async (form, idExistente = null) => {
+    try {
+      const km = parseFloat(form.kilometros_ida_vuelta) || 0;
+      const tarifa = TARIFA_KM; // 0,13 €/km
+      const importe = Math.round(km * tarifa * 100) / 100; // cálculo automático, 2 decimales
+
+      // Snapshot del cliente desde el albarán vinculado (si lo hay)
+      let clienteNombre = form.cliente_nombre || null;
+      if (form.albaran_id && !clienteNombre) {
+        const alb = albaranes.find(a => a.id === form.albaran_id);
+        if (alb) {
+          const cli = clientes.find(c => c.id === alb.cliente_id);
+          clienteNombre = cli?.nombre || alb.cliente_nombre || null;
+        }
+      }
+
+      const payload = {
+        albaran_id: form.albaran_id || null,
+        nombre_repartidor: form.nombre_repartidor,
+        fecha_entrega: form.fecha_entrega || new Date().toISOString().slice(0, 10),
+        kilometros_ida_vuelta: km,
+        tarifa_km: tarifa,
+        importe_total: importe,
+        cliente_nombre: clienteNombre,
+        notas: form.notas || null,
+      };
+
+      if (idExistente) {
+        const { error } = await supabase.from('notas_kilometraje').update(payload).eq('id', idExistente);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('notas_kilometraje').insert(payload);
+        if (error) throw error;
+      }
+
+      refetchNotasKm();
+      return importe;
+    } catch (e) {
+      if (e.code === '42P01') {
+        alert('❌ Falta ejecutar el SQL V64-KILOMETRAJE (tabla notas_kilometraje no existe).');
+      } else {
+        alert('❌ Error: ' + (e.message || String(e)));
+      }
+      throw e;
+    }
+  };
+
+  // Formulario rápido de nota de kilometraje.
+  // Si recibe albaranPreseleccionado, hereda el ID y el repartidor del albarán.
+  const NotaKmForm = ({ nota, albaranPreseleccionado, onSave, onCancel }) => {
+    const esEdicion = !!nota?.id;
+    const albInicial = albaranPreseleccionado || (nota?.albaran_id ? albaranes.find(a => a.id === nota.albaran_id) : null);
+
+    const [form, setForm] = useState({
+      albaran_id: nota?.albaran_id || albaranPreseleccionado?.id || '',
+      nombre_repartidor: nota?.nombre_repartidor || albaranPreseleccionado?.repartidor || '',
+      fecha_entrega: nota?.fecha_entrega || albaranPreseleccionado?.fecha_entrega_real || albaranPreseleccionado?.fecha_entrega_prevista || new Date().toISOString().slice(0, 10),
+      kilometros_ida_vuelta: nota?.kilometros_ida_vuelta || 0,
+      notas: nota?.notas || '',
+    });
+
+    const km = parseFloat(form.kilometros_ida_vuelta) || 0;
+    const importeCalculado = Math.round(km * TARIFA_KM * 100) / 100;
+
+    const albSel = form.albaran_id ? albaranes.find(a => a.id === form.albaran_id) : null;
+    const cliAlb = albSel ? clientes.find(c => c.id === albSel.cliente_id) : null;
+
+    // Sugerencias de repartidor a partir de socios/notas previas
+    const repartidoresPrevios = [...new Set(notasKm.map(n => n.nombre_repartidor).filter(Boolean))];
+
+    return (
+      <div className="space-y-4">
+        {albInicial && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm">
+            <p className="font-semibold text-blue-900">📋 Albarán {albInicial.id}</p>
+            <p className="text-xs text-blue-700">
+              {(() => {
+                const c = clientes.find(cc => cc.id === albInicial.cliente_id);
+                return c?.nombre || albInicial.cliente_nombre || 'Cliente';
+              })()}
+              {albInicial.fecha_entrega_real ? ` · entregado ${formatDate(albInicial.fecha_entrega_real)}` : ''}
+            </p>
+          </div>
+        )}
+
+        {/* Selector de albarán solo si no viene preseleccionado */}
+        {!albaranPreseleccionado && !esEdicion && (
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Albarán asociado (opcional)</label>
+            <select
+              value={form.albaran_id}
+              onChange={e => {
+                const aId = e.target.value;
+                const a = albaranes.find(al => al.id === aId);
+                setForm({
+                  ...form,
+                  albaran_id: aId,
+                  nombre_repartidor: form.nombre_repartidor || a?.repartidor || '',
+                  fecha_entrega: a?.fecha_entrega_real || a?.fecha_entrega_prevista || form.fecha_entrega,
+                });
+              }}
+              className="w-full px-3 py-2.5 rounded-xl border border-neutral-300"
+            >
+              <option value="">— Sin albarán (gasto suelto) —</option>
+              {albaranes
+                .filter(a => a.estado !== 'anulado')
+                .sort((a, b) => new Date(b.fecha_emision) - new Date(a.fecha_emision))
+                .slice(0, 100)
+                .map(a => {
+                  const c = clientes.find(cc => cc.id === a.cliente_id);
+                  return <option key={a.id} value={a.id}>{a.id} · {c?.nombre || a.cliente_nombre || 'Cliente'} · {formatDate(a.fecha_emision)}</option>;
+                })}
+            </select>
+          </div>
+        )}
+
+        {/* Repartidor */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">👤 Repartidor (quién puso el coche) *</label>
+          <input
+            type="text"
+            list="repartidores-list"
+            value={form.nombre_repartidor}
+            onChange={e => setForm({ ...form, nombre_repartidor: e.target.value })}
+            placeholder="Ej: Domingo, Nico, Peri..."
+            className="w-full px-3 py-2.5 rounded-xl border border-neutral-300"
+          />
+          {repartidoresPrevios.length > 0 && (
+            <datalist id="repartidores-list">
+              {repartidoresPrevios.map(r => <option key={r} value={r} />)}
+            </datalist>
+          )}
+        </div>
+
+        <Input label="Fecha de entrega" type="date" value={form.fecha_entrega} onChange={e => setForm({ ...form, fecha_entrega: e.target.value })} />
+
+        {/* Kilómetros + cálculo en vivo */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">🚗 Kilómetros ida y vuelta *</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              step="0.1"
+              min="0"
+              value={form.kilometros_ida_vuelta}
+              onChange={e => setForm({ ...form, kilometros_ida_vuelta: e.target.value })}
+              placeholder="0"
+              className="flex-1 px-3 py-2.5 rounded-xl border border-neutral-300 text-lg font-semibold"
+              autoFocus
+            />
+            <span className="text-neutral-500 font-medium">km</span>
+          </div>
+        </div>
+
+        {/* Importe calculado automáticamente */}
+        <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-4 text-center">
+          <p className="text-xs text-green-700 uppercase font-bold tracking-wide">Importe a reembolsar</p>
+          <p className="text-3xl font-black text-green-700 mt-1">{formatCurrency(importeCalculado)}</p>
+          <p className="text-[11px] text-green-600 mt-1">{km} km × {TARIFA_KM.toFixed(2).replace('.', ',')} €/km</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas (opcional)</label>
+          <input type="text" value={form.notas} onChange={e => setForm({ ...form, notas: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm" placeholder="Ej: viaje con desvío a 2 clientes" />
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.nombre_repartidor.trim()) { alert('Indica el repartidor'); return; }
+            if (km <= 0) { alert('Los kilómetros deben ser mayores que 0'); return; }
+            onSave(form);
+          }} className="bg-green-600 hover:bg-green-700">
+            {esEdicion ? 'Guardar' : 'Registrar gasto'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== V64 — NOTAS DE KILOMETRAJE (fin) ====================
+
   const AlbaranForm = ({ albaran, pedidoPreseleccionado, onSave, onCancel }) => {
     const esEdicion = !!albaran?.id;
     
@@ -24257,6 +24826,10 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             const n = albaranes.filter(a => a.estado === 'generado').length;
             return n > 0 ? n : null;
           })()} />
+          <NavItem icon={Package} label="Insumos" section="insumos" badge={(() => {
+            const n = insumos.filter(i => i.activo !== false && (i.stock_minimo || 0) > 0 && (i.stock_actual || 0) <= (i.stock_minimo || 0)).length;
+            return n > 0 ? n : null;
+          })()} />
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
           <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
           <NavItem icon={Sun} label="Ambiente" section="ambiente" />
@@ -24634,6 +25207,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           {activeSection === 'produccion' && renderProduccion()}
           {activeSection === 'planificacion' && renderPlanificacion()}
           {activeSection === 'albaranes' && renderAlbaranes()}
+          {activeSection === 'insumos' && renderInsumos()}
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
@@ -25109,6 +25683,179 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       )}
       
       {/* Modal Albarán V58 */}
+      {/* Modal Resumen Gastos Km V64 */}
+      {showModal === 'resumenKm' && (
+        <Modal title="🚗 Gastos de kilometraje" onClose={() => setShowModal(null)} size="max-w-3xl">
+          {(() => {
+            const notasOrden = [...notasKm].sort((a, b) => new Date(b.fecha_entrega) - new Date(a.fecha_entrega));
+            const pendientes = notasKm.filter(n => !n.reembolsado);
+            const totalPendiente = pendientes.reduce((s, n) => s + (parseFloat(n.importe_total) || 0), 0);
+            const totalGeneral = notasKm.reduce((s, n) => s + (parseFloat(n.importe_total) || 0), 0);
+            const totalKm = notasKm.reduce((s, n) => s + (parseFloat(n.kilometros_ida_vuelta) || 0), 0);
+            
+            // Totales por repartidor (solo pendientes)
+            const porRepartidor = {};
+            pendientes.forEach(n => {
+              const r = n.nombre_repartidor || '—';
+              if (!porRepartidor[r]) porRepartidor[r] = { km: 0, importe: 0, count: 0 };
+              porRepartidor[r].km += parseFloat(n.kilometros_ida_vuelta) || 0;
+              porRepartidor[r].importe += parseFloat(n.importe_total) || 0;
+              porRepartidor[r].count += 1;
+            });
+            
+            return (
+              <div className="space-y-4">
+                {/* KPIs */}
+                <div className="grid grid-cols-3 gap-3">
+                  <Card className="p-3 bg-amber-50 border-amber-200"><p className="text-xs text-neutral-500 uppercase font-bold">Pendiente reembolso</p><p className="text-2xl font-black text-amber-600">{formatCurrency(totalPendiente)}</p></Card>
+                  <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Total histórico</p><p className="text-2xl font-black">{formatCurrency(totalGeneral)}</p></Card>
+                  <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Km totales</p><p className="text-2xl font-black">{totalKm.toFixed(0)}</p></Card>
+                </div>
+                
+                {/* Pendiente por repartidor */}
+                {Object.keys(porRepartidor).length > 0 && (
+                  <div className="bg-neutral-50 rounded-xl p-3">
+                    <p className="text-sm font-bold text-neutral-700 mb-2">Pendiente por repartidor</p>
+                    <div className="space-y-1">
+                      {Object.entries(porRepartidor).sort((a,b) => b[1].importe - a[1].importe).map(([r, d]) => (
+                        <div key={r} className="flex items-center justify-between text-sm bg-white rounded-lg p-2">
+                          <span className="font-medium">👤 {r}</span>
+                          <span className="text-xs text-neutral-500">{d.count} viaje(s) · {d.km.toFixed(0)} km</span>
+                          <span className="font-bold text-amber-700">{formatCurrency(d.importe)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Lista de notas */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-bold text-neutral-700">Todas las notas ({notasKm.length})</p>
+                    <Button size="sm" onClick={() => { setShowModal('notaKm'); setEditingItem(null); setAlbaranParaKm(null); }}>
+                      <Plus size={14} /> Nueva nota
+                    </Button>
+                  </div>
+                  {notasOrden.length === 0 ? (
+                    <div className="text-center py-8 text-neutral-400">
+                      <p className="text-3xl mb-2">🚗</p>
+                      <p className="text-sm">No hay gastos de kilometraje registrados.</p>
+                      <p className="text-xs mt-1">Añádelos desde el botón 🚗 de cada albarán o aquí mismo.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                      {notasOrden.map(n => (
+                        <div key={n.id} className={`flex items-center gap-2 p-2.5 rounded-xl border ${n.reembolsado ? 'bg-neutral-50 border-neutral-200 opacity-60' : 'bg-white border-amber-200'}`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-sm">👤 {n.nombre_repartidor}</span>
+                              {n.albaran_id && <Badge className="bg-blue-100 text-blue-700 text-[10px]">{n.albaran_id}</Badge>}
+                              {n.reembolsado && <Badge className="bg-green-100 text-green-700 text-[10px]">✓ Reembolsado</Badge>}
+                            </div>
+                            <p className="text-[11px] text-neutral-500">
+                              {formatDate(n.fecha_entrega)} · {n.kilometros_ida_vuelta} km
+                              {n.cliente_nombre ? ` · ${n.cliente_nombre}` : ''}
+                              {n.notas ? ` · ${n.notas}` : ''}
+                            </p>
+                          </div>
+                          <span className="font-black text-neutral-900">{formatCurrency(n.importe_total)}</span>
+                          <div className="flex gap-0.5">
+                            {!n.reembolsado ? (
+                              <button onClick={async () => {
+                                await supabase.from('notas_kilometraje').update({ reembolsado: true, fecha_reembolso: new Date().toISOString().slice(0,10) }).eq('id', n.id);
+                                refetchNotasKm();
+                              }} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como reembolsado"><CheckCircle size={15} /></button>
+                            ) : (
+                              <button onClick={async () => {
+                                await supabase.from('notas_kilometraje').update({ reembolsado: false, fecha_reembolso: null }).eq('id', n.id);
+                                refetchNotasKm();
+                              }} className="p-1.5 text-neutral-400 hover:bg-neutral-100 rounded-lg" title="Desmarcar reembolso"><RotateCcw size={15} /></button>
+                            )}
+                            <button onClick={() => { setEditingItem(n); setAlbaranParaKm(null); setShowModal('notaKm'); }} className="p-1.5 text-neutral-400 hover:bg-neutral-100 rounded-lg"><Edit2 size={15} /></button>
+                            <button onClick={async () => {
+                              if (window.confirm('¿Eliminar este gasto de kilometraje?')) {
+                                await supabase.from('notas_kilometraje').delete().eq('id', n.id);
+                                refetchNotasKm();
+                              }
+                            }} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={15} /></button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
+      
+      {/* Modal Nota Kilometraje V64 */}
+      {showModal === 'notaKm' && (
+        <Modal 
+          title={editingItem?.id ? 'Editar gasto de kilometraje' : '🚗 Añadir gasto de kilometraje'} 
+          onClose={() => { setShowModal(null); setEditingItem(null); setAlbaranParaKm(null); }} 
+          size="max-w-lg"
+        >
+          <NotaKmForm
+            nota={editingItem?.id ? editingItem : null}
+            albaranPreseleccionado={albaranParaKm}
+            onSave={async (form) => {
+              try {
+                const importe = await guardarNotaKm(form, editingItem?.id);
+                setShowModal(null);
+                setEditingItem(null);
+                setAlbaranParaKm(null);
+                alert(`✅ Gasto de kilometraje registrado: ${formatCurrency(importe)}`);
+              } catch (e) { /* gestionado en guardarNotaKm */ }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); setAlbaranParaKm(null); }}
+          />
+        </Modal>
+      )}
+      
+      {/* Modales Insumos V64 */}
+      {showModal === 'insumo' && (
+        <Modal title={editingItem?.id ? 'Editar insumo' : 'Nuevo insumo'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+          <InsumoForm
+            insumo={editingItem?.id ? editingItem : null}
+            onSave={async (form) => {
+              try {
+                const payload = { ...form };
+                if (editingItem?.id) {
+                  const { error } = await supabase.from('insumos').update(payload).eq('id', editingItem.id);
+                  if (error) throw error;
+                } else {
+                  const { error } = await supabase.from('insumos').insert(payload);
+                  if (error) throw error;
+                }
+                refetchInsumos();
+                setShowModal(null);
+                setEditingItem(null);
+              } catch (e) {
+                if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V64 (tabla insumos no existe).');
+                else alert('❌ Error: ' + e.message);
+              }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+      
+      {showModal === 'insumoMovimiento' && editingItem && (
+        <Modal title="Movimiento de insumo" onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-md">
+          <InsumoMovimientoForm
+            insumo={editingItem}
+            onSave={async (mov) => {
+              await guardarMovimientoInsumo(editingItem, mov);
+              setShowModal(null);
+              setEditingItem(null);
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+      
       {showModal === 'albaran' && (
         <Modal 
           title={editingItem?.id ? `Editar albarán ${editingItem.id}` : 'Nuevo albarán'} 
