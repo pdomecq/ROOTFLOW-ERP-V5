@@ -11131,14 +11131,51 @@ ${transacciones}
       pagado: g => g.pagado?.toString(),
     });
     
+    // Etiquetas limpias de forma de pago (sin emojis) para el Excel
+    const formaPagoLabelExcel = (val) => {
+      const map = {
+        banco: 'Banco sociedad (572)',
+        caja: 'Caja efectivo (570)',
+        tarjeta_empresa: 'Tarjeta empresa (572)',
+        transferencia: 'Transferencia (572)',
+        socio_nico: 'Pagado por Nico - Deuda socio (551)',
+        socio_peri: 'Pagado por Peri - Deuda socio (551)',
+        socio_guzman: 'Pagado por Guzmán - Deuda socio (551)',
+      };
+      return map[val] || val || '';
+    };
+    const cuentaContableFormaPago = (val) => {
+      if (val === 'caja') return '570';
+      if (['socio_nico', 'socio_peri', 'socio_guzman'].includes(val)) return '551';
+      return '572';
+    };
+    const getProveedorGasto = (g) => proveedores.find(p => p.id === g.proveedor_id) || null;
+
     const exportColumns = [
       { header: 'Fecha', accessor: g => formatDate(g.fecha) },
-      { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label },
-      { header: 'Concepto', accessor: g => g.concepto },
-      { header: 'Proveedor', accessor: g => g.proveedor },
-      { header: 'Importe', accessor: g => g.importe },
-      { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
-      { header: 'Factura', accessor: g => g.factura_url ? 'Sí' : 'No' }
+      { header: 'Concepto', accessor: g => g.concepto || '' },
+      { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria || '' },
+      { header: 'Tipo gasto', accessor: g => categoriasGasto[g.categoria]?.tipo === 'capex' ? 'Inversión (CAPEX)' : 'Gasto corriente (OPEX)' },
+      { header: 'Proveedor', accessor: g => getProveedorGasto(g)?.nombre || '' },
+      { header: 'CIF Proveedor', accessor: g => getProveedorGasto(g)?.cif || '' },
+      { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21}%` },
+      { header: 'Base Imponible', accessor: g => {
+        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
+        return (Number(g.importe || 0) / (1 + ivaPct / 100)).toFixed(2);
+      }},
+      { header: 'Cuota IVA', accessor: g => {
+        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
+        const base = Number(g.importe || 0) / (1 + ivaPct / 100);
+        return (Number(g.importe || 0) - base).toFixed(2);
+      }},
+      { header: 'Total', accessor: g => Number(g.importe || 0).toFixed(2) },
+      { header: 'Forma de pago', accessor: g => formaPagoLabelExcel(g.forma_pago) },
+      { header: 'Cuenta contable', accessor: g => cuentaContableFormaPago(g.forma_pago) },
+      { header: 'Estado pago', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
+      { header: 'Factura adjunta', accessor: g => g.factura_url ? 'Sí' : 'No' },
+      { header: 'Justificante pago', accessor: g => g.justificante_pago_url ? 'Sí' : 'No' },
+      { header: 'URL Factura', accessor: g => g.factura_url || '' },
+      { header: 'URL Justificante', accessor: g => g.justificante_pago_url || '' },
     ];
     
     const handleMarcarPagado = async (id) => {
@@ -11687,24 +11724,36 @@ ${transacciones}
                     if (pt) pt.textContent = `${i + 1} / ${totalItems} ${fallidos > 0 ? '(' + fallidos + ' errores)' : ''}`;
                   }
                   
-                  // Añadir índice CSV al ZIP
+                  // Añadir índice CSV al ZIP (completo, separador ; para Excel ES)
+                  const fpLabel = (val) => ({
+                    banco: 'Banco sociedad (572)', caja: 'Caja efectivo (570)', tarjeta_empresa: 'Tarjeta empresa (572)',
+                    transferencia: 'Transferencia (572)', socio_nico: 'Pagado por Nico (551)', socio_peri: 'Pagado por Peri (551)',
+                    socio_guzman: 'Pagado por Guzmán (551)',
+                  }[val] || val || '');
                   const csvLines = [
-                    ['Fecha', 'Concepto', 'Proveedor', 'Categoría', 'Importe (€)', 'IVA', 'Pagado', 'Nombre archivo'].join(';')
+                    ['Fecha', 'Concepto', 'Proveedor', 'CIF Proveedor', 'Categoría', 'Tipo IVA', 'Base Imponible', 'Cuota IVA', 'Total (€)', 'Forma de pago', 'Estado pago', 'Nombre archivo'].join(';')
                   ];
                   items.forEach(g => {
-                    const proveedor = proveedores.find(p => p.id === g.proveedor_id)?.nombre || '';
-                    const categoria = categoriasGasto[g.categoria]?.label || g.categoria;
+                    const prov = proveedores.find(p => p.id === g.proveedor_id);
+                    const categoria = categoriasGasto[g.categoria]?.label || g.categoria || '';
                     const url = tipo === 'facturas' ? g.factura_url : g.justificante_pago_url;
                     const ext = url.split('.').pop().split('?')[0];
                     const nombre = formatearNombre(g, tipo === 'facturas' ? 'F' : 'JUST') + '.' + ext;
+                    const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
+                    const base = Number(g.importe || 0) / (1 + ivaPct / 100);
+                    const cuota = Number(g.importe || 0) - base;
                     csvLines.push([
                       g.fecha,
                       `"${(g.concepto || '').replace(/"/g, '""')}"`,
-                      `"${proveedor.replace(/"/g, '""')}"`,
+                      `"${(prov?.nombre || '').replace(/"/g, '""')}"`,
+                      `"${(prov?.cif || '').replace(/"/g, '""')}"`,
                       `"${categoria.replace(/"/g, '""')}"`,
-                      String(g.importe || 0).replace('.', ','),
-                      TIPOS_IVA[g.iva_tipo]?.label || g.iva_tipo || 'General',
-                      g.pagado ? 'Sí' : 'No',
+                      `${ivaPct}%`,
+                      base.toFixed(2).replace('.', ','),
+                      cuota.toFixed(2).replace('.', ','),
+                      Number(g.importe || 0).toFixed(2).replace('.', ','),
+                      `"${fpLabel(g.forma_pago)}"`,
+                      g.pagado ? 'Pagado' : 'Pendiente',
                       nombre,
                     ].join(';'));
                   });
