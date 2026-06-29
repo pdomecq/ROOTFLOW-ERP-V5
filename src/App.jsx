@@ -3117,9 +3117,24 @@ const MainApp = () => {
       }
       
       if (result.error) {
-        console.error('Error guardando:', result.error);
-        alert('Error: ' + result.error.message);
-        return;
+        // V66: fallback si la columna reparto_socios aún no existe en BD
+        if (result.error.code === '42703' && form.reparto_socios !== undefined) {
+          const { reparto_socios, ...sinReparto } = form;
+          if (id) {
+            result = await supabase.from(table).update(sinReparto).eq('id', id);
+          } else {
+            result = await supabase.from(table).insert(sinReparto).select();
+            if (result.data && result.data[0]) newRecordId = result.data[0].id;
+          }
+          if (!result.error) {
+            alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
+          }
+        }
+        if (result.error) {
+          console.error('Error guardando:', result.error);
+          alert('Error: ' + result.error.message);
+          return;
+        }
       }
       
       // REGISTRAR AUDITORÍA
@@ -5323,6 +5338,7 @@ ${pedidoLinea ? `^FO260,244
       forma_pago: gasto?.forma_pago || 'banco', 
       factura_url: gasto?.factura_url || '',
       justificante_pago_url: gasto?.justificante_pago_url || '',
+      reparto_socios: Array.isArray(gasto?.reparto_socios) ? gasto.reparto_socios : [],
     };
     
     // Usar hook de persistencia (solo para formularios nuevos, no edición)
@@ -5338,7 +5354,15 @@ ${pedidoLinea ? `^FO260,244
     // Limpiar storage al guardar o cancelar
     const handleSave = (formData) => {
       clearFormStorage();
-      onSave(formData);
+      // V66: limpiar campo auxiliar de UI y normalizar reparto
+      const { _modo_reparto, ...limpio } = formData;
+      // Si el reparto está vacío, asegurar array vacío (no null)
+      if (!Array.isArray(limpio.reparto_socios)) limpio.reparto_socios = [];
+      // Guardar solo socio + importe en cada parte (sin basura)
+      limpio.reparto_socios = limpio.reparto_socios
+        .filter(r => r && r.socio && (parseFloat(r.importe) || 0) > 0)
+        .map(r => ({ socio: r.socio, importe: Math.round((parseFloat(r.importe) || 0) * 100) / 100 }));
+      onSave(limpio);
     };
     
     const handleCancel = () => {
@@ -5466,6 +5490,154 @@ ${pedidoLinea ? `^FO260,244
             options={formasPago} 
           />
         </div>
+
+        {/* V66: Reparto entre socios (si la forma de pago es un socio) */}
+        {['socio_nico', 'socio_peri', 'socio_guzman'].includes(form.forma_pago) && (() => {
+          const sociosCfg = {
+            socio_nico: { alias: 'Nico', color: '#3B82F6' },
+            socio_peri: { alias: 'Peri', color: '#F97316' },
+            socio_guzman: { alias: 'Guzmán', color: '#22C55E' },
+          };
+          const repartoActivo = Array.isArray(form.reparto_socios) && form.reparto_socios.length > 0;
+          const totalGasto = parseFloat(form.importe) || 0;
+          
+          // Modo de introducción: € o %
+          const modoReparto = form._modo_reparto || 'importe';
+          const setModoReparto = (m) => setForm({ ...form, _modo_reparto: m });
+          
+          const sumaReparto = (form.reparto_socios || []).reduce((s, r) => s + (parseFloat(r.importe) || 0), 0);
+          const diferencia = Math.round((totalGasto - sumaReparto) * 100) / 100;
+          
+          const toggleReparto = () => {
+            if (repartoActivo) {
+              setForm({ ...form, reparto_socios: [] });
+            } else {
+              // Por defecto: el pagador principal + opción de añadir. Arrancamos con el pagador actual al 100%
+              setForm({ ...form, reparto_socios: [{ socio: form.forma_pago, importe: totalGasto }] });
+            }
+          };
+          
+          const addSocioReparto = () => {
+            const yaUsados = (form.reparto_socios || []).map(r => r.socio);
+            const disponible = Object.keys(sociosCfg).find(s => !yaUsados.includes(s));
+            if (!disponible) return;
+            setForm({ ...form, reparto_socios: [...(form.reparto_socios || []), { socio: disponible, importe: 0 }] });
+          };
+          
+          const updateReparto = (idx, campo, valor) => {
+            const nuevo = [...form.reparto_socios];
+            if (campo === 'importe') {
+              // Si están en modo %, convertir a importe
+              if (modoReparto === 'porcentaje') {
+                const pct = parseFloat(valor) || 0;
+                nuevo[idx] = { ...nuevo[idx], importe: Math.round(totalGasto * pct) / 100 };
+              } else {
+                nuevo[idx] = { ...nuevo[idx], importe: parseFloat(valor) || 0 };
+              }
+            } else {
+              nuevo[idx] = { ...nuevo[idx], [campo]: valor };
+            }
+            setForm({ ...form, reparto_socios: nuevo });
+          };
+          
+          const removeReparto = (idx) => {
+            setForm({ ...form, reparto_socios: form.reparto_socios.filter((_, i) => i !== idx) });
+          };
+          
+          const repartoIgualitario = () => {
+            const socios = (form.reparto_socios || []).map(r => r.socio);
+            if (socios.length === 0) return;
+            const parte = Math.floor((totalGasto / socios.length) * 100) / 100;
+            const nuevo = socios.map((s, i) => ({
+              socio: s,
+              // El último se lleva el redondeo para que cuadre exacto
+              importe: i === socios.length - 1 ? Math.round((totalGasto - parte * (socios.length - 1)) * 100) / 100 : parte,
+            }));
+            setForm({ ...form, reparto_socios: nuevo });
+          };
+          
+          return (
+            <div className="p-3 bg-amber-50 border-2 border-amber-200 rounded-xl space-y-3">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div className="flex items-center gap-2">
+                  <Users size={18} className="text-amber-700" />
+                  <div>
+                    <p className="font-semibold text-sm text-amber-900">¿Pagado a partes entre varios socios?</p>
+                    <p className="text-[11px] text-amber-700">Por ejemplo, Bizum a partes iguales por falta de liquidez. Si no, queda 100% a {sociosCfg[form.forma_pago]?.alias}.</p>
+                  </div>
+                </div>
+                <input type="checkbox" checked={repartoActivo} onChange={toggleReparto} className="w-5 h-5" />
+              </label>
+              
+              {repartoActivo && (
+                <>
+                  {/* Selector modo € / % */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-neutral-600">Introducir por:</span>
+                    <div className="flex rounded-lg overflow-hidden border border-amber-300">
+                      <button type="button" onClick={() => setModoReparto('importe')} className={`px-3 py-1 text-xs font-semibold ${modoReparto === 'importe' ? 'bg-amber-500 text-white' : 'bg-white text-neutral-600'}`}>€ Cantidad</button>
+                      <button type="button" onClick={() => setModoReparto('porcentaje')} className={`px-3 py-1 text-xs font-semibold ${modoReparto === 'porcentaje' ? 'bg-amber-500 text-white' : 'bg-white text-neutral-600'}`}>% Porcentaje</button>
+                    </div>
+                    <button type="button" onClick={repartoIgualitario} className="ml-auto text-xs text-amber-700 font-semibold hover:underline">⚖️ Repartir a partes iguales</button>
+                  </div>
+                  
+                  {/* Líneas de reparto */}
+                  <div className="space-y-1.5">
+                    {(form.reparto_socios || []).map((r, idx) => {
+                      const cfg = sociosCfg[r.socio] || { alias: r.socio, color: '#999' };
+                      const pct = totalGasto > 0 ? (parseFloat(r.importe) || 0) / totalGasto * 100 : 0;
+                      const yaUsados = form.reparto_socios.map(x => x.socio);
+                      return (
+                        <div key={idx} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                          <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{ backgroundColor: cfg.color }}>
+                            {cfg.alias.charAt(0)}
+                          </div>
+                          <select value={r.socio} onChange={e => updateReparto(idx, 'socio', e.target.value)} className="text-sm px-2 py-1 rounded border flex-1 min-w-[90px]">
+                            {Object.entries(sociosCfg).map(([k, c]) => (
+                              <option key={k} value={k} disabled={k !== r.socio && yaUsados.includes(k)}>{c.alias}</option>
+                            ))}
+                          </select>
+                          {modoReparto === 'importe' ? (
+                            <div className="flex items-center gap-1">
+                              <input type="number" step="0.01" value={r.importe || 0} onChange={e => updateReparto(idx, 'importe', e.target.value)} className="w-20 px-2 py-1 rounded border text-sm text-right" />
+                              <span className="text-xs text-neutral-500">€</span>
+                              <span className="text-[10px] text-neutral-400 w-12 text-right">({pct.toFixed(0)}%)</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <input type="number" step="1" value={pct.toFixed(0)} onChange={e => updateReparto(idx, 'importe', e.target.value)} className="w-16 px-2 py-1 rounded border text-sm text-right" />
+                              <span className="text-xs text-neutral-500">%</span>
+                              <span className="text-[10px] text-neutral-400 w-16 text-right">({formatCurrency(parseFloat(r.importe) || 0)})</span>
+                            </div>
+                          )}
+                          <button type="button" onClick={() => removeReparto(idx)} className="text-red-500 hover:bg-red-50 p-1 rounded flex-shrink-0">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Añadir socio */}
+                  {(form.reparto_socios || []).length < 3 && (
+                    <button type="button" onClick={addSocioReparto} className="text-xs text-amber-700 font-semibold flex items-center gap-1 hover:underline">
+                      <Plus size={13} /> Añadir otro socio
+                    </button>
+                  )}
+                  
+                  {/* Validación de cuadre */}
+                  <div className={`text-xs font-medium p-2 rounded-lg ${Math.abs(diferencia) < 0.01 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {Math.abs(diferencia) < 0.01 ? (
+                      <>✓ El reparto cuadra: {formatCurrency(sumaReparto)} = total del gasto</>
+                    ) : (
+                      <>⚠️ Suma del reparto: {formatCurrency(sumaReparto)} · {diferencia > 0 ? `Faltan ${formatCurrency(diferencia)}` : `Sobran ${formatCurrency(Math.abs(diferencia))}`} respecto al total ({formatCurrency(totalGasto)})</>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Aviso CAPEX */}
         {esCapex && (
@@ -11873,8 +12045,30 @@ ${transacciones}
               };
               
               const datosPorSocio = Object.entries(socioConfig).map(([clave, cfg]) => {
-                const gastosSocio = gastos.filter(g => g.forma_pago === clave);
-                const totalPagado = gastosSocio.reduce((s, g) => s + (g.importe || 0), 0);
+                // V66: un gasto cuenta para la deuda del socio de dos formas:
+                //  (a) forma_pago = clave y SIN reparto → 100% a ese socio
+                //  (b) tiene reparto_socios y el socio aparece en él → solo su parte
+                const gastosSocio = [];
+                let totalPagado = 0;
+                
+                gastos.forEach(g => {
+                  const reparto = Array.isArray(g.reparto_socios) ? g.reparto_socios : [];
+                  if (reparto.length > 0) {
+                    // Gasto repartido: buscar la parte de este socio
+                    const parte = reparto.find(r => r.socio === clave);
+                    if (parte && (parseFloat(parte.importe) || 0) > 0) {
+                      const importeParte = parseFloat(parte.importe) || 0;
+                      totalPagado += importeParte;
+                      gastosSocio.push({ ...g, _importe_socio: importeParte, _es_parcial: true, _total_gasto: g.importe });
+                    }
+                  } else if (g.forma_pago === clave) {
+                    // Gasto 100% de este socio (comportamiento clásico)
+                    const importeTotal = parseFloat(g.importe) || 0;
+                    totalPagado += importeTotal;
+                    gastosSocio.push({ ...g, _importe_socio: importeTotal, _es_parcial: false, _total_gasto: g.importe });
+                  }
+                });
+                
                 const numGastos = gastosSocio.length;
                 
                 const reembolsosSocio = reembolsosSocios.filter(r => r.socio_clave === clave);
@@ -11910,6 +12104,82 @@ ${transacciones}
                           Cuando la empresa tenga caja, registra cada transferencia como "Reembolso" para saldar la deuda.
                         </p>
                       </div>
+                      <Button size="sm" className="bg-amber-600 hover:bg-amber-700 flex-shrink-0" onClick={() => {
+                        // V66: Export Excel de deuda a socios para auditoría
+                        const wb = XLSX.utils.book_new();
+                        
+                        // Hoja 1: Resumen por socio
+                        const resumenRows = datosPorSocio.map(d => ({
+                          'Socio': d.cfg.nombre,
+                          'Alias': d.cfg.alias,
+                          'Cuenta': '551',
+                          'Total adelantado (€)': d.totalPagado.toFixed(2),
+                          'Reembolsado (€)': d.totalReembolsado.toFixed(2),
+                          'Saldo pendiente (€)': d.saldoPendiente.toFixed(2),
+                          'Nº gastos': d.numGastos,
+                          'Nº reembolsos': d.reembolsos.length,
+                        }));
+                        resumenRows.push({
+                          'Socio': 'TOTAL', 'Alias': '', 'Cuenta': '',
+                          'Total adelantado (€)': totalGlobal.toFixed(2),
+                          'Reembolsado (€)': reembolsadoGlobal.toFixed(2),
+                          'Saldo pendiente (€)': pendienteGlobal.toFixed(2),
+                          'Nº gastos': '', 'Nº reembolsos': '',
+                        });
+                        const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
+                        wsResumen['!cols'] = [{wch:24},{wch:10},{wch:8},{wch:18},{wch:16},{wch:18},{wch:10},{wch:13}];
+                        XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+                        
+                        // Hoja 2: Detalle de gastos adelantados (todos los socios)
+                        const gastosRows = [];
+                        datosPorSocio.forEach(d => {
+                          d.gastos.sort((a,b) => new Date(a.fecha) - new Date(b.fecha)).forEach(g => {
+                            const prov = proveedores.find(p => p.id === g.proveedor_id);
+                            gastosRows.push({
+                              'Socio': d.cfg.alias,
+                              'Fecha': formatDate(g.fecha),
+                              'Concepto': g.concepto || '',
+                              'Proveedor': prov?.nombre || '',
+                              'CIF Proveedor': prov?.cif || '',
+                              'Categoría': categoriasGasto[g.categoria]?.label || g.categoria || '',
+                              'Total factura (€)': Number(g._total_gasto || g.importe || 0).toFixed(2),
+                              'Tipo pago': g._es_parcial ? 'Parte (repartido)' : '100% del socio',
+                              'Importe aportado (€)': Number(g._importe_socio != null ? g._importe_socio : g.importe).toFixed(2),
+                              'Factura adjunta': g.factura_url ? 'Sí' : 'No',
+                            });
+                          });
+                        });
+                        if (gastosRows.length > 0) {
+                          const wsGastos = XLSX.utils.json_to_sheet(gastosRows);
+                          wsGastos['!cols'] = [{wch:8},{wch:11},{wch:34},{wch:24},{wch:13},{wch:18},{wch:15},{wch:18},{wch:18},{wch:13}];
+                          XLSX.utils.book_append_sheet(wb, wsGastos, 'Gastos adelantados');
+                        }
+                        
+                        // Hoja 3: Reembolsos realizados
+                        const reembolsosRows = [];
+                        datosPorSocio.forEach(d => {
+                          d.reembolsos.sort((a,b) => new Date(a.fecha) - new Date(b.fecha)).forEach(r => {
+                            reembolsosRows.push({
+                              'Socio': d.cfg.alias,
+                              'Fecha': formatDate(r.fecha),
+                              'Importe (€)': Number(r.importe || 0).toFixed(2),
+                              'Método': r.metodo === 'transferencia' ? 'Transferencia' : r.metodo === 'bizum' ? 'Bizum' : 'Efectivo',
+                              'Concepto': r.concepto || '',
+                              'Justificante': r.archivo_url ? 'Sí' : 'No',
+                            });
+                          });
+                        });
+                        if (reembolsosRows.length > 0) {
+                          const wsR = XLSX.utils.json_to_sheet(reembolsosRows);
+                          wsR['!cols'] = [{wch:8},{wch:11},{wch:13},{wch:14},{wch:34},{wch:12}];
+                          XLSX.utils.book_append_sheet(wb, wsR, 'Reembolsos');
+                        }
+                        
+                        const fechaIso = new Date().toISOString().slice(0, 10);
+                        XLSX.writeFile(wb, `Rootflow_Deuda_Socios_${fechaIso}.xlsx`);
+                      }}>
+                        <Download size={14} /> Exportar auditoría
+                      </Button>
                     </div>
                   </Card>
 
@@ -12042,10 +12312,13 @@ ${transacciones}
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-medium">{formatDate(g.fecha)}</span>
                                         <span className="text-xs text-neutral-600 truncate">{g.concepto || '(sin concepto)'}</span>
+                                        {g._es_parcial && (
+                                          <Badge className="bg-amber-100 text-amber-700 text-[10px]">parte de {formatCurrency(g._total_gasto)}</Badge>
+                                        )}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                      <span className="font-bold">{formatCurrency(g.importe)}</span>
+                                      <span className="font-bold">{formatCurrency(g._importe_socio != null ? g._importe_socio : g.importe)}</span>
                                       {g.factura_url && (
                                         <a href={g.factura_url} target="_blank" rel="noopener noreferrer" className="text-blue-600">
                                           <FileText size={12} />
