@@ -10280,7 +10280,7 @@ ${pedidoLinea ? `^FO260,244
   };
 
   // Componente para ver factura
-  const FacturaPreview = ({ factura, cliente, pedidoItemsList, onClose }) => {
+  const FacturaPreview = ({ factura, cliente, pedidoItemsList, onDescargarAlbaranes, onRecalcular, onClose }) => {
     const items = pedidoItemsList.filter(i => i.pedido_id === factura.pedido_id);
     const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
     
@@ -10559,6 +10559,16 @@ ${pedidoLinea ? `^FO260,244
           {/* Acciones */}
           <div className="flex justify-end gap-3 mt-6 pt-6 border-t">
             <Button variant="secondary" onClick={onClose}>Cerrar</Button>
+            {factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0 && onDescargarAlbaranes && (
+              <Button variant="secondary" onClick={() => onDescargarAlbaranes(factura)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                🗂️ Albaranes (ZIP)
+              </Button>
+            )}
+            {factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0 && onRecalcular && (
+              <Button variant="secondary" onClick={() => { onRecalcular(factura); onClose(); }} className="bg-teal-50 text-teal-700 hover:bg-teal-100">
+                <Calculator size={16} /> Recalcular IVA
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => {
               const itemsTexto = items.map(item => {
                 const prod = productos.find(p => p.id === item.producto_id);
@@ -11255,7 +11265,11 @@ ${transacciones}
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
                         {factura.tipo === 'agrupada' && (
-                          <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
+                          <>
+                            <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
+                            <button onClick={() => descargarZipAlbaranesFactura(factura)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Descargar ZIP con los albaranes valorados de esta factura">🗂️</button>
+                            <button onClick={() => recalcularFacturaAgrupada(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular importes (corrige doble IVA)"><Calculator size={16} /></button>
+                          </>
                         )}
                         {factura.estado === 'pendiente' && (
                           <button 
@@ -11283,6 +11297,8 @@ ${transacciones}
             factura={selectedFactura} 
             cliente={clientes.find(c => c.id === selectedFactura.cliente_id)} 
             pedidoItemsList={pedidoItems}
+            onDescargarAlbaranes={descargarZipAlbaranesFactura}
+            onRecalcular={recalcularFacturaAgrupada}
             onClose={() => setSelectedFactura(null)} 
           />
         )}
@@ -19149,12 +19165,43 @@ SELECT cron.schedule(
       
       if (albsPendientes.length === 0) return;
       
-      const subtotal = albsPendientes.reduce((s, a) => s + (parseFloat(a.subtotal) || 0), 0);
-      const descuento = albsPendientes.reduce((s, a) => s + (parseFloat(a.descuento_aplicado) || 0), 0);
-      const base = albsPendientes.reduce((s, a) => s + (parseFloat(a.base_imponible) || 0), 0);
-      const iva = albsPendientes.reduce((s, a) => s + (parseFloat(a.iva) || 0), 0);
-      const re = albsPendientes.reduce((s, a) => s + (parseFloat(a.re_importe) || 0), 0);
-      const total = albsPendientes.reduce((s, a) => s + (parseFloat(a.total) || 0), 0);
+      // V67: Cálculo canónico para evitar doble imposición de IVA.
+      // La BASE de la factura = suma de bases de los albaranes.
+      // Para cada albarán derivamos su base de forma robusta:
+      //   - Si tiene base_imponible > 0 y es coherente (base < total), la usamos.
+      //   - Si no, derivamos la base desde items (precio×cantidad SIN IVA) o desde el total.
+      const aplicaRE = !!cli.recargo_equivalencia;
+      const factorImpuestos = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
+      
+      let base = 0;
+      let descuento = 0;
+      albsPendientes.forEach(a => {
+        let baseAlb = 0;
+        const items = Array.isArray(a.items_json) ? a.items_json : [];
+        
+        if (items.length > 0) {
+          // Fuente más fiable: los items del albarán (precio unitario = SIN IVA)
+          const subtotalItems = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
+          const descAlb = subtotalItems * ((cli.descuento || 0) / 100);
+          baseAlb = subtotalItems - descAlb;
+          descuento += descAlb;
+        } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
+          // Campo base_imponible fiable (menor que el total → no incluye IVA)
+          baseAlb = parseFloat(a.base_imponible);
+          descuento += parseFloat(a.descuento_aplicado) || 0;
+        } else if (parseFloat(a.total) > 0) {
+          // Solo tenemos total (posiblemente con IVA): derivar la base quitando impuestos
+          baseAlb = parseFloat(a.total) / factorImpuestos;
+        }
+        base += baseAlb;
+      });
+      
+      base = Math.round(base * 100) / 100;
+      descuento = Math.round(descuento * 100) / 100;
+      const subtotal = Math.round((base + descuento) * 100) / 100;
+      const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
+      const re = aplicaRE ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
+      const total = Math.round((base + iva + re) * 100) / 100;
       
       const fechas = albsPendientes.map(a => a.fecha_entrega_real || a.fecha_emision).filter(Boolean).sort();
       
@@ -19233,6 +19280,149 @@ SELECT cron.schedule(
     return facturaId;
   };
   
+  // V67: Descargar un ZIP con los albaranes valorados de una factura agrupada
+  const descargarZipAlbaranesFactura = async (factura) => {
+    const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
+    const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
+    
+    if (albs.length === 0) {
+      alert('Esta factura no tiene albaranes asociados.');
+      return;
+    }
+    
+    const zip = new JSZip();
+    const cliente = clientes.find(c => c.id === factura.cliente_id);
+    const nombreCli = (cliente?.nombre || 'cliente').replace(/[^a-zA-Z0-9]/g, '_');
+    const carpeta = zip.folder(`Albaranes_${factura.id}`);
+    
+    // Un HTML por albarán (forzado a valorado para que se vea el desglose que respalda la factura)
+    albs.forEach(a => {
+      const albValorado = { ...a, valorado: true };
+      const html = construirHTMLAlbaran(albValorado);
+      const fechaA = (a.fecha_entrega_real || a.fecha_emision || '').replace(/-/g, '');
+      carpeta.file(`${a.id}_${fechaA}.html`, html);
+    });
+    
+    // Índice CSV resumen (con base canónica, sin doble IVA)
+    const fmtF = (d) => d ? `${String(new Date(d).getDate()).padStart(2,'0')}/${String(new Date(d).getMonth()+1).padStart(2,'0')}/${new Date(d).getFullYear()}` : '';
+    const aplicaRE = !!cliente?.recargo_equivalencia;
+    const factorImp = 1 + (IVA_VENTAS/100) + (aplicaRE ? RE_VENTAS/100 : 0);
+    const csv = ['\uFEFF' + ['Albarán', 'Fecha entrega', 'Base', 'IVA', 'Total'].join(';')];
+    albs.forEach(a => {
+      const items = Array.isArray(a.items_json) ? a.items_json : [];
+      let baseA = 0;
+      if (items.length > 0) {
+        const sub = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario)||0) * (parseFloat(it.cantidad)||0)), 0);
+        baseA = sub - sub * ((cliente?.descuento || 0)/100);
+      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
+        baseA = parseFloat(a.base_imponible);
+      } else if (parseFloat(a.total) > 0) {
+        baseA = parseFloat(a.total) / factorImp;
+      }
+      baseA = Math.round(baseA * 100) / 100;
+      const ivaA = Math.round(baseA * (IVA_VENTAS/100) * 100) / 100;
+      const reA = aplicaRE ? Math.round(baseA * (RE_VENTAS/100) * 100) / 100 : 0;
+      csv.push([a.id, fmtF(a.fecha_entrega_real || a.fecha_emision), baseA.toFixed(2).replace('.', ','), (ivaA+reA).toFixed(2).replace('.', ','), (baseA+ivaA+reA).toFixed(2).replace('.', ',')].join(';'));
+    });
+    carpeta.file('_indice.csv', csv.join('\n'));
+    carpeta.file('_LEEME.txt', `Albaranes de la factura ${factura.id}\nCliente: ${cliente?.nombre || ''}\nPeriodo: ${fmtF(factura.periodo_desde)} - ${fmtF(factura.periodo_hasta)}\n\nCada archivo .html es un albarán valorado. Ábrelo en el navegador y usa "Imprimir > Guardar como PDF" si necesitas el PDF.\nEl archivo _indice.csv resume los importes.\n`);
+    
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Albaranes_${factura.id}_${nombreCli}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+  
+  // V68: Recalcular una factura agrupada existente con el método canónico (corrige doble IVA)
+  const recalcularFacturaAgrupada = async (factura) => {
+    const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
+    const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
+    
+    if (albs.length === 0) {
+      alert('Esta factura no tiene albaranes asociados, no se puede recalcular automáticamente.');
+      return;
+    }
+    
+    const cli = clientes.find(c => c.id === factura.cliente_id);
+    const aplicaRE = !!cli?.recargo_equivalencia;
+    const factorImpuestos = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
+    
+    let base = 0;
+    let descuento = 0;
+    albs.forEach(a => {
+      let baseAlb = 0;
+      const items = Array.isArray(a.items_json) ? a.items_json : [];
+      if (items.length > 0) {
+        const subtotalItems = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
+        const descAlb = subtotalItems * ((cli?.descuento || 0) / 100);
+        baseAlb = subtotalItems - descAlb;
+        descuento += descAlb;
+      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
+        baseAlb = parseFloat(a.base_imponible);
+        descuento += parseFloat(a.descuento_aplicado) || 0;
+      } else if (parseFloat(a.total) > 0) {
+        baseAlb = parseFloat(a.total) / factorImpuestos;
+      }
+      base += baseAlb;
+    });
+    
+    base = Math.round(base * 100) / 100;
+    descuento = Math.round(descuento * 100) / 100;
+    const subtotal = Math.round((base + descuento) * 100) / 100;
+    const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
+    const re = aplicaRE ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
+    const total = Math.round((base + iva + re) * 100) / 100;
+    
+    const totalActual = parseFloat(factura.total) || 0;
+    const diff = Math.round((totalActual - total) * 100) / 100;
+    
+    if (Math.abs(diff) < 0.01) {
+      alert(`✓ La factura ${factura.id} ya tiene los importes correctos.\n\nBase: ${formatCurrency(base)}\nIVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\nTotal: ${formatCurrency(total)}\n\nNo hace falta recalcular.`);
+      return;
+    }
+    
+    const msg = `RECÁLCULO DE FACTURA ${factura.id}\n` +
+      `Cliente: ${cli?.nombre || ''}\n` +
+      `${albs.length} albarán(es)\n\n` +
+      `━━━ ACTUAL (posible doble IVA) ━━━\n` +
+      `  Base:  ${formatCurrency(factura.base_imponible || 0)}\n` +
+      `  IVA:   ${formatCurrency(factura.iva || 0)}\n` +
+      `  TOTAL: ${formatCurrency(totalActual)}\n\n` +
+      `━━━ CORREGIDO ━━━\n` +
+      `  Base:  ${formatCurrency(base)}\n` +
+      `  IVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\n` +
+      (re > 0 ? `  R.E.:  ${formatCurrency(re)}\n` : '') +
+      `  TOTAL: ${formatCurrency(total)}\n\n` +
+      `${diff > 0 ? `⬇️ El total se REDUCE en ${formatCurrency(Math.abs(diff))}` : `⬆️ El total AUMENTA en ${formatCurrency(Math.abs(diff))}`}\n\n` +
+      `¿Actualizar la factura ${factura.id} con los importes corregidos? Se mantiene el mismo número de factura.`;
+    
+    if (!window.confirm(msg)) return;
+    
+    try {
+      const { error } = await supabase.from('facturas').update({
+        subtotal,
+        descuento_aplicado: descuento,
+        base_imponible: base,
+        iva_porcentaje: IVA_VENTAS,
+        iva,
+        recargo_equivalencia: re > 0,
+        re_porcentaje: re > 0 ? RE_VENTAS : 0,
+        re_importe: re,
+        total,
+      }).eq('id', factura.id);
+      if (error) throw error;
+      refetchFacturas();
+      alert(`✅ Factura ${factura.id} corregida.\n\nNuevo total: ${formatCurrency(total)}\n\n⚠️ Si ya habías generado el asiento contable o presentado el IVA de este periodo, revisa que cuadre. Si ya enviaste la factura anterior al cliente, mándale la corregida (mismo número) o una rectificativa.`);
+    } catch (e) {
+      alert('❌ Error al actualizar: ' + e.message);
+    }
+  };
+
   // PDF de factura agrupada (lista de albaranes como líneas)
   const generarPDFFacturaAgrupada = (factura) => {
     const cliente = clientes.find(c => c.id === factura.cliente_id);
@@ -19314,13 +19504,33 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
 <table class="lines">
   <thead><tr><th>Albarán</th><th>Fecha entrega</th><th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
   <tbody>
-    ${albs.map(a => `<tr>
+    ${albs.map(a => {
+      // V67: derivar base/iva/total de cada albarán de forma canónica (sin doble IVA)
+      const cliF = clientes.find(c => c.id === factura.cliente_id);
+      const aplicaRE = !!cliF?.recargo_equivalencia;
+      const factorImp = 1 + (IVA_VENTAS/100) + (aplicaRE ? RE_VENTAS/100 : 0);
+      const items = Array.isArray(a.items_json) ? a.items_json : [];
+      let baseA = 0;
+      if (items.length > 0) {
+        const sub = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario)||0) * (parseFloat(it.cantidad)||0)), 0);
+        baseA = sub - sub * ((cliF?.descuento || 0)/100);
+      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
+        baseA = parseFloat(a.base_imponible);
+      } else if (parseFloat(a.total) > 0) {
+        baseA = parseFloat(a.total) / factorImp;
+      }
+      baseA = Math.round(baseA * 100) / 100;
+      const ivaA = Math.round(baseA * (IVA_VENTAS/100) * 100) / 100;
+      const reA = aplicaRE ? Math.round(baseA * (RE_VENTAS/100) * 100) / 100 : 0;
+      const totA = Math.round((baseA + ivaA + reA) * 100) / 100;
+      return `<tr>
       <td style="font-family:'Courier New',monospace;font-weight:600">${a.id}</td>
       <td>${fmtF(a.fecha_entrega_real || a.fecha_emision)}</td>
-      <td class="r">${formatCurrency(a.base_imponible || 0)}</td>
-      <td class="r">${formatCurrency((parseFloat(a.iva)||0) + (parseFloat(a.re_importe)||0))}</td>
-      <td class="r">${formatCurrency(a.total || 0)}</td>
-    </tr>`).join('')}
+      <td class="r">${formatCurrency(baseA)}</td>
+      <td class="r">${formatCurrency(ivaA + reA)}</td>
+      <td class="r">${formatCurrency(totA)}</td>
+    </tr>`;
+    }).join('')}
   </tbody>
 </table>
 
@@ -20047,8 +20257,9 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
   // ==================== V64 — INVENTARIO DE INSUMOS (fin) ====================
 
   // Generador de PDF de albarán (HTML imprimible) — formato profesional 1 hoja A4
-  const generarPDFAlbaran = (albaran) => {
-    if (!albaran) return;
+  // V67: construye el HTML del albarán (reutilizable para imprimir o meter en ZIP)
+  const construirHTMLAlbaran = (albaran) => {
+    if (!albaran) return '';
     const cliente = clientes.find(c => c.id === albaran.cliente_id);
     const itemsArr = Array.isArray(albaran.items_json) ? albaran.items_json : [];
     const valorado = !!albaran.valorado;
@@ -20270,7 +20481,12 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
 
 </body>
 </html>`;
-
+    return html;
+  };
+  
+  const generarPDFAlbaran = (albaran) => {
+    if (!albaran) return;
+    const html = construirHTMLAlbaran(albaran);
     const w = window.open('', '_blank');
     if (!w) { alert('⚠️ Permite pop-ups para ver el albarán'); return; }
     w.document.write(html);
