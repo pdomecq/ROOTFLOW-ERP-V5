@@ -1623,6 +1623,9 @@ const MainApp = () => {
   const { data: insumoMovimientosData, refetch: refetchInsumoMovimientos } = useRealtime('insumo_movimientos');
   // V64 - Notas de kilometraje
   const { data: notasKmData, refetch: refetchNotasKm } = useRealtime('notas_kilometraje');
+  // V69 - Desarrollo y financiación
+  const { data: contactosDevData, refetch: refetchContactosDev } = useRealtime('contactos_desarrollo');
+  const { data: interaccionesDevData, refetch: refetchInteraccionesDev } = useRealtime('interacciones_desarrollo');
   // V41 - Racks y ubicación de bandejas
   const { data: racksConfigData, refetch: refetchRacksConfig } = useRealtime('racks_config');
   const { data: loteBandejasData, refetch: refetchLoteBandejas } = useRealtime('lote_bandejas');
@@ -1750,6 +1753,9 @@ const MainApp = () => {
   const insumoMovimientos = insumoMovimientosData || [];
   // V64 - Notas kilometraje
   const notasKm = notasKmData || [];
+  // V69 - Desarrollo
+  const contactosDev = contactosDevData || [];
+  const interaccionesDev = interaccionesDevData || [];
   // V41 - Racks y ubicación
   const racksConfig = (racksConfigData || []).slice().sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const loteBandejas = loteBandejasData || [];
@@ -12374,6 +12380,12 @@ ${transacciones}
   const [insumoSoloReponer, setInsumoSoloReponer] = useState(false);
   // V64: albarán preseleccionado para nota de kilometraje
   const [albaranParaKm, setAlbaranParaKm] = useState(null);
+  // V69: estados módulo desarrollo
+  const [devFiltroTipo, setDevFiltroTipo] = useState('todos');
+  const [devFiltroOportunidad, setDevFiltroOportunidad] = useState('todos');
+  const [devBusqueda, setDevBusqueda] = useState('');
+  const [contactoDevDetalle, setContactoDevDetalle] = useState(null);
+  const [devMostrarCerrados, setDevMostrarCerrados] = useState(false);
   
   // Estado para pestañas de gastos (gastos vs capex)
   const [gastosTab, setGastosTab] = useState('gastos');
@@ -20494,6 +20506,573 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
   };
 
   // Formulario AlbaranForm
+  // ==================== V69 — DESARROLLO Y FINANCIACIÓN ====================
+  
+  const TIPOS_ENTIDAD_DEV = {
+    banco:            { label: 'Banco',              emoji: '🏦', color: '#0EA5E9' },
+    vc:               { label: 'Venture Capital',    emoji: '💼', color: '#8B5CF6' },
+    inversor_privado: { label: 'Inversor privado',   emoji: '💰', color: '#F59E0B' },
+    fff:              { label: 'FF&F',               emoji: '👨‍👩‍👦', color: '#EC4899' },
+    empresa_sector:   { label: 'Empresa del sector', emoji: '🌱', color: '#22C55E' },
+    organismo_publico:{ label: 'Organismo público',  emoji: '🏛️', color: '#64748B' },
+    aceleradora:      { label: 'Aceleradora',        emoji: '🚀', color: '#EF4444' },
+    colaborador:      { label: 'Colaborador',        emoji: '🤝', color: '#14B8A6' },
+    otro:             { label: 'Otro',               emoji: '📌', color: '#94A3B8' },
+  };
+  
+  const TIPOS_OPORTUNIDAD_DEV = {
+    equity:                 { label: 'Equity',                  emoji: '📈' },
+    prestamo_participativo: { label: 'Préstamo participativo',  emoji: '🤝' },
+    deuda_bancaria:         { label: 'Deuda bancaria',          emoji: '🏦' },
+    subvencion:             { label: 'Subvención',              emoji: '🏛️' },
+    partnership:            { label: 'Partnership',             emoji: '🔗' },
+    advisory:               { label: 'Advisory / Mentoring',    emoji: '🧭' },
+    mixto:                  { label: 'Mixto',                   emoji: '🎯' },
+    otro:                   { label: 'Otro',                    emoji: '📌' },
+  };
+  
+  const ESTADOS_PIPELINE_DEV = {
+    identificado:  { label: 'Identificado',  emoji: '🔍', color: '#94A3B8' },
+    contactado:    { label: 'Contactado',    emoji: '✉️', color: '#0EA5E9' },
+    reunion:       { label: 'Reunión',       emoji: '📅', color: '#8B5CF6' },
+    negociacion:   { label: 'Negociación',   emoji: '💬', color: '#F59E0B' },
+    compromiso:    { label: 'Compromiso',    emoji: '🤝', color: '#F97316' },
+    cerrado_ganado:{ label: 'Cerrado ✓',     emoji: '🏆', color: '#22C55E' },
+    descartado:    { label: 'Descartado',    emoji: '✗',  color: '#EF4444' },
+  };
+  
+  const ContactoDevForm = ({ contacto, onSave, onCancel }) => {
+    const [form, setForm] = useState(contacto || {
+      nombre_entidad: '', tipo_entidad: 'inversor_privado', persona_contacto: '', cargo: '',
+      email: '', telefono: '', linkedin: '', web: '',
+      tipo_oportunidad: 'equity', estado: 'identificado', prioridad: 'media',
+      importe_potencial: '', condiciones: '', valoracion_pre: '', interes_pct: '',
+      como_llegamos: '', proximo_paso: '', fecha_proximo_paso: '', notas: '', activo: true,
+    });
+    
+    const esFinanciacion = ['equity', 'prestamo_participativo', 'deuda_bancaria', 'subvencion', 'mixto'].includes(form.tipo_oportunidad);
+    
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Nombre entidad / persona *" className="col-span-2" value={form.nombre_entidad} onChange={e => setForm({...form, nombre_entidad: e.target.value})} placeholder="Ej: Alhambra Venture, BBVA, Juan Pérez..." />
+        </div>
+        
+        {/* Tipo de entidad */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-2">Tipo de entidad</label>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(TIPOS_ENTIDAD_DEV).map(([k, c]) => {
+              const sel = form.tipo_entidad === k;
+              return (
+                <button key={k} type="button" onClick={() => setForm({...form, tipo_entidad: k})}
+                  className={`p-2 rounded-xl border-2 text-center transition-all ${sel ? 'shadow-sm' : ''}`}
+                  style={{ borderColor: sel ? c.color : '#E5E7EB', backgroundColor: sel ? c.color + '15' : 'white' }}>
+                  <div className="text-lg">{c.emoji}</div>
+                  <p className="text-[10px] font-medium mt-0.5">{c.label}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Persona de contacto */}
+        <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 space-y-3">
+          <p className="text-sm font-semibold text-neutral-700">👤 Persona de contacto</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Input label="Nombre" value={form.persona_contacto || ''} onChange={e => setForm({...form, persona_contacto: e.target.value})} />
+            <Input label="Cargo" value={form.cargo || ''} onChange={e => setForm({...form, cargo: e.target.value})} placeholder="Partner, Director..." />
+            <Input label="Email" value={form.email || ''} onChange={e => setForm({...form, email: e.target.value})} />
+            <Input label="Teléfono" value={form.telefono || ''} onChange={e => setForm({...form, telefono: e.target.value})} />
+            <Input label="LinkedIn" value={form.linkedin || ''} onChange={e => setForm({...form, linkedin: e.target.value})} placeholder="URL perfil" />
+            <Input label="Web" value={form.web || ''} onChange={e => setForm({...form, web: e.target.value})} />
+          </div>
+        </div>
+        
+        {/* Oportunidad */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Tipo de oportunidad</label>
+            <select value={form.tipo_oportunidad} onChange={e => setForm({...form, tipo_oportunidad: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300">
+              {Object.entries(TIPOS_OPORTUNIDAD_DEV).map(([k, c]) => <option key={k} value={k}>{c.emoji} {c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Estado del pipeline</label>
+            <select value={form.estado} onChange={e => setForm({...form, estado: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300">
+              {Object.entries(ESTADOS_PIPELINE_DEV).map(([k, c]) => <option key={k} value={k}>{c.emoji} {c.label}</option>)}
+            </select>
+          </div>
+        </div>
+        
+        {/* Prioridad */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Prioridad</label>
+          <div className="flex gap-2">
+            {[
+              { val: 'alta', label: '🔴 Alta' },
+              { val: 'media', label: '🟡 Media' },
+              { val: 'baja', label: '⚪ Baja' },
+            ].map(p => (
+              <button key={p.val} type="button" onClick={() => setForm({...form, prioridad: p.val})}
+                className={`flex-1 py-2 rounded-xl border-2 text-sm font-semibold ${form.prioridad === p.val ? 'border-orange-400 bg-orange-50' : 'border-neutral-200'}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        {/* Términos financieros */}
+        {esFinanciacion && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-3">
+            <p className="text-sm font-semibold text-green-800">💶 Términos (si se conocen)</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Importe potencial (€)" type="number" step="1000" value={form.importe_potencial || ''} onChange={e => setForm({...form, importe_potencial: e.target.value})} placeholder="207000" />
+              {form.tipo_oportunidad === 'equity' || form.tipo_oportunidad === 'mixto' ? (
+                <Input label="Valoración pre-money (€)" type="number" step="10000" value={form.valoracion_pre || ''} onChange={e => setForm({...form, valoracion_pre: e.target.value})} />
+              ) : (
+                <Input label="Tipo de interés (%)" type="number" step="0.1" value={form.interes_pct || ''} onChange={e => setForm({...form, interes_pct: e.target.value})} />
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-neutral-700 mb-1">Condiciones / términos hablados</label>
+              <textarea value={form.condiciones || ''} onChange={e => setForm({...form, condiciones: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm" rows={2} placeholder="Ej: 7 años, 2 carencia, Euribor+2%... / SAFE con cap 800k..." />
+            </div>
+          </div>
+        )}
+        
+        {/* Origen y seguimiento */}
+        <Input label="¿Cómo llegamos? (referido, evento...)" value={form.como_llegamos || ''} onChange={e => setForm({...form, como_llegamos: e.target.value})} placeholder="Ej: Referido por X / Alhambra Venture / LinkedIn" />
+        
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <p className="text-sm font-semibold text-amber-800 mb-2">📌 Próximo paso</p>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Input label="Qué hay que hacer" value={form.proximo_paso || ''} onChange={e => setForm({...form, proximo_paso: e.target.value})} placeholder="Ej: Enviar modelo financiero v2" />
+            </div>
+            <Input label="Para cuándo" type="date" value={form.fecha_proximo_paso || ''} onChange={e => setForm({...form, fecha_proximo_paso: e.target.value})} />
+          </div>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">Notas</label>
+          <textarea value={form.notas || ''} onChange={e => setForm({...form, notas: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm" rows={2} />
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.nombre_entidad.trim()) { alert('Pon el nombre de la entidad'); return; }
+            const payload = { ...form };
+            ['importe_potencial', 'valoracion_pre', 'interes_pct'].forEach(k => {
+              payload[k] = payload[k] === '' || payload[k] == null ? null : parseFloat(payload[k]);
+            });
+            if (!payload.fecha_proximo_paso) payload.fecha_proximo_paso = null;
+            onSave(payload);
+          }}>{contacto?.id ? 'Guardar' : 'Crear'}</Button>
+        </div>
+      </div>
+    );
+  };
+  
+  const InteraccionDevForm = ({ contacto, onSave, onCancel }) => {
+    const [form, setForm] = useState({
+      fecha: new Date().toISOString().slice(0, 10),
+      tipo: 'reunion',
+      resumen: '', acuerdos: '', asistentes: '', documentos_enviados: '',
+      // Actualización opcional del contacto tras la interacción:
+      nuevo_estado: contacto?.estado || 'reunion',
+      proximo_paso: contacto?.proximo_paso || '',
+      fecha_proximo_paso: '',
+    });
+    
+    const tiposInteraccion = {
+      reunion: '🤝 Reunión presencial', videollamada: '💻 Videollamada', llamada: '📞 Llamada',
+      email: '✉️ Email', whatsapp: '💬 WhatsApp', evento: '🎪 Evento', otro: '📌 Otro',
+    };
+    
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Tipo</label>
+            <select value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300">
+              {Object.entries(tiposInteraccion).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">📝 Resumen (qué se habló) *</label>
+          <textarea value={form.resumen} onChange={e => setForm({...form, resumen: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm" rows={3} placeholder="Puntos clave de la conversación..." autoFocus />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1">✅ Acuerdos / next steps</label>
+          <textarea value={form.acuerdos} onChange={e => setForm({...form, acuerdos: e.target.value})} className="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm" rows={2} placeholder="Qué quedó acordado, quién hace qué..." />
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Asistentes" value={form.asistentes} onChange={e => setForm({...form, asistentes: e.target.value})} placeholder="Peri, Nico + Juan (partner)" />
+          <Input label="Docs enviados" value={form.documentos_enviados} onChange={e => setForm({...form, documentos_enviados: e.target.value})} placeholder="Deck v3, modelo financiero..." />
+        </div>
+        
+        {/* Actualización rápida del contacto */}
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-3">
+          <p className="text-sm font-semibold text-blue-800">🔄 Actualizar contacto tras esta interacción</p>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-neutral-700 mb-1">Nuevo estado</label>
+              <select value={form.nuevo_estado} onChange={e => setForm({...form, nuevo_estado: e.target.value})} className="w-full px-2 py-2 rounded-lg border border-neutral-300 text-sm">
+                {Object.entries(ESTADOS_PIPELINE_DEV).map(([k, c]) => <option key={k} value={k}>{c.emoji} {c.label}</option>)}
+              </select>
+            </div>
+            <Input label="Próximo paso" value={form.proximo_paso} onChange={e => setForm({...form, proximo_paso: e.target.value})} />
+            <Input label="Para cuándo" type="date" value={form.fecha_proximo_paso} onChange={e => setForm({...form, fecha_proximo_paso: e.target.value})} />
+          </div>
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            if (!form.resumen.trim()) { alert('Escribe al menos un resumen'); return; }
+            onSave(form);
+          }}>Guardar interacción</Button>
+        </div>
+      </div>
+    );
+  };
+  
+  // Export Excel del pipeline
+  const exportarPipelineDev = () => {
+    const wb = XLSX.utils.book_new();
+    
+    const rows = contactosDev.filter(c => c.activo !== false).map(c => {
+      const interacciones = interaccionesDev.filter(i => i.contacto_id === c.id);
+      const ultima = interacciones.sort((a,b) => new Date(b.fecha) - new Date(a.fecha))[0];
+      return {
+        'Entidad': c.nombre_entidad,
+        'Tipo': TIPOS_ENTIDAD_DEV[c.tipo_entidad]?.label || c.tipo_entidad,
+        'Contacto': c.persona_contacto || '',
+        'Cargo': c.cargo || '',
+        'Email': c.email || '',
+        'Teléfono': c.telefono || '',
+        'Oportunidad': TIPOS_OPORTUNIDAD_DEV[c.tipo_oportunidad]?.label || c.tipo_oportunidad,
+        'Estado': ESTADOS_PIPELINE_DEV[c.estado]?.label || c.estado,
+        'Prioridad': c.prioridad || '',
+        'Importe potencial (€)': c.importe_potencial != null ? Number(c.importe_potencial).toFixed(2) : '',
+        'Valoración pre (€)': c.valoracion_pre != null ? Number(c.valoracion_pre).toFixed(2) : '',
+        'Interés (%)': c.interes_pct != null ? Number(c.interes_pct).toFixed(2) : '',
+        'Condiciones': c.condiciones || '',
+        'Cómo llegamos': c.como_llegamos || '',
+        'Nº interacciones': interacciones.length,
+        'Última interacción': ultima ? formatDate(ultima.fecha) : '',
+        'Próximo paso': c.proximo_paso || '',
+        'Fecha próximo paso': c.fecha_proximo_paso ? formatDate(c.fecha_proximo_paso) : '',
+        'Notas': c.notas || '',
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [{wch:26},{wch:16},{wch:18},{wch:14},{wch:24},{wch:13},{wch:20},{wch:13},{wch:9},{wch:16},{wch:15},{wch:10},{wch:34},{wch:20},{wch:8},{wch:12},{wch:26},{wch:12},{wch:30}];
+    XLSX.utils.book_append_sheet(wb, ws, 'Pipeline');
+    
+    // Hoja de interacciones
+    const intRows = interaccionesDev
+      .sort((a,b) => new Date(b.fecha) - new Date(a.fecha))
+      .map(i => {
+        const c = contactosDev.find(cc => cc.id === i.contacto_id);
+        return {
+          'Fecha': formatDate(i.fecha),
+          'Entidad': c?.nombre_entidad || '',
+          'Tipo': i.tipo || '',
+          'Resumen': i.resumen || '',
+          'Acuerdos': i.acuerdos || '',
+          'Asistentes': i.asistentes || '',
+          'Docs enviados': i.documentos_enviados || '',
+        };
+      });
+    if (intRows.length > 0) {
+      const wsI = XLSX.utils.json_to_sheet(intRows);
+      wsI['!cols'] = [{wch:11},{wch:26},{wch:12},{wch:50},{wch:40},{wch:24},{wch:24}];
+      XLSX.utils.book_append_sheet(wb, wsI, 'Interacciones');
+    }
+    
+    XLSX.writeFile(wb, `Rootflow_Pipeline_Desarrollo_${new Date().toISOString().slice(0,10)}.xlsx`);
+  };
+  
+  const renderDesarrollo = () => {
+    const activos = contactosDev.filter(c => c.activo !== false);
+    const hoyIso = new Date().toISOString().slice(0, 10);
+    
+    // Filtros
+    let lista = activos;
+    if (devFiltroTipo !== 'todos') lista = lista.filter(c => c.tipo_entidad === devFiltroTipo);
+    if (devFiltroOportunidad !== 'todos') lista = lista.filter(c => c.tipo_oportunidad === devFiltroOportunidad);
+    if (devBusqueda) {
+      const q = devBusqueda.toLowerCase();
+      lista = lista.filter(c => (c.nombre_entidad || '').toLowerCase().includes(q) || (c.persona_contacto || '').toLowerCase().includes(q));
+    }
+    
+    // KPIs
+    const enJuego = activos.filter(c => !['cerrado_ganado', 'descartado'].includes(c.estado));
+    const pipelineTotal = enJuego.reduce((s, c) => s + (parseFloat(c.importe_potencial) || 0), 0);
+    const cerrado = activos.filter(c => c.estado === 'cerrado_ganado').reduce((s, c) => s + (parseFloat(c.importe_potencial) || 0), 0);
+    const mesActual = new Date().toISOString().slice(0, 7);
+    const reunionesMes = interaccionesDev.filter(i => (i.fecha || '').startsWith(mesActual)).length;
+    const pasosVencidos = enJuego.filter(c => c.fecha_proximo_paso && c.fecha_proximo_paso < hoyIso);
+    
+    // Columnas del pipeline (sin cerrados salvo toggle)
+    const estadosVisibles = devMostrarCerrados 
+      ? Object.keys(ESTADOS_PIPELINE_DEV) 
+      : Object.keys(ESTADOS_PIPELINE_DEV).filter(e => !['cerrado_ganado', 'descartado'].includes(e));
+    
+    const cambiarEstado = async (contacto, nuevoEstado) => {
+      try {
+        await supabase.from('contactos_desarrollo').update({ estado: nuevoEstado }).eq('id', contacto.id);
+        refetchContactosDev();
+      } catch (e) { alert('Error: ' + e.message); }
+    };
+    
+    return (
+      <div className="space-y-4 max-w-screen-2xl mx-auto px-2 sm:px-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">🚀 Desarrollo</h1>
+            <p className="text-xs text-neutral-500 mt-1">Pipeline de financiación, inversores y colaboradores</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={exportarPipelineDev}>
+              <Download size={16} /> Exportar
+            </Button>
+            <Button onClick={() => { setEditingItem(null); setShowModal('contactoDev'); }}>
+              <Plus size={16} /> Nuevo contacto
+            </Button>
+          </div>
+        </div>
+        
+        {/* KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Pipeline activo</p><p className="text-2xl font-black text-purple-600">{formatCurrency(pipelineTotal)}</p><p className="text-[10px] text-neutral-400">{enJuego.length} contacto(s) en juego</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Cerrado ✓</p><p className="text-2xl font-black text-green-600">{formatCurrency(cerrado)}</p></Card>
+          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Interacciones este mes</p><p className="text-2xl font-black">{reunionesMes}</p></Card>
+          <Card className={`p-3 ${pasosVencidos.length > 0 ? 'bg-red-50 border-red-300' : ''}`}><p className="text-xs text-neutral-500 uppercase font-bold">Pasos vencidos</p><p className={`text-2xl font-black ${pasosVencidos.length > 0 ? 'text-red-600' : 'text-green-600'}`}>{pasosVencidos.length}</p></Card>
+        </div>
+        
+        {/* Avisos de pasos vencidos */}
+        {pasosVencidos.length > 0 && (
+          <Card className="p-3 bg-red-50 border-2 border-red-300">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">
+                <p className="font-bold text-red-900 mb-1">⏰ Próximos pasos pendientes de hacer:</p>
+                {pasosVencidos.slice(0, 5).map(c => (
+                  <p key={c.id} className="text-xs text-red-800">
+                    • <strong>{c.nombre_entidad}</strong>: {c.proximo_paso || '(sin descripción)'} — para el {formatDate(c.fecha_proximo_paso)}
+                  </p>
+                ))}
+                {pasosVencidos.length > 5 && <p className="text-xs text-red-600 mt-1">...y {pasosVencidos.length - 5} más</p>}
+              </div>
+            </div>
+          </Card>
+        )}
+        
+        {/* Filtros */}
+        <div className="flex gap-2 flex-wrap items-center">
+          <input type="text" value={devBusqueda} onChange={e => setDevBusqueda(e.target.value)} placeholder="Buscar entidad o persona..." className="flex-1 min-w-[180px] px-4 py-2 rounded-xl border border-neutral-300" />
+          <select value={devFiltroTipo} onChange={e => setDevFiltroTipo(e.target.value)} className="px-3 py-2 rounded-xl border border-neutral-300 text-sm">
+            <option value="todos">Todas las entidades</option>
+            {Object.entries(TIPOS_ENTIDAD_DEV).map(([k, c]) => <option key={k} value={k}>{c.emoji} {c.label}</option>)}
+          </select>
+          <select value={devFiltroOportunidad} onChange={e => setDevFiltroOportunidad(e.target.value)} className="px-3 py-2 rounded-xl border border-neutral-300 text-sm">
+            <option value="todos">Todas las oportunidades</option>
+            {Object.entries(TIPOS_OPORTUNIDAD_DEV).map(([k, c]) => <option key={k} value={k}>{c.emoji} {c.label}</option>)}
+          </select>
+          <label className="flex items-center gap-1.5 text-sm text-neutral-600 cursor-pointer">
+            <input type="checkbox" checked={devMostrarCerrados} onChange={e => setDevMostrarCerrados(e.target.checked)} />
+            Ver cerrados
+          </label>
+        </div>
+        
+        {/* PIPELINE (tablero horizontal) */}
+        <div className="overflow-x-auto pb-2">
+          <div className="flex gap-3" style={{ minWidth: `${estadosVisibles.length * 280}px` }}>
+            {estadosVisibles.map(estadoKey => {
+              const cfg = ESTADOS_PIPELINE_DEV[estadoKey];
+              const contactosCol = lista.filter(c => c.estado === estadoKey)
+                .sort((a, b) => {
+                  const prio = { alta: 0, media: 1, baja: 2 };
+                  return (prio[a.prioridad] ?? 1) - (prio[b.prioridad] ?? 1);
+                });
+              const totalCol = contactosCol.reduce((s, c) => s + (parseFloat(c.importe_potencial) || 0), 0);
+              
+              return (
+                <div key={estadoKey} className="flex-1 min-w-[260px]">
+                  <div className="rounded-t-xl px-3 py-2 flex items-center justify-between" style={{ backgroundColor: cfg.color + '20', borderTop: `3px solid ${cfg.color}` }}>
+                    <span className="font-bold text-sm" style={{ color: cfg.color }}>{cfg.emoji} {cfg.label}</span>
+                    <div className="text-right">
+                      <span className="text-xs font-bold" style={{ color: cfg.color }}>{contactosCol.length}</span>
+                      {totalCol > 0 && <p className="text-[9px] text-neutral-500">{formatCurrency(totalCol)}</p>}
+                    </div>
+                  </div>
+                  <div className="bg-neutral-50 rounded-b-xl p-2 space-y-2 min-h-[120px]">
+                    {contactosCol.length === 0 ? (
+                      <p className="text-center text-[10px] text-neutral-400 py-6">—</p>
+                    ) : contactosCol.map(c => {
+                      const tipoCfg = TIPOS_ENTIDAD_DEV[c.tipo_entidad] || TIPOS_ENTIDAD_DEV.otro;
+                      const opCfg = TIPOS_OPORTUNIDAD_DEV[c.tipo_oportunidad] || TIPOS_OPORTUNIDAD_DEV.otro;
+                      const numInt = interaccionesDev.filter(i => i.contacto_id === c.id).length;
+                      const pasoVencido = c.fecha_proximo_paso && c.fecha_proximo_paso < hoyIso;
+                      return (
+                        <div 
+                          key={c.id} 
+                          onClick={() => setContactoDevDetalle(c)}
+                          className={`bg-white rounded-xl p-2.5 border cursor-pointer hover:shadow-md transition-shadow ${c.prioridad === 'alta' ? 'border-red-300' : 'border-neutral-200'}`}
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <p className="font-bold text-sm leading-tight">{tipoCfg.emoji} {c.nombre_entidad}</p>
+                            {c.prioridad === 'alta' && <span className="text-[10px]">🔴</span>}
+                          </div>
+                          {c.persona_contacto && <p className="text-[10px] text-neutral-500 mt-0.5">👤 {c.persona_contacto}{c.cargo ? ` · ${c.cargo}` : ''}</p>}
+                          <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                            <span className="text-[9px] px-1.5 py-0.5 bg-neutral-100 rounded-full">{opCfg.emoji} {opCfg.label}</span>
+                            {c.importe_potencial > 0 && <span className="text-[9px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-bold">{formatCurrency(c.importe_potencial)}</span>}
+                            {numInt > 0 && <span className="text-[9px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">{numInt} 💬</span>}
+                          </div>
+                          {c.proximo_paso && (
+                            <p className={`text-[10px] mt-1.5 pt-1.5 border-t ${pasoVencido ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
+                              {pasoVencido ? '⏰' : '📌'} {c.proximo_paso}{c.fecha_proximo_paso ? ` (${formatDate(c.fecha_proximo_paso)})` : ''}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* Modal detalle contacto */}
+        {contactoDevDetalle && (() => {
+          // Refrescar el contacto desde datos actuales
+          const c = contactosDev.find(x => x.id === contactoDevDetalle.id) || contactoDevDetalle;
+          const tipoCfg = TIPOS_ENTIDAD_DEV[c.tipo_entidad] || TIPOS_ENTIDAD_DEV.otro;
+          const opCfg = TIPOS_OPORTUNIDAD_DEV[c.tipo_oportunidad] || TIPOS_OPORTUNIDAD_DEV.otro;
+          const estadoCfg = ESTADOS_PIPELINE_DEV[c.estado] || ESTADOS_PIPELINE_DEV.identificado;
+          const interacciones = interaccionesDev.filter(i => i.contacto_id === c.id).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+          
+          return (
+            <Modal title={`${tipoCfg.emoji} ${c.nombre_entidad}`} onClose={() => setContactoDevDetalle(null)} size="max-w-3xl">
+              <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-2">
+                {/* Cabecera con estado + acciones */}
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge style={{ backgroundColor: estadoCfg.color + '25', color: estadoCfg.color }} className="font-bold">{estadoCfg.emoji} {estadoCfg.label}</Badge>
+                    <Badge className="bg-neutral-100">{opCfg.emoji} {opCfg.label}</Badge>
+                    {c.prioridad === 'alta' && <Badge className="bg-red-100 text-red-700">🔴 Alta prioridad</Badge>}
+                  </div>
+                  <div className="flex gap-1">
+                    <select 
+                      value={c.estado} 
+                      onChange={async e => { await cambiarEstado(c, e.target.value); }}
+                      className="text-xs px-2 py-1.5 rounded-lg border border-neutral-300"
+                      title="Cambiar estado"
+                    >
+                      {Object.entries(ESTADOS_PIPELINE_DEV).map(([k, cf]) => <option key={k} value={k}>{cf.emoji} {cf.label}</option>)}
+                    </select>
+                    <button onClick={() => { setEditingItem(c); setContactoDevDetalle(null); setShowModal('contactoDev'); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Editar ficha"><Edit2 size={16} /></button>
+                    <button onClick={async () => {
+                      if (window.confirm(`¿Eliminar "${c.nombre_entidad}" y todo su historial?`)) {
+                        await supabase.from('contactos_desarrollo').delete().eq('id', c.id);
+                        refetchContactosDev(); refetchInteraccionesDev();
+                        setContactoDevDetalle(null);
+                      }
+                    }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
+                  </div>
+                </div>
+                
+                {/* Datos de contacto */}
+                <div className="grid grid-cols-2 gap-3 text-sm bg-neutral-50 rounded-xl p-3">
+                  {c.persona_contacto && <p>👤 <strong>{c.persona_contacto}</strong>{c.cargo ? ` · ${c.cargo}` : ''}</p>}
+                  {c.email && <p>✉️ <a href={`mailto:${c.email}`} className="text-blue-600 hover:underline">{c.email}</a></p>}
+                  {c.telefono && <p>📞 <a href={`tel:${c.telefono}`} className="text-blue-600 hover:underline">{c.telefono}</a></p>}
+                  {c.linkedin && <p>💼 <a href={c.linkedin} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">LinkedIn</a></p>}
+                  {c.web && <p>🌐 <a href={c.web.startsWith('http') ? c.web : 'https://' + c.web} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{c.web}</a></p>}
+                  {c.como_llegamos && <p>🧭 Vía: {c.como_llegamos}</p>}
+                </div>
+                
+                {/* Términos */}
+                {(c.importe_potencial > 0 || c.condiciones || c.valoracion_pre > 0 || c.interes_pct > 0) && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm space-y-1">
+                    <p className="font-bold text-green-800 text-xs uppercase">💶 Términos</p>
+                    <div className="flex gap-4 flex-wrap">
+                      {c.importe_potencial > 0 && <p>Importe: <strong>{formatCurrency(c.importe_potencial)}</strong></p>}
+                      {c.valoracion_pre > 0 && <p>Pre-money: <strong>{formatCurrency(c.valoracion_pre)}</strong></p>}
+                      {c.interes_pct > 0 && <p>Interés: <strong>{Number(c.interes_pct).toFixed(2)}%</strong></p>}
+                    </div>
+                    {c.condiciones && <p className="text-xs text-green-900 whitespace-pre-wrap">{c.condiciones}</p>}
+                  </div>
+                )}
+                
+                {/* Próximo paso */}
+                {c.proximo_paso && (
+                  <div className={`rounded-xl p-3 text-sm border-2 ${c.fecha_proximo_paso && c.fecha_proximo_paso < new Date().toISOString().slice(0,10) ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-200'}`}>
+                    <p className="font-bold text-xs uppercase mb-1">📌 Próximo paso</p>
+                    <p>{c.proximo_paso}{c.fecha_proximo_paso ? ` — ${formatDate(c.fecha_proximo_paso)}` : ''}</p>
+                  </div>
+                )}
+                
+                {c.notas && <div className="text-sm text-neutral-600 bg-neutral-50 rounded-xl p-3 whitespace-pre-wrap"><p className="font-bold text-xs uppercase mb-1">📓 Notas</p>{c.notas}</div>}
+                
+                {/* Historial de interacciones */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="font-bold text-sm">💬 Historial ({interacciones.length})</p>
+                    <Button size="sm" onClick={() => { setEditingItem(c); setShowModal('interaccionDev'); }}>
+                      <Plus size={14} /> Registrar interacción
+                    </Button>
+                  </div>
+                  {interacciones.length === 0 ? (
+                    <p className="text-center text-xs text-neutral-400 py-4">Sin interacciones registradas aún</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {interacciones.map(i => {
+                        const tipoEmoji = { reunion: '🤝', videollamada: '💻', llamada: '📞', email: '✉️', whatsapp: '💬', evento: '🎪', otro: '📌' };
+                        return (
+                          <div key={i.id} className="bg-white border rounded-xl p-3 text-sm">
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="font-semibold">{tipoEmoji[i.tipo] || '📌'} {formatDate(i.fecha)}</p>
+                              <button onClick={async () => {
+                                if (window.confirm('¿Eliminar esta interacción?')) {
+                                  await supabase.from('interacciones_desarrollo').delete().eq('id', i.id);
+                                  refetchInteraccionesDev();
+                                }
+                              }} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={12} /></button>
+                            </div>
+                            {i.resumen && <p className="text-neutral-700 whitespace-pre-wrap">{i.resumen}</p>}
+                            {i.acuerdos && <p className="text-xs mt-1.5 p-2 bg-green-50 rounded-lg text-green-900 whitespace-pre-wrap">✅ {i.acuerdos}</p>}
+                            <div className="flex gap-3 mt-1.5 text-[10px] text-neutral-400 flex-wrap">
+                              {i.asistentes && <span>👥 {i.asistentes}</span>}
+                              {i.documentos_enviados && <span>📎 {i.documentos_enviados}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Modal>
+          );
+        })()}
+      </div>
+    );
+  };
+
+  // ==================== V69 — DESARROLLO (fin) ====================
+
   // ==================== V64 — NOTAS DE KILOMETRAJE ====================
   
   // "Backend" (en esta arquitectura React+Supabase, la lógica de guardado va aquí):
@@ -25368,6 +25947,11 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             const n = insumos.filter(i => i.activo !== false && (i.stock_minimo || 0) > 0 && (i.stock_actual || 0) <= (i.stock_minimo || 0)).length;
             return n > 0 ? n : null;
           })()} />
+          <NavItem icon={TrendingUp} label="Desarrollo" section="desarrollo" badge={(() => {
+            const hoyIso = new Date().toISOString().slice(0, 10);
+            const n = contactosDev.filter(c => c.activo !== false && !['cerrado_ganado','descartado'].includes(c.estado) && c.fecha_proximo_paso && c.fecha_proximo_paso < hoyIso).length;
+            return n > 0 ? n : null;
+          })()} />
           <NavItem icon={AlertTriangle} label="Mermas" section="mermas" />
           <NavItem icon={History} label="Trazabilidad" section="trazabilidad" />
           <NavItem icon={Sun} label="Ambiente" section="ambiente" />
@@ -25746,6 +26330,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           {activeSection === 'planificacion' && renderPlanificacion()}
           {activeSection === 'albaranes' && renderAlbaranes()}
           {activeSection === 'insumos' && renderInsumos()}
+          {activeSection === 'desarrollo' && renderDesarrollo()}
           {activeSection === 'mermas' && renderMermas()}
           {activeSection === 'trazabilidad' && renderTrazabilidad()}
           {activeSection === 'ambiente' && renderAmbiente()}
@@ -26221,6 +26806,67 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       )}
       
       {/* Modal Albarán V58 */}
+      {/* Modales Desarrollo V69 */}
+      {showModal === 'contactoDev' && (
+        <Modal title={editingItem?.id ? 'Editar contacto' : '🚀 Nuevo contacto de desarrollo'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+          <ContactoDevForm
+            contacto={editingItem?.id ? editingItem : null}
+            onSave={async (form) => {
+              try {
+                if (editingItem?.id) {
+                  const { error } = await supabase.from('contactos_desarrollo').update(form).eq('id', editingItem.id);
+                  if (error) throw error;
+                } else {
+                  const { error } = await supabase.from('contactos_desarrollo').insert(form);
+                  if (error) throw error;
+                }
+                refetchContactosDev();
+                setShowModal(null);
+                setEditingItem(null);
+              } catch (e) {
+                if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V69 (tabla contactos_desarrollo no existe).');
+                else alert('❌ Error: ' + e.message);
+              }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+      
+      {showModal === 'interaccionDev' && editingItem && (
+        <Modal title={`💬 Interacción con ${editingItem.nombre_entidad}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+          <InteraccionDevForm
+            contacto={editingItem}
+            onSave={async (form) => {
+              try {
+                // 1. Guardar la interacción
+                const { nuevo_estado, proximo_paso, fecha_proximo_paso, ...interaccion } = form;
+                const { error } = await supabase.from('interacciones_desarrollo').insert({
+                  contacto_id: editingItem.id,
+                  ...interaccion,
+                });
+                if (error) throw error;
+                
+                // 2. Actualizar el contacto (estado + próximo paso)
+                const updates = { estado: nuevo_estado };
+                if (proximo_paso) updates.proximo_paso = proximo_paso;
+                if (fecha_proximo_paso) updates.fecha_proximo_paso = fecha_proximo_paso;
+                await supabase.from('contactos_desarrollo').update(updates).eq('id', editingItem.id);
+                
+                refetchInteraccionesDev();
+                refetchContactosDev();
+                setShowModal(null);
+                setEditingItem(null);
+              } catch (e) {
+                if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V69.');
+                else alert('❌ Error: ' + e.message);
+              }
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+      
       {/* Modal Resumen Gastos Km V64 */}
       {showModal === 'resumenKm' && (
         <Modal title="🚗 Gastos de kilometraje" onClose={() => setShowModal(null)} size="max-w-3xl">
