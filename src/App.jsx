@@ -1603,6 +1603,7 @@ const MainApp = () => {
   const { data: loteMovimientosData, refetch: refetchLoteMovimientos } = useRealtime('lote_movimientos');
   // V47 - Reembolsos a socios (saldar deuda 551)
   const { data: reembolsosSociosData, refetch: refetchReembolsosSocios } = useRealtime('reembolsos_socios');
+  const { data: aportacionesSociosData, refetch: refetchAportacionesSocios } = useRealtime('aportaciones_socios');
   // V48 - Mapeo categorías de gasto → tipo de coste
   const { data: mapeoCategoriasData, refetch: refetchMapeoCategorias } = useRealtime('mapeo_categorias_coste');
   // V51 - Etiquetas persistentes + facturas semanales
@@ -1733,6 +1734,7 @@ const MainApp = () => {
   const loteMovimientos = loteMovimientosData || [];
   // V47 - Reembolsos a socios
   const reembolsosSocios = reembolsosSociosData || [];
+  const aportacionesSocios = aportacionesSociosData || [];
   // V48 - Mapeo categorías de coste
   const mapeoCategorias = mapeoCategoriasData || [];
   // V51 - Etiquetas persistentes + facturas semanales
@@ -12096,13 +12098,23 @@ ${transacciones}
                 const reembolsosSocio = reembolsosSocios.filter(r => r.socio_clave === clave);
                 const totalReembolsado = reembolsosSocio.reduce((s, r) => s + (r.importe || 0), 0);
                 
-                const saldoPendiente = totalPagado - totalReembolsado;
+                // V70: aportaciones de fondos propios del socio
+                const aportacionesSocio = aportacionesSocios.filter(a => a.socio_clave === clave);
+                const totalAportado = aportacionesSocio.reduce((s, a) => s + (parseFloat(a.importe) || 0), 0);
+                
+                // Contribución total = gastos adelantados + aportaciones FFPP
+                const contribucionTotal = totalPagado + totalAportado;
+                // Saldo vivo pendiente de devolver = contribución − reembolsos
+                const saldoPendiente = contribucionTotal - totalReembolsado;
                 
                 return {
                   clave, cfg,
                   gastos: gastosSocio,
                   totalPagado,
                   numGastos,
+                  aportaciones: aportacionesSocio,
+                  totalAportado,
+                  contribucionTotal,
                   reembolsos: reembolsosSocio,
                   totalReembolsado,
                   saldoPendiente,
@@ -12110,8 +12122,12 @@ ${transacciones}
               });
               
               const totalGlobal = datosPorSocio.reduce((s, d) => s + d.totalPagado, 0);
+              const aportadoGlobal = datosPorSocio.reduce((s, d) => s + d.totalAportado, 0);
+              const contribucionGlobal = totalGlobal + aportadoGlobal;
               const reembolsadoGlobal = datosPorSocio.reduce((s, d) => s + d.totalReembolsado, 0);
-              const pendienteGlobal = totalGlobal - reembolsadoGlobal;
+              const pendienteGlobal = contribucionGlobal - reembolsadoGlobal;
+              // V70: equilibrio — media de contribución viva y diferencia por socio
+              const mediaContribucion = datosPorSocio.length > 0 ? pendienteGlobal / datosPorSocio.length : 0;
               
               return (
                 <>
@@ -12120,14 +12136,14 @@ ${transacciones}
                     <div className="flex items-start gap-3">
                       <div className="text-3xl">💸</div>
                       <div className="flex-1">
-                        <h3 className="font-bold text-amber-900 mb-1">Deuda con socios (cuenta contable 551)</h3>
+                        <h3 className="font-bold text-amber-900 mb-1">Contribución de socios (gastos adelantados + aportaciones FFPP)</h3>
                         <p className="text-xs text-amber-800">
-                          Estos son los gastos de la empresa que cada socio ha pagado de su bolsillo y la sociedad todavía no le ha devuelto. 
-                          Cuando la empresa tenga caja, registra cada transferencia como "Reembolso" para saldar la deuda.
+                          La contribución de cada socio suma los gastos que pagó de su bolsillo (551) más las inyecciones de fondos propios que hizo a la cuenta de la empresa. 
+                          El objetivo: que la contribución viva sea igual entre los tres para devolverla a partes iguales.
                         </p>
                       </div>
                       <Button size="sm" className="bg-amber-600 hover:bg-amber-700 flex-shrink-0" onClick={() => {
-                        // V66: Export Excel de deuda a socios para auditoría
+                        // V66+V70: Export Excel de deuda a socios para auditoría
                         const wb = XLSX.utils.book_new();
                         
                         // Hoja 1: Resumen por socio
@@ -12135,21 +12151,28 @@ ${transacciones}
                           'Socio': d.cfg.nombre,
                           'Alias': d.cfg.alias,
                           'Cuenta': '551',
-                          'Total adelantado (€)': d.totalPagado.toFixed(2),
+                          'Gastos adelantados (€)': d.totalPagado.toFixed(2),
+                          'Aportaciones FFPP (€)': d.totalAportado.toFixed(2),
+                          'Contribución total (€)': d.contribucionTotal.toFixed(2),
                           'Reembolsado (€)': d.totalReembolsado.toFixed(2),
                           'Saldo pendiente (€)': d.saldoPendiente.toFixed(2),
+                          'Diferencia vs media (€)': (d.saldoPendiente - mediaContribucion).toFixed(2),
                           'Nº gastos': d.numGastos,
+                          'Nº aportaciones': d.aportaciones.length,
                           'Nº reembolsos': d.reembolsos.length,
                         }));
                         resumenRows.push({
                           'Socio': 'TOTAL', 'Alias': '', 'Cuenta': '',
-                          'Total adelantado (€)': totalGlobal.toFixed(2),
+                          'Gastos adelantados (€)': totalGlobal.toFixed(2),
+                          'Aportaciones FFPP (€)': aportadoGlobal.toFixed(2),
+                          'Contribución total (€)': contribucionGlobal.toFixed(2),
                           'Reembolsado (€)': reembolsadoGlobal.toFixed(2),
                           'Saldo pendiente (€)': pendienteGlobal.toFixed(2),
-                          'Nº gastos': '', 'Nº reembolsos': '',
+                          'Diferencia vs media (€)': '',
+                          'Nº gastos': '', 'Nº aportaciones': '', 'Nº reembolsos': '',
                         });
                         const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
-                        wsResumen['!cols'] = [{wch:24},{wch:10},{wch:8},{wch:18},{wch:16},{wch:18},{wch:10},{wch:13}];
+                        wsResumen['!cols'] = [{wch:24},{wch:10},{wch:8},{wch:20},{wch:20},{wch:20},{wch:16},{wch:18},{wch:20},{wch:10},{wch:14},{wch:13}];
                         XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
                         
                         // Hoja 2: Detalle de gastos adelantados (todos los socios)
@@ -12197,6 +12220,26 @@ ${transacciones}
                           XLSX.utils.book_append_sheet(wb, wsR, 'Reembolsos');
                         }
                         
+                        // Hoja 4: Aportaciones de fondos propios (V70)
+                        const aportRows = [];
+                        datosPorSocio.forEach(d => {
+                          d.aportaciones.sort((a,b) => new Date(a.fecha) - new Date(b.fecha)).forEach(a => {
+                            aportRows.push({
+                              'Socio': d.cfg.alias,
+                              'Fecha': formatDate(a.fecha),
+                              'Importe (€)': Number(a.importe || 0).toFixed(2),
+                              'Método': a.metodo === 'transferencia' ? 'Transferencia' : a.metodo === 'bizum' ? 'Bizum' : 'Efectivo',
+                              'Concepto': a.concepto || '',
+                              'Justificante': a.archivo_url ? 'Sí' : 'No',
+                            });
+                          });
+                        });
+                        if (aportRows.length > 0) {
+                          const wsA = XLSX.utils.json_to_sheet(aportRows);
+                          wsA['!cols'] = [{wch:8},{wch:11},{wch:13},{wch:14},{wch:36},{wch:12}];
+                          XLSX.utils.book_append_sheet(wb, wsA, 'Aportaciones FFPP');
+                        }
+                        
                         const fechaIso = new Date().toISOString().slice(0, 10);
                         XLSX.writeFile(wb, `Rootflow_Deuda_Socios_${fechaIso}.xlsx`);
                       }}>
@@ -12206,11 +12249,16 @@ ${transacciones}
                   </Card>
 
                   {/* KPIs globales */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <Card className="p-4">
-                      <p className="text-xs text-neutral-500 uppercase font-bold mb-1">Total adelantado</p>
+                      <p className="text-xs text-neutral-500 uppercase font-bold mb-1">Gastos adelantados</p>
                       <p className="text-2xl font-black">{formatCurrency(totalGlobal)}</p>
-                      <p className="text-xs text-neutral-500">por todos los socios</p>
+                      <p className="text-xs text-neutral-500">pagados de bolsillo</p>
+                    </Card>
+                    <Card className="p-4 bg-blue-50 border-blue-200">
+                      <p className="text-xs text-blue-700 uppercase font-bold mb-1">Aportaciones FFPP</p>
+                      <p className="text-2xl font-black text-blue-900">{formatCurrency(aportadoGlobal)}</p>
+                      <p className="text-xs text-blue-700">inyectado a la empresa</p>
                     </Card>
                     <Card className="p-4 bg-green-50 border-green-200">
                       <p className="text-xs text-green-700 uppercase font-bold mb-1">Ya reembolsado</p>
@@ -12218,11 +12266,44 @@ ${transacciones}
                       <p className="text-xs text-green-700">devuelto desde caja</p>
                     </Card>
                     <Card className={`p-4 ${pendienteGlobal > 0 ? 'bg-amber-50 border-amber-300' : 'bg-neutral-50'}`}>
-                      <p className={`text-xs uppercase font-bold mb-1 ${pendienteGlobal > 0 ? 'text-amber-700' : 'text-neutral-500'}`}>Pendiente de pagar</p>
+                      <p className={`text-xs uppercase font-bold mb-1 ${pendienteGlobal > 0 ? 'text-amber-700' : 'text-neutral-500'}`}>Pendiente de devolver</p>
                       <p className={`text-2xl font-black ${pendienteGlobal > 0 ? 'text-amber-900' : 'text-neutral-900'}`}>{formatCurrency(pendienteGlobal)}</p>
-                      <p className="text-xs text-neutral-500">deuda viva</p>
+                      <p className="text-xs text-neutral-500">contribución viva total</p>
                     </Card>
                   </div>
+
+                  {/* V70: Panel de equilibrio entre socios */}
+                  {pendienteGlobal > 0.01 && (
+                    <Card className="p-4 bg-indigo-50 border-2 border-indigo-200">
+                      <h3 className="font-bold text-indigo-900 mb-1">⚖️ Equilibrio de contribuciones</h3>
+                      <p className="text-xs text-indigo-700 mb-3">
+                        Para que los tres tengáis la misma contribución viva ({formatCurrency(mediaContribucion)} cada uno) y devolveros lo mismo a partes iguales:
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        {datosPorSocio.map(d => {
+                          const diff = Math.round((d.saldoPendiente - mediaContribucion) * 100) / 100;
+                          const equilibrado = Math.abs(diff) < 0.01;
+                          return (
+                            <div key={d.clave} className={`rounded-xl p-3 border-2 ${equilibrado ? 'bg-green-50 border-green-300' : diff < 0 ? 'bg-white border-red-300' : 'bg-white border-blue-300'}`}>
+                              <div className="flex items-center gap-2 mb-1">
+                                <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: d.cfg.color }}>{d.cfg.alias.charAt(0)}</div>
+                                <span className="font-bold text-sm">{d.cfg.alias}</span>
+                              </div>
+                              <p className="text-xs text-neutral-500">Contribución viva: <strong className="text-neutral-900">{formatCurrency(d.saldoPendiente)}</strong></p>
+                              {equilibrado ? (
+                                <p className="text-xs font-bold text-green-700 mt-1">✓ En equilibrio</p>
+                              ) : diff < 0 ? (
+                                <p className="text-xs font-bold text-red-700 mt-1">Debe aportar {formatCurrency(Math.abs(diff))} para igualar</p>
+                              ) : (
+                                <p className="text-xs font-bold text-blue-700 mt-1">Va {formatCurrency(diff)} por encima de la media</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-indigo-600 mt-2">💡 Los que van por debajo pueden igualar con una aportación de FFPP (botón "Aportar" en su tarjeta) o adelantando los próximos gastos.</p>
+                    </Card>
+                  )}
 
                   {/* Saldo por socio */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -12236,17 +12317,26 @@ ${transacciones}
                             <p className="font-bold text-neutral-900">{d.cfg.alias}</p>
                             <p className="text-[10px] text-neutral-500">{d.cfg.nombre}</p>
                           </div>
-                          {d.saldoPendiente > 0 && (
-                            <Button size="sm" onClick={() => { setEditingItem({ socio_clave: d.clave, importe: d.saldoPendiente }); setShowModal('reembolso'); }} className="bg-green-600 hover:bg-green-700">
-                              <Plus size={14}/> Pagar
+                          <div className="flex flex-col gap-1">
+                            <Button size="sm" onClick={() => { setEditingItem({ socio_clave: d.clave }); setShowModal('aportacionSocio'); }} className="bg-blue-600 hover:bg-blue-700">
+                              <Plus size={14}/> Aportar
                             </Button>
-                          )}
+                            {d.saldoPendiente > 0 && (
+                              <Button size="sm" onClick={() => { setEditingItem({ socio_clave: d.clave, importe: d.saldoPendiente }); setShowModal('reembolso'); }} className="bg-green-600 hover:bg-green-700">
+                                <Plus size={14}/> Pagar
+                              </Button>
+                            )}
+                          </div>
                         </div>
                         
                         <div className="space-y-2">
                           <div className="flex justify-between text-sm">
-                            <span className="text-neutral-600">Total adelantado:</span>
+                            <span className="text-neutral-600">Gastos adelantados:</span>
                             <span className="font-bold">{formatCurrency(d.totalPagado)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-neutral-600">Aportaciones FFPP:</span>
+                            <span className="font-bold text-blue-700">+{formatCurrency(d.totalAportado)}</span>
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="text-neutral-600">Reembolsado:</span>
@@ -12260,14 +12350,14 @@ ${transacciones}
                           </div>
                         </div>
                         
-                        <p className="text-[10px] text-neutral-400 mt-3">{d.numGastos} gastos · {d.reembolsos.length} reembolsos</p>
+                        <p className="text-[10px] text-neutral-400 mt-3">{d.numGastos} gastos · {d.aportaciones.length} aportaciones · {d.reembolsos.length} reembolsos</p>
                       </Card>
                     ))}
                   </div>
 
                   {/* Historial detallado por socio (desplegable) */}
                   {datosPorSocio.map(d => (
-                    (d.gastos.length > 0 || d.reembolsos.length > 0) && (
+                    (d.gastos.length > 0 || d.reembolsos.length > 0 || d.aportaciones.length > 0) && (
                       <details key={d.clave} className="bg-white border rounded-xl">
                         <summary className="cursor-pointer p-4 font-semibold flex items-center justify-between gap-3 hover:bg-neutral-50">
                           <div className="flex items-center gap-2">
@@ -12275,13 +12365,50 @@ ${transacciones}
                               {d.cfg.alias.charAt(0)}
                             </div>
                             <span>Detalle de {d.cfg.alias}</span>
-                            <span className="text-xs text-neutral-500">({d.gastos.length} gastos · {d.reembolsos.length} reembolsos)</span>
+                            <span className="text-xs text-neutral-500">({d.gastos.length} gastos · {d.aportaciones.length} aportaciones · {d.reembolsos.length} reembolsos)</span>
                           </div>
                           <span className={`text-sm font-bold ${d.saldoPendiente > 0 ? 'text-amber-700' : 'text-green-700'}`}>
                             {d.saldoPendiente > 0 ? formatCurrency(d.saldoPendiente) + ' pendiente' : '✓ Saldado'}
                           </span>
                         </summary>
                         <div className="px-4 pb-4 space-y-4">
+                          {/* V70: Aportaciones FFPP */}
+                          {d.aportaciones.length > 0 && (
+                            <div>
+                              <p className="text-xs font-bold text-blue-700 uppercase mb-2">💶 Aportaciones de fondos propios</p>
+                              <div className="space-y-1">
+                                {d.aportaciones.sort((a,b) => new Date(b.fecha) - new Date(a.fecha)).map(a => (
+                                  <div key={a.id} className="flex items-center justify-between p-2 bg-blue-50 rounded-lg text-sm">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-medium">{formatDate(a.fecha)}</span>
+                                        <Badge className="bg-blue-100 text-blue-700 text-[10px]">
+                                          {a.metodo === 'transferencia' ? '🏦 Transfer.' : a.metodo === 'bizum' ? '📱 Bizum' : '💵 Efectivo'}
+                                        </Badge>
+                                        {a.concepto && <span className="text-xs text-neutral-500 truncate">· {a.concepto}</span>}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-blue-700">+{formatCurrency(a.importe)}</span>
+                                      {a.archivo_url && (
+                                        <a href={a.archivo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">
+                                          <FileText size={14} />
+                                        </a>
+                                      )}
+                                      <button onClick={async () => {
+                                        if (window.confirm(`¿Eliminar aportación de ${formatCurrency(a.importe)}?`)) {
+                                          await supabase.from('aportaciones_socios').delete().eq('id', a.id);
+                                          refetchAportacionesSocios();
+                                        }
+                                      }} className="text-neutral-400 hover:text-red-600">
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                           {/* Reembolsos */}
                           {d.reembolsos.length > 0 && (
                             <div>
@@ -20506,6 +20633,75 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
   };
 
   // Formulario AlbaranForm
+  // V70: Form de aportación de fondos propios de un socio
+  const AportacionSocioForm = ({ socioPreseleccionado, sociosCfg, onSave, onCancel }) => {
+    const [form, setForm] = useState({
+      socio_clave: socioPreseleccionado || 'socio_peri',
+      fecha: new Date().toISOString().slice(0, 10),
+      importe: '',
+      metodo: 'transferencia',
+      concepto: '',
+      notas: '',
+    });
+    
+    return (
+      <div className="space-y-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800">
+          Registra aquí el dinero que un socio inyecta directamente a la cuenta de la empresa (no gastos pagados de su bolsillo — eso va en Gastos con "Pagado por socio").
+        </div>
+        
+        {/* Socio */}
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">¿Quién aporta?</label>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(sociosCfg).map(([k, c]) => (
+              <button key={k} type="button" onClick={() => setForm({...form, socio_clave: k})}
+                className={`p-2.5 rounded-xl border-2 flex items-center justify-center gap-2 ${form.socio_clave === k ? 'shadow-sm' : ''}`}
+                style={{ borderColor: form.socio_clave === k ? c.color : '#E5E7EB', backgroundColor: form.socio_clave === k ? c.color + '15' : 'white' }}>
+                <div className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: c.color }}>{c.alias.charAt(0)}</div>
+                <span className="font-semibold text-sm">{c.alias}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha" type="date" value={form.fecha} onChange={e => setForm({...form, fecha: e.target.value})} />
+          <Input label="Importe (€) *" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: e.target.value})} placeholder="0.00" autoFocus />
+        </div>
+        
+        <div>
+          <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Método</label>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { val: 'transferencia', label: '🏦 Transferencia' },
+              { val: 'bizum', label: '📱 Bizum' },
+              { val: 'efectivo', label: '💵 Efectivo' },
+            ].map(m => (
+              <button key={m.val} type="button" onClick={() => setForm({...form, metodo: m.val})}
+                className={`py-2 rounded-xl border-2 text-sm font-semibold ${form.metodo === m.val ? 'border-blue-400 bg-blue-50' : 'border-neutral-200'}`}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        
+        <Input label="Concepto" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} placeholder="Ej: Inyección para compra racks / igualar contribución" />
+        
+        <div className="flex justify-end gap-3 pt-4 border-t">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => {
+            const imp = parseFloat(form.importe);
+            if (!imp || imp <= 0) { alert('Pon un importe válido'); return; }
+            onSave({ ...form, importe: imp });
+          }} className="bg-blue-600 hover:bg-blue-700">
+            Registrar aportación
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   // ==================== V69 — DESARROLLO Y FINANCIACIÓN ====================
   
   const TIPOS_ENTIDAD_DEV = {
@@ -27106,6 +27302,38 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             }}
             onCancel={() => { setShowModal(null); setEditingItem(null); }}
           />
+        </Modal>
+      )}
+      
+      {/* Modal Aportación FFPP V70 */}
+      {showModal === 'aportacionSocio' && (
+        <Modal title="💶 Registrar aportación de fondos propios" onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-lg">
+          {(() => {
+            const sociosCfgA = {
+              socio_nico: { alias: 'Nico', color: '#3B82F6' },
+              socio_peri: { alias: 'Peri', color: '#F97316' },
+              socio_guzman: { alias: 'Guzmán', color: '#22C55E' },
+            };
+            return (
+              <AportacionSocioForm
+                socioPreseleccionado={editingItem?.socio_clave || 'socio_peri'}
+                sociosCfg={sociosCfgA}
+                onSave={async (form) => {
+                  try {
+                    const { error } = await supabase.from('aportaciones_socios').insert(form);
+                    if (error) throw error;
+                    refetchAportacionesSocios();
+                    setShowModal(null);
+                    setEditingItem(null);
+                  } catch (e) {
+                    if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V70 (tabla aportaciones_socios no existe).');
+                    else alert('❌ Error: ' + e.message);
+                  }
+                }}
+                onCancel={() => { setShowModal(null); setEditingItem(null); }}
+              />
+            );
+          })()}
         </Modal>
       )}
       
