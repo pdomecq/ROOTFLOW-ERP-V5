@@ -1770,11 +1770,68 @@ const MainApp = () => {
     }));
   }, [asientosDB, asientoLineasDB]);
 
+  // ==================== V73 — GENERACIÓN ROBUSTA DE IDs SECUENCIALES ====================
+  // Antes se usaba COUNT(*)+1, que repite IDs si se borra algún registro o si hay
+  // registros de otros años → "duplicate key value violates unique constraint".
+  // Ahora se busca el ÚLTIMO ID realmente existente con ese prefijo y se suma 1.
+  const generarIdSecuencial = async (tabla, prefijo, padding = 4, campo = 'id') => {
+    try {
+      // Traemos un bloque de los últimos y calculamos el máximo NUMÉRICAMENTE.
+      // (Ordenar como texto fallaría con IDs sin ceros: "A9" > "A10")
+      const { data, error } = await supabase
+        .from(tabla)
+        .select(campo)
+        .like(campo, `${prefijo}%`)
+        .order(campo, { ascending: false })
+        .limit(200);
+      
+      let maximo = 0;
+      if (!error && data && data.length > 0) {
+        data.forEach(row => {
+          const val = String(row[campo] || '');
+          const match = val.match(/(\d+)\s*$/); // últimos dígitos del ID
+          if (match) {
+            const n = parseInt(match[1], 10);
+            if (n > maximo) maximo = n;
+          }
+        });
+      }
+      return `${prefijo}${String(maximo + 1).padStart(padding, '0')}`;
+    } catch (e) {
+      // Fallback ultra-defensivo: timestamp corto (nunca colisiona)
+      console.warn('generarIdSecuencial fallback:', e);
+      return `${prefijo}${String(Date.now()).slice(-6)}`;
+    }
+  };
+  
+  // Inserta reintentando si el ID ya existe (código 23505 = unique_violation).
+  // Devuelve { data, id } con el ID definitivamente usado.
+  const insertarConIdUnico = async (tabla, datos, prefijo, padding = 4) => {
+    let intento = 0;
+    let idActual = datos.id;
+    while (intento < 12) {
+      const payload = { ...datos, id: idActual };
+      const { data, error } = await supabase.from(tabla).insert(payload).select();
+      if (!error) return { data: data?.[0] || null, id: idActual, error: null };
+      if (error.code !== '23505') return { data: null, id: idActual, error };
+      // ID ocupado → pedir el siguiente y reintentar
+      intento++;
+      idActual = await generarIdSecuencial(tabla, prefijo, padding);
+      // Si el generado coincide con el que falló, forzar +intento
+      if (idActual === payload.id) {
+        const m = idActual.match(/(\d+)\s*$/);
+        const n = m ? parseInt(m[1], 10) + intento : intento;
+        idActual = `${prefijo}${String(n).padStart(padding, '0')}`;
+      }
+    }
+    return { data: null, id: idActual, error: { message: 'No se pudo generar un ID único tras varios intentos' } };
+  };
+
   // Crear asiento automático desde una factura
   const crearAsientoDesdeFactura = async (factura, cliente) => {
     try {
-      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
-      const numero = `A${(count || 0) + 1}`;
+      // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
+      const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
       
       const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
         fecha: factura.fecha,
@@ -1832,8 +1889,8 @@ const MainApp = () => {
   // Crear asiento automático desde un gasto
   const crearAsientoDesdeGasto = async (gasto, proveedor) => {
     try {
-      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
-      const numero = `A${(count || 0) + 1}`;
+      // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
+      const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
       
       const importeTotal = parseFloat(gasto.importe) || 0;
       
@@ -2329,8 +2386,8 @@ const MainApp = () => {
       }).eq('id', facturaId);
       
       // Crear asiento de cobro
-      const { count } = await supabase.from('asientos_contables').select('*', { count: 'exact', head: true });
-      const numero = `A${(count || 0) + 1}`;
+      // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
+      const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
       
       const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
         fecha: fechaCobro,
@@ -3128,8 +3185,8 @@ const MainApp = () => {
         // Para lotes, generar código legible (no tocar el id que es auto-increment)
         if (table === 'lotes') {
           const year = new Date().getFullYear();
-          const { count } = await supabase.from('lotes').select('*', { count: 'exact', head: true });
-          form.codigo = `L-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
+          // V73: basado en el último código real, no en COUNT+1
+          form.codigo = await generarIdSecuencial('lotes', `L-${year}-`, 3, 'codigo');
         }
         result = await supabase.from(table).insert(form).select();
         if (result.data && result.data[0]) {
@@ -3895,8 +3952,8 @@ ${pedidoLinea ? `^FO260,244
       
       if (!editingItem && !facturaAgrupada) {
         const year = new Date().getFullYear();
-        const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
-        const facturaId = `F-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        // V73: ID robusto (antes COUNT+1 → duplicate key si se borraba alguna factura)
+        const facturaId = await generarIdSecuencial('facturas', `F-${year}-`, 4);
         const fechaVencimiento = new Date(); 
         fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
         const baseImponible = total;
@@ -3931,11 +3988,15 @@ ${pedidoLinea ? `^FO260,244
           total: baseImponible + iva + reImporte
         };
         
-        await supabase.from('facturas').insert(facturaData);
-        
-        // ASIENTO CONTABLE AUTOMÁTICO para la factura
-        const cliente = clientes.find(c => c.id === form.cliente_id);
-        await crearAsientoDesdeFactura({ ...facturaData, id: facturaId }, cliente);
+        const resFac = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+        if (resFac.error) {
+          console.error('Error creando factura:', resFac.error);
+          alert('⚠️ El pedido se creó, pero hubo un problema al crear la factura: ' + resFac.error.message);
+        } else {
+          // ASIENTO CONTABLE AUTOMÁTICO para la factura
+          const cliente = clientes.find(c => c.id === form.cliente_id);
+          await crearAsientoDesdeFactura({ ...facturaData, id: resFac.id }, cliente);
+        }
       }
       
       // Refrescar datos inmediatamente
@@ -12870,8 +12931,7 @@ ${logoRootflow}^FS
       
       if (!albaranId) {
         const year = new Date().getFullYear();
-        const { count } = await supabase.from('albaranes').select('*', { count: 'exact', head: true });
-        albaranId = `A-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        albaranId = await generarIdSecuencial('albaranes', `A-${year}-`, 4);
       }
       
       const cliente = clientes.find(c => c.id === parseInt(form.cliente_id));
@@ -12906,8 +12966,11 @@ ${logoRootflow}^FS
         // Borrar relaciones previas
         await supabase.from('albaran_pedidos').delete().eq('albaran_id', idExistente);
       } else {
-        const { error } = await supabase.from('albaranes').insert(albaranData);
-        if (error) throw error;
+        // V73: insert con reintento automático si el ID ya existe
+        const year = new Date().getFullYear();
+        const res = await insertarConIdUnico('albaranes', albaranData, `A-${year}-`, 4);
+        if (res.error) throw res.error;
+        albaranId = res.id; // ID definitivo (puede haber cambiado tras reintento)
       }
       
       // Insertar relaciones pedido↔albarán con qué se entregó de cada pedido
@@ -19548,8 +19611,14 @@ SELECT cron.schedule(
   // Genera la factura agrupada de un grupo (factura normal F-2026-XXXX)
   const generarFacturaAgrupada = async (grupo, contadorOffset = 0) => {
     const year = new Date().getFullYear();
-    const { count } = await supabase.from('facturas').select('*', { count: 'exact', head: true });
-    const facturaId = `F-${year}-${String((count || 0) + 1 + contadorOffset).padStart(4, '0')}`;
+    // V73: ID robusto. El insert reintenta solo si colisiona, así que el
+    // contadorOffset ya no es necesario para evitar choques en lote.
+    let facturaId = await generarIdSecuencial('facturas', `F-${year}-`, 4);
+    if (contadorOffset > 0) {
+      const m = facturaId.match(/(\d+)\s*$/);
+      const n = (m ? parseInt(m[1], 10) : 1) + contadorOffset;
+      facturaId = `F-${year}-${String(n).padStart(4, '0')}`;
+    }
     
     const fechaHoy = new Date().toISOString().split('T')[0];
     const fechaVto = new Date(); fechaVto.setDate(fechaVto.getDate() + 30);
@@ -19580,15 +19649,19 @@ SELECT cron.schedule(
       concepto,
     };
     
-    const { error } = await supabase.from('facturas').insert(facturaData);
-    if (error) {
-      // Reintento sin columnas V63 si no existe (por si falta SQL)
-      if (error.code === '42703') {
+    const resFA = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+    if (resFA.error) {
+      // Reintento sin columnas V63 si no existen (por si falta el SQL)
+      if (resFA.error.code === '42703') {
         const { tipo, albaranes_ids, periodo_desde, periodo_hasta, concepto: c2, ...basico } = facturaData;
-        const { error: e2 } = await supabase.from('facturas').insert(basico);
-        if (e2) throw e2;
-      } else throw error;
+        const res2 = await insertarConIdUnico('facturas', basico, `F-${year}-`, 4);
+        if (res2.error) throw res2.error;
+        facturaId = res2.id;
+      } else throw resFA.error;
+    } else {
+      facturaId = resFA.id; // ID definitivo tras posible reintento
     }
+    facturaData.id = facturaId;
     
     // Marcar albaranes como facturados
     for (const alb of grupo.albaranes) {
@@ -25027,8 +25100,8 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
         
         if (!esEdicion) {
           const year = new Date().getFullYear();
-          const { count } = await supabase.from('presupuestos').select('*', { count: 'exact', head: true });
-          presupuestoId = `P-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+          // V73: ID robusto (antes COUNT+1 → duplicate key)
+          presupuestoId = await generarIdSecuencial('presupuestos', `P-${year}-`, 4);
         }
         
         // Calcular totales con precios actuales
@@ -25090,14 +25163,18 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             } else throw updErr;
           }
         } else {
-          const { error: insErr } = await supabase.from('presupuestos').insert(presupuestoData);
-          if (insErr) {
-            if (insErr.code === '42703' && insErr.message?.includes('items_json')) {
+          const yearP = new Date().getFullYear();
+          const resP = await insertarConIdUnico('presupuestos', presupuestoData, `P-${yearP}-`, 4);
+          if (resP.error) {
+            if (resP.error.code === '42703' && resP.error.message?.includes('items_json')) {
               alert('⚠️ Falta ejecutar el SQL V57 (columna items_json en presupuestos).\n\nIntentando guardar sin items_json...');
               delete presupuestoData.items_json;
-              const { error: insErr2 } = await supabase.from('presupuestos').insert(presupuestoData);
-              if (insErr2) throw insErr2;
-            } else throw insErr;
+              const resP2 = await insertarConIdUnico('presupuestos', presupuestoData, `P-${yearP}-`, 4);
+              if (resP2.error) throw resP2.error;
+              presupuestoId = resP2.id;
+            } else throw resP.error;
+          } else {
+            presupuestoId = resP.id;
           }
         }
         
