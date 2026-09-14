@@ -2787,7 +2787,20 @@ const MainApp = () => {
         .from('notificaciones_config')
         .update({ ...cambios, updated_at: new Date().toISOString() })
         .eq('id', 1);
-      if (error) throw error;
+      if (error) {
+        // V71: fallback si faltan columnas nuevas (SQL no ejecutado)
+        if (error.code === '42703') {
+          const { notif_siembra_pedidos, email_siembra, ...sinNuevos } = cambios;
+          const { error: e2 } = await supabase
+            .from('notificaciones_config')
+            .update({ ...sinNuevos, updated_at: new Date().toISOString() })
+            .eq('id', 1);
+          if (e2) throw e2;
+          alert('⚠️ Config guardada, pero los campos de la notificación de siembra necesitan el SQL V71 en Supabase.');
+        } else {
+          throw error;
+        }
+      }
       refetchNotificacionesConfig();
       return { success: true };
     } catch (e) {
@@ -3749,10 +3762,11 @@ ${pedidoLinea ? `^FO260,244
       const descuento = cliente?.descuento || 0;
       let subtotal = 0;
       const itemsData = form.items.map(item => {
-        const prod = productos.find(p => p.id === item.producto_id);
-        const itemSubtotal = (prod?.precio || 0) * item.cantidad;
+        // V72 FIX: usar la tarifa especial del cliente (antes usaba el precio base y las tarifas se ignoraban)
+        const precioUnitario = getPrecioCliente(item.producto_id, form.cliente_id);
+        const itemSubtotal = precioUnitario * item.cantidad;
         subtotal += itemSubtotal;
-        return { ...item, precio_unitario: prod?.precio || 0, subtotal: itemSubtotal };
+        return { ...item, precio_unitario: precioUnitario, subtotal: itemSubtotal };
       });
       const descuentoAplicado = subtotal * (descuento / 100);
       const total = subtotal - descuentoAplicado;
@@ -7582,6 +7596,8 @@ ${pedidoLinea ? `^FO260,244
       notif_cosecha_lista: config.notif_cosecha_lista !== false,
       notif_siembra_pendiente: config.notif_siembra_pendiente !== false,
       resumen_produccion_diario: config.resumen_produccion_diario !== false,
+      notif_siembra_pedidos: config.notif_siembra_pedidos !== false,
+      email_siembra: config.email_siembra || 'g.greus@rootflow.es',
       notif_tarea_completada: config.notif_tarea_completada === true,
       notif_turno_asignado: config.notif_turno_asignado !== false,
       notif_turno_recordatorio: config.notif_turno_recordatorio !== false,
@@ -7636,6 +7652,7 @@ ${pedidoLinea ? `^FO260,244
         categoria: '🌱 Producción',
         eventos: [
           { key: 'resumen_produccion_diario', label: '📋 Resumen diario de tareas (al abrir la app)' },
+          { key: 'notif_siembra_pedidos', label: '🌱 Siembra diaria a las 9:00 (gramos por variedad desde pedidos) — Slack + email' },
           { key: 'notif_tarea_completada', label: 'Cuando se completa una tarea de planificación' },
           { key: 'notif_cosecha_lista', label: 'Cosecha lista para hoy' },
           { key: 'notif_siembra_pendiente', label: 'Siembra urgente pendiente', critico: true },
@@ -7817,6 +7834,18 @@ ${pedidoLinea ? `^FO260,244
                       )}
                     </label>
                   ))}
+                  {cat.categoria === '🌱 Producción' && form.notif_siembra_pedidos && (
+                    <div className="ml-6 p-2 bg-green-50 border border-green-200 rounded-lg">
+                      <label className="block text-xs font-semibold text-green-800 mb-1">📧 Email para la notificación de siembra</label>
+                      <input 
+                        type="email" 
+                        value={form.email_siembra || ''} 
+                        onChange={e => setForm({...form, email_siembra: e.target.value})} 
+                        placeholder="g.greus@rootflow.es"
+                        className="w-full px-3 py-1.5 rounded-lg border border-green-300 text-sm" 
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -9621,10 +9650,11 @@ ${pedidoLinea ? `^FO260,244
       const cliente = clientes.find(c => c.id === pr.cliente_id);
       let total = 0;
       const itemsData = items.map(item => {
-        const prod = productos.find(p => p.id === item.producto_id);
-        const subtotal = (prod?.precio || 0) * item.cantidad;
+        // V72 FIX: aplicar tarifa especial del cliente también en pedidos recurrentes
+        const precioUnitario = getPrecioCliente(item.producto_id, pr.cliente_id);
+        const subtotal = precioUnitario * item.cantidad;
         total += subtotal;
-        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: prod?.precio || 0, subtotal };
+        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: precioUnitario, subtotal };
       });
 
       // Aplicar descuento del cliente
@@ -9858,8 +9888,7 @@ ${pedidoLinea ? `^FO260,244
                   const cliente = clientes.find(c => c.id === pr.cliente_id);
                   const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
                   const totalEstimado = items.reduce((sum, item) => {
-                    const prod = productos.find(p => p.id === item.producto_id);
-                    return sum + ((prod?.precio || 0) * item.cantidad);
+                    return sum + (getPrecioCliente(item.producto_id, pr.cliente_id) * item.cantidad);
                   }, 0);
                   const frecConfig = frecuenciaConfig[pr.frecuencia] || frecuenciaConfig.semanal;
 
@@ -10572,9 +10601,9 @@ ${pedidoLinea ? `^FO260,244
                 🗂️ Albaranes (ZIP)
               </Button>
             )}
-            {factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0 && onRecalcular && (
+            {((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && onRecalcular && (
               <Button variant="secondary" onClick={() => { onRecalcular(factura); onClose(); }} className="bg-teal-50 text-teal-700 hover:bg-teal-100">
-                <Calculator size={16} /> Recalcular IVA
+                <Calculator size={16} /> Recalcular (tarifas)
               </Button>
             )}
             <Button variant="secondary" onClick={() => {
@@ -11276,8 +11305,11 @@ ${transacciones}
                           <>
                             <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
                             <button onClick={() => descargarZipAlbaranesFactura(factura)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Descargar ZIP con los albaranes valorados de esta factura">🗂️</button>
-                            <button onClick={() => recalcularFacturaAgrupada(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular importes (corrige doble IVA)"><Calculator size={16} /></button>
+                            <button onClick={() => recalcularFacturaAgrupada(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales (corrige precios y doble IVA)"><Calculator size={16} /></button>
                           </>
+                        )}
+                        {factura.tipo !== 'agrupada' && factura.pedido_id && (
+                          <button onClick={() => recalcularFacturaPedido(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales del cliente"><Calculator size={16} /></button>
                         )}
                         {factura.estado === 'pendiente' && (
                           <button 
@@ -11306,7 +11338,7 @@ ${transacciones}
             cliente={clientes.find(c => c.id === selectedFactura.cliente_id)} 
             pedidoItemsList={pedidoItems}
             onDescargarAlbaranes={descargarZipAlbaranesFactura}
-            onRecalcular={recalcularFacturaAgrupada}
+            onRecalcular={(f) => f.tipo === 'agrupada' ? recalcularFacturaAgrupada(f) : recalcularFacturaPedido(f)}
             onClose={() => setSelectedFactura(null)} 
           />
         )}
@@ -13177,6 +13209,9 @@ ${logoRootflow}^FS
                 📲 Enviar a Slack
               </Button>
             )}
+            <Button variant="secondary" onClick={() => setShowModal('siembraHoy')} title="Qué sembrar hoy según los pedidos abiertos">
+              🌱 Siembra de hoy
+            </Button>
             <Button onClick={() => { setEditingItem(null); setShowModal('planProduccion'); }}>
               <Plus size={16} /> Nuevo plan
             </Button>
@@ -19155,6 +19190,160 @@ SELECT cron.schedule(
   };
   
   // V56: Generar texto del resumen diario
+  // ==================== V71 — NOTIFICACIÓN DIARIA DE SIEMBRA (pedidos) ====================
+  
+  // Calcula qué hay que sembrar HOY según los pedidos abiertos:
+  // fecha_siembra = fecha_entrega − (días germinación + días luz) de la variedad
+  const calcularSiembraHoy = (fechaBase = null) => {
+    const hoyStr = fechaBase || new Date().toISOString().slice(0, 10);
+    const estadosActivos = ['pendiente', 'confirmado', 'preparando'];
+    const porVariedad = {};
+    
+    pedidos
+      .filter(p => estadosActivos.includes(p.estado) && p.fecha_entrega)
+      .forEach(p => {
+        const itemsPedido = pedidoItems.filter(i => i.pedido_id === p.id);
+        itemsPedido.forEach(it => {
+          const prod = productos.find(x => x.id === it.producto_id);
+          if (!prod?.variedad_id) return;
+          const v = variedades.find(x => x.id === prod.variedad_id);
+          if (!v) return;
+          const ciclo = (v.dias_germinacion || 0) + (v.dias_luz || 0);
+          if (ciclo <= 0) return;
+          
+          const fs = new Date(p.fecha_entrega + 'T00:00:00');
+          fs.setDate(fs.getDate() - ciclo);
+          if (fs.toISOString().slice(0, 10) !== hoyStr) return;
+          
+          const gramos = (parseFloat(it.cantidad) || 0) * (parseFloat(prod.formato_gramos) || 0);
+          if (gramos <= 0) return;
+          
+          const cli = clientes.find(c => c.id === p.cliente_id);
+          if (!porVariedad[v.id]) {
+            porVariedad[v.id] = { variedad: v, gramos: 0, detalles: [] };
+          }
+          porVariedad[v.id].gramos += gramos;
+          porVariedad[v.id].detalles.push({
+            cliente: cli?.nombre || 'Cliente',
+            gramos,
+            fecha_entrega: p.fecha_entrega,
+            pedido_id: p.id,
+          });
+        });
+      });
+    
+    const lista = Object.values(porVariedad).sort((a, b) => b.gramos - a.gramos);
+    const totalGramos = lista.reduce((s, x) => s + x.gramos, 0);
+    return { lista, totalGramos, fecha: hoyStr };
+  };
+  
+  // Envía la notificación de siembra por Slack + email a Guzmán
+  const enviarNotificacionSiembra = async ({ manual = false } = {}) => {
+    const hoyStr = new Date().toISOString().slice(0, 10);
+    
+    // Dedup compartido con el cron del servidor (salvo envío manual)
+    if (!manual) {
+      try {
+        const { error } = await supabase.from('siembra_notif_log').insert({ fecha: hoyStr, origen: 'app' });
+        if (error) return { success: false, skip: true }; // ya enviado hoy (por cron o app)
+      } catch (e) { return { success: false, skip: true }; }
+    }
+    
+    const { lista, totalGramos } = calcularSiembraHoy(hoyStr);
+    const fechaBonita = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+    
+    // Mensaje Slack
+    let msg;
+    if (lista.length === 0) {
+      msg = `Hoy no hay siembras programadas según los pedidos abiertos. ✅`;
+    } else {
+      msg = `_Calculado desde los pedidos abiertos (entrega − ciclo de cultivo)_\n`;
+      lista.forEach(x => {
+        const gTray = parseFloat(x.variedad.gramos_produccion_por_tray) || 0;
+        const bandejas = gTray > 0 ? ` · ${Math.ceil(x.gramos / gTray)} bandeja(s)` : '';
+        msg += `\n*${x.variedad.nombre}: ${Math.round(x.gramos)} g*${bandejas}\n`;
+        x.detalles.forEach(d => {
+          msg += `   • ${Math.round(d.gramos)}g → ${d.cliente} (entrega ${formatDate(d.fecha_entrega)})\n`;
+        });
+      });
+      msg += `\n*TOTAL: ${Math.round(totalGramos)} g* en ${lista.length} variedad(es)`;
+    }
+    
+    const resultados = {};
+    
+    // Slack
+    const rSlack = await enviarSlack({
+      titulo: `🌱 Siembra de hoy — ${fechaBonita}`,
+      mensaje: msg,
+      prioridad: 'media',
+      tipoEvento: null,
+    });
+    resultados.slack = rSlack.success;
+    
+    // Email
+    const emailDestino = notificacionesConfig.email_siembra || 'g.greus@rootflow.es';
+    const filas = lista.map(x => {
+      const gTray = parseFloat(x.variedad.gramos_produccion_por_tray) || 0;
+      const bandejas = gTray > 0 ? Math.ceil(x.gramos / gTray) : '—';
+      const det = x.detalles.map(d => `<div style="color:#666;font-size:12px">• ${Math.round(d.gramos)}g → ${d.cliente} (entrega ${formatDate(d.fecha_entrega)})</div>`).join('');
+      return `<tr>
+        <td style="padding:10px;border-bottom:1px solid #eee"><strong>${x.variedad.nombre}</strong>${det}</td>
+        <td style="padding:10px;border-bottom:1px solid #eee;text-align:right;font-size:18px"><strong>${Math.round(x.gramos)} g</strong></td>
+        <td style="padding:10px;border-bottom:1px solid #eee;text-align:right">${bandejas}</td>
+      </tr>`;
+    }).join('');
+    
+    const html = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;background:#FCF2EB;padding:20px;margin:0">
+<div style="max-width:560px;margin:0 auto;background:white;border-radius:12px;overflow:hidden">
+  <div style="background:#1D4F37;color:white;padding:20px 24px">
+    <h1 style="margin:0;font-size:20px">🌱 Siembra de hoy</h1>
+    <p style="margin:4px 0 0;opacity:.85;font-size:13px;text-transform:capitalize">${fechaBonita}</p>
+  </div>
+  <div style="padding:24px">
+    ${lista.length === 0
+      ? '<p style="font-size:15px">Hoy no hay siembras programadas según los pedidos abiertos. ✅</p>'
+      : `<p style="font-size:13px;color:#666;margin-top:0">Calculado desde los pedidos abiertos: fecha de entrega menos ciclo de cultivo de cada variedad.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="background:#f7f7f7"><th style="padding:8px 10px;text-align:left">Variedad</th><th style="padding:8px 10px;text-align:right">Gramos</th><th style="padding:8px 10px;text-align:right">Bandejas</th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr><td style="padding:12px 10px"><strong>TOTAL</strong></td><td style="padding:12px 10px;text-align:right;font-size:18px;color:#1D4F37"><strong>${Math.round(totalGramos)} g</strong></td><td></td></tr></tfoot>
+    </table>`}
+  </div>
+  <div style="padding:14px 24px;background:#f7f7f7;font-size:11px;color:#999">Rootflow ERP · Notificación diaria de siembra</div>
+</div></body></html>`;
+    
+    const rEmail = await enviarEmail({
+      to: emailDestino,
+      subject: `🌱 Siembra de hoy — ${lista.length === 0 ? 'sin siembras' : Math.round(totalGramos) + ' g en ' + lista.length + ' variedad(es)'}`,
+      html,
+    });
+    resultados.email = rEmail.success;
+    
+    return { success: true, resultados, lista, totalGramos };
+  };
+  
+  // Fallback: auto-envío al abrir la app a partir de las 9:00 si el cron no lo hizo
+  useEffect(() => {
+    if (!notificacionesConfigData || !pedidoItemsData || !productosData || !variedadesData) return;
+    if (notificacionesConfig.notif_siembra_pedidos === false) return;
+    
+    const ahora = new Date();
+    if (ahora.getHours() < 9) return;
+    
+    const hoyIso = ahora.toISOString().slice(0, 10);
+    const key = 'rootflow_siembra_notif_check';
+    if (localStorage.getItem(key) === hoyIso) return; // ya comprobado hoy en este navegador
+    
+    const timer = setTimeout(async () => {
+      localStorage.setItem(key, hoyIso);
+      await enviarNotificacionSiembra({ manual: false }); // el dedup real lo hace la tabla
+    }, 5000);
+    
+    return () => clearTimeout(timer);
+  }, [notificacionesConfigData, pedidoItemsData, productosData, variedadesData]);
+  
+  // ==================== V71 — SIEMBRA DIARIA (fin) ====================
+
   const generarResumenDiario = () => {
     const hoy = new Date(); hoy.setHours(0,0,0,0);
     const hoyIso = hoy.toISOString().slice(0,10);
@@ -19477,7 +19666,9 @@ SELECT cron.schedule(
     URL.revokeObjectURL(url);
   };
   
-  // V68: Recalcular una factura agrupada existente con el método canónico (corrige doble IVA)
+  // V68+V72: Recalcular una factura agrupada existente con el método canónico.
+  // V72: además APLICA LAS TARIFAS ACTUALES del cliente a los items de cada
+  // albarán (corrige facturas creadas antes de definir las tarifas especiales).
   const recalcularFacturaAgrupada = async (factura) => {
     const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
     const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
@@ -19491,16 +19682,40 @@ SELECT cron.schedule(
     const aplicaRE = !!cli?.recargo_equivalencia;
     const factorImpuestos = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
     
+    // Paso 1: recalcular los items de cada albarán con las TARIFAS ACTUALES
     let base = 0;
     let descuento = 0;
+    let albaranesActualizables = []; // [{id, items, subtotal, descuentoAplicado, baseAlb, iva, re, total}]
+    let itemsConTarifaCambiada = 0;
+    
     albs.forEach(a => {
-      let baseAlb = 0;
       const items = Array.isArray(a.items_json) ? a.items_json : [];
+      let baseAlb = 0;
+      
       if (items.length > 0) {
-        const subtotalItems = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
-        const descAlb = subtotalItems * ((cli?.descuento || 0) / 100);
-        baseAlb = subtotalItems - descAlb;
+        // Aplicar tarifa actual a cada item
+        const itemsCorregidos = items.map(it => {
+          const precioTarifa = it.producto_id ? getPrecioCliente(it.producto_id, factura.cliente_id) : (parseFloat(it.precio_unitario) || 0);
+          if (Math.abs(precioTarifa - (parseFloat(it.precio_unitario) || 0)) > 0.001) itemsConTarifaCambiada++;
+          return { ...it, precio_unitario: precioTarifa };
+        });
+        const sub = itemsCorregidos.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
+        const descAlb = sub * ((cli?.descuento || 0) / 100);
+        baseAlb = sub - descAlb;
         descuento += descAlb;
+        
+        const ivaAlb = Math.round(baseAlb * (IVA_VENTAS/100) * 100) / 100;
+        const reAlb = aplicaRE ? Math.round(baseAlb * (RE_VENTAS/100) * 100) / 100 : 0;
+        albaranesActualizables.push({
+          id: a.id,
+          items_json: itemsCorregidos,
+          subtotal: Math.round(sub * 100) / 100,
+          descuento_aplicado: Math.round(descAlb * 100) / 100,
+          base_imponible: Math.round(baseAlb * 100) / 100,
+          iva: ivaAlb,
+          re_importe: reAlb,
+          total: Math.round((baseAlb + ivaAlb + reAlb) * 100) / 100,
+        });
       } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
         baseAlb = parseFloat(a.base_imponible);
         descuento += parseFloat(a.descuento_aplicado) || 0;
@@ -19520,29 +19735,36 @@ SELECT cron.schedule(
     const totalActual = parseFloat(factura.total) || 0;
     const diff = Math.round((totalActual - total) * 100) / 100;
     
-    if (Math.abs(diff) < 0.01) {
-      alert(`✓ La factura ${factura.id} ya tiene los importes correctos.\n\nBase: ${formatCurrency(base)}\nIVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\nTotal: ${formatCurrency(total)}\n\nNo hace falta recalcular.`);
+    if (Math.abs(diff) < 0.01 && itemsConTarifaCambiada === 0) {
+      alert(`✓ La factura ${factura.id} ya tiene los importes correctos y las tarifas aplicadas.\n\nBase: ${formatCurrency(base)}\nIVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\nTotal: ${formatCurrency(total)}\n\nNo hace falta recalcular.`);
       return;
     }
     
     const msg = `RECÁLCULO DE FACTURA ${factura.id}\n` +
       `Cliente: ${cli?.nombre || ''}\n` +
-      `${albs.length} albarán(es)\n\n` +
-      `━━━ ACTUAL (posible doble IVA) ━━━\n` +
+      `${albs.length} albarán(es)` +
+      (itemsConTarifaCambiada > 0 ? ` · ${itemsConTarifaCambiada} línea(s) con tarifa especial aplicada` : '') + `\n\n` +
+      `━━━ ACTUAL ━━━\n` +
       `  Base:  ${formatCurrency(factura.base_imponible || 0)}\n` +
       `  IVA:   ${formatCurrency(factura.iva || 0)}\n` +
       `  TOTAL: ${formatCurrency(totalActual)}\n\n` +
-      `━━━ CORREGIDO ━━━\n` +
+      `━━━ CORREGIDO (tarifas actuales + cálculo canónico) ━━━\n` +
       `  Base:  ${formatCurrency(base)}\n` +
       `  IVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\n` +
       (re > 0 ? `  R.E.:  ${formatCurrency(re)}\n` : '') +
       `  TOTAL: ${formatCurrency(total)}\n\n` +
-      `${diff > 0 ? `⬇️ El total se REDUCE en ${formatCurrency(Math.abs(diff))}` : `⬆️ El total AUMENTA en ${formatCurrency(Math.abs(diff))}`}\n\n` +
-      `¿Actualizar la factura ${factura.id} con los importes corregidos? Se mantiene el mismo número de factura.`;
+      `${Math.abs(diff) < 0.01 ? 'El total no cambia, pero se corrigen las líneas.' : diff > 0 ? `⬇️ El total se REDUCE en ${formatCurrency(Math.abs(diff))}` : `⬆️ El total AUMENTA en ${formatCurrency(Math.abs(diff))}`}\n\n` +
+      `Se actualizarán también los precios de los ${albaranesActualizables.length} albarán(es) vinculados. ¿Continuar? (se mantiene el número de factura)`;
     
     if (!window.confirm(msg)) return;
     
     try {
+      // Actualizar albaranes con precios de tarifa
+      for (const upd of albaranesActualizables) {
+        const { id, ...campos } = upd;
+        await supabase.from('albaranes').update(campos).eq('id', id);
+      }
+      
       const { error } = await supabase.from('facturas').update({
         subtotal,
         descuento_aplicado: descuento,
@@ -19556,7 +19778,89 @@ SELECT cron.schedule(
       }).eq('id', factura.id);
       if (error) throw error;
       refetchFacturas();
-      alert(`✅ Factura ${factura.id} corregida.\n\nNuevo total: ${formatCurrency(total)}\n\n⚠️ Si ya habías generado el asiento contable o presentado el IVA de este periodo, revisa que cuadre. Si ya enviaste la factura anterior al cliente, mándale la corregida (mismo número) o una rectificativa.`);
+      refetchAlbaranes();
+      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}\n\n⚠️ Si ya habías generado el asiento contable o enviado la factura anterior al cliente, revisa/reenvía.`);
+    } catch (e) {
+      alert('❌ Error al actualizar: ' + e.message);
+    }
+  };
+  
+  // V72: Recalcular una factura de PEDIDO con las tarifas actuales del cliente
+  const recalcularFacturaPedido = async (factura) => {
+    if (!factura.pedido_id) {
+      alert('Esta factura no tiene pedido vinculado, no se puede recalcular automáticamente.');
+      return;
+    }
+    const itemsPed = pedidoItems.filter(i => i.pedido_id === factura.pedido_id);
+    if (itemsPed.length === 0) {
+      alert('El pedido de esta factura no tiene items, no se puede recalcular.');
+      return;
+    }
+    
+    const cli = clientes.find(c => c.id === factura.cliente_id);
+    const aplicaRE = !!cli?.recargo_equivalencia;
+    
+    let subtotal = 0;
+    let itemsConCambio = 0;
+    const itemsCorregidos = itemsPed.map(it => {
+      const precioTarifa = getPrecioCliente(it.producto_id, factura.cliente_id);
+      if (Math.abs(precioTarifa - (parseFloat(it.precio_unitario) || 0)) > 0.001) itemsConCambio++;
+      const sub = precioTarifa * (parseFloat(it.cantidad) || 0);
+      subtotal += sub;
+      return { id: it.id, precio_unitario: precioTarifa, subtotal: Math.round(sub * 100) / 100 };
+    });
+    
+    const descuentoPct = cli?.descuento || 0;
+    const descuentoAplicado = subtotal * (descuentoPct / 100);
+    const base = Math.round((subtotal - descuentoAplicado) * 100) / 100;
+    const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
+    const re = aplicaRE ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
+    const total = Math.round((base + iva + re) * 100) / 100;
+    
+    const totalActual = parseFloat(factura.total) || 0;
+    const diff = Math.round((totalActual - total) * 100) / 100;
+    
+    if (Math.abs(diff) < 0.01 && itemsConCambio === 0) {
+      alert(`✓ La factura ${factura.id} ya refleja las tarifas actuales.\n\nTotal: ${formatCurrency(total)}`);
+      return;
+    }
+    
+    const msg = `RECÁLCULO DE FACTURA ${factura.id} (pedido ${factura.pedido_id})\n` +
+      `Cliente: ${cli?.nombre || ''}\n` +
+      (itemsConCambio > 0 ? `${itemsConCambio} línea(s) con tarifa especial aplicada\n` : '') + `\n` +
+      `━━━ ACTUAL ━━━\n  TOTAL: ${formatCurrency(totalActual)}\n\n` +
+      `━━━ CORREGIDO (tarifas actuales) ━━━\n` +
+      `  Base:  ${formatCurrency(base)}\n  IVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\n` +
+      (re > 0 ? `  R.E.:  ${formatCurrency(re)}\n` : '') +
+      `  TOTAL: ${formatCurrency(total)}\n\n` +
+      `${Math.abs(diff) < 0.01 ? 'El total no cambia, pero se corrigen las líneas.' : diff > 0 ? `⬇️ Se REDUCE en ${formatCurrency(Math.abs(diff))}` : `⬆️ AUMENTA en ${formatCurrency(Math.abs(diff))}`}\n\n` +
+      `Se actualizarán también los precios del pedido. ¿Continuar? (se mantiene el número de factura)`;
+    
+    if (!window.confirm(msg)) return;
+    
+    try {
+      for (const it of itemsCorregidos) {
+        await supabase.from('pedido_items').update({ precio_unitario: it.precio_unitario, subtotal: it.subtotal }).eq('id', it.id);
+      }
+      await supabase.from('pedidos').update({ total: Math.round((subtotal - descuentoAplicado) * 100) / 100 }).eq('id', factura.pedido_id);
+      
+      const { error } = await supabase.from('facturas').update({
+        subtotal: Math.round(subtotal * 100) / 100,
+        descuento_aplicado: Math.round(descuentoAplicado * 100) / 100,
+        base_imponible: base,
+        iva_porcentaje: IVA_VENTAS,
+        iva,
+        recargo_equivalencia: re > 0,
+        re_porcentaje: re > 0 ? RE_VENTAS : 0,
+        re_importe: re,
+        total,
+      }).eq('id', factura.id);
+      if (error) throw error;
+      
+      refetchFacturas();
+      refetchPedidoItems();
+      refetchPedidos();
+      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}`);
     } catch (e) {
       alert('❌ Error al actualizar: ' + e.message);
     }
@@ -20568,7 +20872,7 @@ ${pedidosVinculados.length > 0 ? `<div class="refs"><strong>Pedidos asociados:</
         <td class="desc">${nombre}</td>
         <td class="center">${it.cantidad || 0}</td>
         <td class="center">${unidad}</td>
-        ${valorado ? `<td class="right">${formatCurrency(it.precio_unitario || 0)}</td><td class="right">${formatCurrency(it.subtotal || 0)}</td>` : ''}
+        ${valorado ? `<td class="right">${formatCurrency(it.precio_unitario || 0)}</td><td class="right">${formatCurrency(((parseFloat(it.precio_unitario)||0) * (parseFloat(it.cantidad)||0)) || (parseFloat(it.subtotal)||0))}</td>` : ''}
       </tr>`;
     }).join('')}
     ${itemsArr.length === 0 ? `<tr><td colspan="${valorado ? 5 : 3}" style="text-align:center;color:#999;padding:20px;font-style:italic;">Sin productos</td></tr>` : ''}
@@ -27302,6 +27606,70 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             }}
             onCancel={() => { setShowModal(null); setEditingItem(null); }}
           />
+        </Modal>
+      )}
+      
+      {/* Modal Siembra de Hoy V71 */}
+      {showModal === 'siembraHoy' && (
+        <Modal title="🌱 Siembra de hoy (según pedidos)" onClose={() => setShowModal(null)} size="max-w-2xl">
+          {(() => {
+            const { lista, totalGramos } = calcularSiembraHoy();
+            return (
+              <div className="space-y-4">
+                <p className="text-xs text-neutral-500">
+                  Calculado desde los pedidos abiertos (pendiente/confirmado/preparando): fecha de entrega − ciclo de cultivo (germinación + luz) de cada variedad. 
+                  Esto es lo que Guzmán recibe cada día a las 9:00 por Slack y email.
+                </p>
+                
+                {lista.length === 0 ? (
+                  <div className="text-center py-8 text-neutral-400">
+                    <p className="text-3xl mb-2">✅</p>
+                    <p className="text-sm">Hoy no hay siembras programadas según los pedidos abiertos.</p>
+                    <p className="text-xs mt-1">Si Nico crea un pedido cuya fecha de siembra caiga hoy, aparecerá aquí.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {lista.map((x, idx) => {
+                      const gTray = parseFloat(x.variedad.gramos_produccion_por_tray) || 0;
+                      const bandejas = gTray > 0 ? Math.ceil(x.gramos / gTray) : null;
+                      return (
+                        <div key={idx} className="bg-green-50 border border-green-200 rounded-xl p-3">
+                          <div className="flex items-center justify-between">
+                            <p className="font-bold text-green-900">🌱 {x.variedad.nombre}</p>
+                            <div className="text-right">
+                              <p className="text-xl font-black text-green-700">{Math.round(x.gramos)} g</p>
+                              {bandejas && <p className="text-[10px] text-green-600">{bandejas} bandeja(s) · {gTray} g/bandeja</p>}
+                            </div>
+                          </div>
+                          <div className="mt-2 space-y-0.5">
+                            {x.detalles.map((d, i) => (
+                              <p key={i} className="text-xs text-green-800">• {Math.round(d.gramos)}g → {d.cliente} (entrega {formatDate(d.fecha_entrega)})</p>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="bg-neutral-900 text-white rounded-xl p-3 flex items-center justify-between">
+                      <span className="font-bold">TOTAL A SEMBRAR HOY</span>
+                      <span className="text-2xl font-black">{Math.round(totalGramos)} g</span>
+                    </div>
+                  </div>
+                )}
+                
+                <div className="flex justify-end gap-3 pt-3 border-t">
+                  <Button variant="secondary" onClick={() => setShowModal(null)}>Cerrar</Button>
+                  <Button onClick={async () => {
+                    const r = await enviarNotificacionSiembra({ manual: true });
+                    if (r.success) {
+                      alert(`✅ Notificación enviada.\n\nSlack: ${r.resultados.slack ? '✓' : '✗ (revisa config)'}\nEmail: ${r.resultados.email ? '✓ → ' + (notificacionesConfig.email_siembra || 'g.greus@rootflow.es') : '✗ (revisa config email)'}`);
+                    }
+                  }} className="bg-green-600 hover:bg-green-700">
+                    📤 Enviar ahora (Slack + email)
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
         </Modal>
       )}
       
