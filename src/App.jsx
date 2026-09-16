@@ -1579,6 +1579,8 @@ const MainApp = () => {
   const { data: clienteContactosData, refetch: refetchClienteContactos } = useRealtime('cliente_contactos');
   // V22 - Variedades de productos
   const { data: variedadesData, refetch: refetchVariedades } = useRealtime('variedades');
+  // V74 - Mezclas de variedades (Micromezclum)
+  const { data: mezclasData, refetch: refetchMezclas } = useRealtime('mezclas');
   // V23 - Ausencias de socios
   const { data: ausenciasSociosData, refetch: refetchAusenciasSocios } = useRealtime('ausencias_socios');
   // V25 - Movimientos de stock (auditoría)
@@ -1685,6 +1687,7 @@ const MainApp = () => {
   const clienteContactos = clienteContactosData || [];
   // V22 - Variedades
   const variedades = variedadesData || [];
+  const mezclas = mezclasData || [];
   // V23 - Ausencias
   const ausenciasSocios = ausenciasSociosData || [];
   // V25 - Movimientos stock
@@ -3811,6 +3814,397 @@ ${pedidoLinea ? `^FO260,244
 ^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 694 918 481^FS
 
 ^XZ`;
+  };
+
+  // V74: Etiqueta ZPL para MEZCLAS (Micromezclum) — incluye las variedades que la integran
+  const generarZPLMezcla = (mezcla, indice, opciones = {}) => {
+    const { peso, loteOrigen, clienteVinc, pedidoVinc, diasCaducidad = 7 } = opciones;
+    const nombreMezcla = (mezcla.nombre || 'MICROMEZCLUM').toUpperCase();
+    const pesoFinal = peso || mezcla.formato_gramos || 100;
+    
+    // Variedades que integra
+    const idsMezcla = Array.isArray(mezcla.variedades_ids) ? mezcla.variedades_ids : [];
+    const nombresVariedades = idsMezcla
+      .map(id => variedades.find(v => v.id === id)?.nombre)
+      .filter(Boolean);
+    // Sanear para ZPL (sin caracteres que rompan el formato)
+    const listaVariedades = nombresVariedades.join(', ').replace(/[\^~]/g, '');
+    
+    const hoyD = new Date();
+    const consumo = new Date(hoyD); consumo.setDate(consumo.getDate() + diasCaducidad);
+    const fmtFecha = (d) => `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getFullYear()).slice(-2)}`;
+    const fechaCosechaStr = fmtFecha(hoyD);
+    const fechaConsumoStr = fmtFecha(consumo);
+    
+    const loteCodigo = loteOrigen?.codigo
+      ? `${loteOrigen.codigo}/${indice}`
+      : loteOrigen?.id
+        ? `L${loteOrigen.id}/${indice}`
+        : `MIX-${hoyD.toISOString().slice(0,10).replace(/-/g,'')}-${indice}`;
+    
+    const clienteLinea = clienteVinc?.nombre ? `Cliente: ${clienteVinc.nombre.substring(0, 22)}` : '';
+    const pedidoLinea = pedidoVinc ? `Pedido #${pedidoVinc.id}` : '';
+    
+    // Nombre largo → fuente algo menor para que quepa
+    const fuenteNombre = nombreMezcla.length > 13 ? 34 : 42;
+    
+    const logoRootflow = `^FO15,15
+^GFA,512,512,8,:::::::::N03Q01N03Q01M07F8P03FCM01FFFCO0KFM07KFCN0LFM0NFC1NF8K0NFC1NF8K0LF003OFK01KF000PFCJ03KFC0M01PFJ07JFE0N078OFJ07IFCP078OFK03FE0L07FEJ0NFEK03F8L07FEJ0NF8K01F8L03FCJ0NFL01F8L03FCJ0NFL01F8L01F8J07FCM01F8L01F8J07F8N0F8L01F8J07FL0F8L01F0J07FL0F8L01F0J07EL0F8L01F0J0FCL0F8L01FK07FL0F8L01FK0FCM0F8L01FK0F8M0F8L01FK0F8M0F8L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01FK0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01F8J0F8M078L01FCJ0FCM078L01FCJ0FCM078L01FEJ0FEM07L01PFFM07L01PFFM07L01PF7FM07L01PF1FM07L01PF07M07L01OFE0FN07L01OFC0FN07L03OF80FN07L07OF00FN07L0NF0L01FN0EL01MFCM01FN0EL03MF8N01FN0CL0OF8N01F8M07OFP01FM01PF8O01F8M0PFCO01F8K01PF7CO01FL01OFC0F8N03F8K01OF801FN07F0K01OFK0FCN0FK01NFEK07F0M03IFCM03FEN07KFE8N0PF8O0FFP03L07F8Q03::::::::::`;
+    
+    return `^XA
+^CI28
+^PW400
+^LL320
+^LH0,0
+^LRN
+^LS0
+
+${logoRootflow}^FS
+
+^FO95,18
+^A0N,36,36
+^FDRootFlow^FS
+
+^FO95,55
+^A0N,16,16
+^FDMICROBROTES PREMIUM^FS
+
+^FO10,82
+^GB380,2,2^FS
+
+^FO10,88
+^A0N,${fuenteNombre},${fuenteNombre}
+^FB380,1,0,C,0
+^FD${nombreMezcla}^FS
+
+^FO10,${fuenteNombre === 42 ? 134 : 126}
+^A0N,14,14
+^FB380,1,0,C,0
+^FDMEZCLA DE MICROBROTES^FS
+
+^FO10,${fuenteNombre === 42 ? 152 : 144}
+^A0N,14,14
+^FB380,2,2,C,0
+^FD${listaVariedades || 'Variedades de temporada'}^FS
+
+^FO10,186
+^GB380,24,24^FS
+^FO10,191
+^A0N,17,17
+^FB380,1,0,C,0
+^FR^FDLAVAR ANTES DE CONSUMIR^FS
+
+^FO10,218
+^A0N,16,16
+^FDPeso neto: ${pesoFinal}g^FS
+
+^FO230,218
+^A0N,16,16
+^FDLote: ${loteCodigo}^FS
+
+^FO10,238
+^A0N,15,15
+^FDCosecha: ${fechaCosechaStr}^FS
+
+^FO230,238
+^A0N,15,15
+^FDConsumir: ${fechaConsumoStr}^FS
+
+${clienteLinea ? `^FO10,258
+^A0N,14,14
+^FD${clienteLinea}^FS` : ''}
+
+${pedidoLinea ? `^FO260,258
+^A0N,14,14
+^FD${pedidoLinea}^FS` : ''}
+
+^FO10,276
+^A0N,13,13
+^FDConservar refrigerado 2-5C^FS
+
+^FO10,294
+^GB380,1,1^FS
+
+^FO10,300
+^A0N,12,12
+^FB380,1,0,C,0
+^FDROOTFLOW HYDROPONICS SL · CIF B27535137 · 694 918 481^FS
+
+^XZ`;
+  };
+
+  // V74: Formulario para generar etiquetas de mezcla + gestionar las mezclas
+  const EtiquetasMezclaForm = ({ onCerrar }) => {
+    const mezclasActivas = mezclas.filter(m => m.activo !== false);
+    const [mezclaId, setMezclaId] = useState(mezclasActivas[0]?.id || null);
+    const [editando, setEditando] = useState(mezclasActivas.length === 0);
+    const [cfg, setCfg] = useState({
+      cantidad: 10,
+      peso: '',
+      dias: 7,
+      lote_id: '',
+      cliente_id: '',
+    });
+    const [formMezcla, setFormMezcla] = useState({
+      nombre: 'Micromezclum',
+      descripcion: '',
+      variedades_ids: [],
+      formato_gramos: 100,
+    });
+    
+    const mezclaSel = mezclas.find(m => m.id === mezclaId) || null;
+    const lotesCosechados = lotes.filter(l => l.estado === 'cosechado');
+    const loteSel = cfg.lote_id ? lotes.find(l => l.id === parseInt(cfg.lote_id)) : null;
+    const clienteSel = cfg.cliente_id ? clientes.find(c => c.id === parseInt(cfg.cliente_id)) : null;
+    
+    const abrirEdicion = (m) => {
+      if (m) {
+        setFormMezcla({
+          nombre: m.nombre || '',
+          descripcion: m.descripcion || '',
+          variedades_ids: Array.isArray(m.variedades_ids) ? m.variedades_ids : [],
+          formato_gramos: m.formato_gramos || 100,
+        });
+      } else {
+        setFormMezcla({ nombre: '', descripcion: '', variedades_ids: [], formato_gramos: 100 });
+      }
+      setEditando(true);
+    };
+    
+    const guardarMezcla = async () => {
+      if (!formMezcla.nombre.trim()) { alert('Ponle un nombre a la mezcla'); return; }
+      if (formMezcla.variedades_ids.length === 0) {
+        if (!window.confirm('No has marcado ninguna variedad. La etiqueta dirá "Variedades de temporada". ¿Continuar?')) return;
+      }
+      try {
+        const payload = {
+          nombre: formMezcla.nombre.trim(),
+          descripcion: formMezcla.descripcion || null,
+          variedades_ids: formMezcla.variedades_ids,
+          formato_gramos: parseInt(formMezcla.formato_gramos) || 100,
+          activo: true,
+        };
+        // Si estábamos editando una existente con ese mismo nombre, actualizar
+        const existente = mezclaSel && mezclaSel.nombre === formMezcla.nombre ? mezclaSel : null;
+        if (existente) {
+          const { error } = await supabase.from('mezclas').update(payload).eq('id', existente.id);
+          if (error) throw error;
+          setMezclaId(existente.id);
+        } else {
+          const { data, error } = await supabase.from('mezclas').insert(payload).select();
+          if (error) throw error;
+          if (data?.[0]) setMezclaId(data[0].id);
+        }
+        refetchMezclas();
+        setEditando(false);
+      } catch (e) {
+        if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V74 (tabla mezclas no existe).');
+        else alert('❌ Error: ' + e.message);
+      }
+    };
+    
+    const generarZPLCompleto = () => {
+      if (!mezclaSel) return '';
+      let zpl = '';
+      const n = parseInt(cfg.cantidad) || 1;
+      for (let i = 0; i < n; i++) {
+        zpl += generarZPLMezcla(mezclaSel, i + 1, {
+          peso: cfg.peso ? parseInt(cfg.peso) : null,
+          loteOrigen: loteSel,
+          clienteVinc: clienteSel,
+          pedidoVinc: null,
+          diasCaducidad: parseInt(cfg.dias) || 7,
+        }) + '\n';
+      }
+      return zpl;
+    };
+    
+    const nombresVariedadesSel = (mezclaSel && Array.isArray(mezclaSel.variedades_ids) ? mezclaSel.variedades_ids : [])
+      .map(id => variedades.find(v => v.id === id)?.nombre)
+      .filter(Boolean);
+    
+    return (
+      <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+        {/* --- Editor de mezcla --- */}
+        {editando ? (
+          <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-3 space-y-3">
+            <p className="font-bold text-emerald-900 text-sm">🌿 Definir mezcla</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Nombre comercial *" value={formMezcla.nombre} onChange={e => setFormMezcla({...formMezcla, nombre: e.target.value})} placeholder="Micromezclum" />
+              <Input label="Peso por envase (g)" type="number" value={formMezcla.formato_gramos} onChange={e => setFormMezcla({...formMezcla, formato_gramos: e.target.value})} />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">
+                Variedades que integra ({formMezcla.variedades_ids.length} marcada(s))
+              </label>
+              {variedades.length === 0 ? (
+                <p className="text-xs text-neutral-400">No hay variedades dadas de alta.</p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5 max-h-44 overflow-y-auto p-2 bg-white rounded-lg border">
+                  {variedades.map(v => {
+                    const marcada = formMezcla.variedades_ids.includes(v.id);
+                    return (
+                      <label key={v.id} className={`flex items-center gap-1.5 p-1.5 rounded-lg cursor-pointer text-xs ${marcada ? 'bg-emerald-100' : 'hover:bg-neutral-50'}`}>
+                        <input
+                          type="checkbox"
+                          checked={marcada}
+                          onChange={e => {
+                            const ids = e.target.checked
+                              ? [...formMezcla.variedades_ids, v.id]
+                              : formMezcla.variedades_ids.filter(x => x !== v.id);
+                            setFormMezcla({...formMezcla, variedades_ids: ids});
+                          }}
+                          className="w-3.5 h-3.5 flex-shrink-0"
+                        />
+                        <span className="truncate">{v.nombre}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end gap-2">
+              {mezclasActivas.length > 0 && <Button size="sm" variant="secondary" onClick={() => setEditando(false)}>Cancelar</Button>}
+              <Button size="sm" onClick={guardarMezcla} className="bg-emerald-600 hover:bg-emerald-700">Guardar mezcla</Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* --- Selector de mezcla --- */}
+            <div>
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Mezcla</label>
+              <div className="flex gap-2">
+                <select value={mezclaId || ''} onChange={e => setMezclaId(parseInt(e.target.value))} className="flex-1 px-3 py-2.5 rounded-xl border border-neutral-300">
+                  {mezclasActivas.map(m => <option key={m.id} value={m.id}>🌿 {m.nombre}</option>)}
+                </select>
+                <Button variant="secondary" onClick={() => abrirEdicion(mezclaSel)} title="Editar esta mezcla"><Edit2 size={16} /></Button>
+                <Button variant="secondary" onClick={() => { setMezclaId(null); abrirEdicion(null); }} title="Nueva mezcla"><Plus size={16} /></Button>
+              </div>
+            </div>
+            
+            {/* Variedades que lleva */}
+            {mezclaSel && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                <p className="text-xs font-bold text-emerald-800 uppercase mb-1">Variedades que integra</p>
+                {nombresVariedadesSel.length === 0 ? (
+                  <p className="text-xs text-emerald-700">Ninguna marcada — la etiqueta dirá "Variedades de temporada". Pulsa ✏️ para añadirlas.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {nombresVariedadesSel.map((n, i) => (
+                      <span key={i} className="text-[11px] px-2 py-0.5 bg-white border border-emerald-300 rounded-full text-emerald-900">{n}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Parámetros de impresión */}
+            <div className="grid grid-cols-3 gap-3">
+              <Input label="Nº etiquetas" type="number" min="1" value={cfg.cantidad} onChange={e => setCfg({...cfg, cantidad: e.target.value})} />
+              <Input label={`Peso (g)`} type="number" value={cfg.peso} onChange={e => setCfg({...cfg, peso: e.target.value})} placeholder={String(mezclaSel?.formato_gramos || 100)} />
+              <Input label="Caducidad (días)" type="number" value={cfg.dias} onChange={e => setCfg({...cfg, dias: e.target.value})} />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Lote origen (opcional)</label>
+                <select value={cfg.lote_id} onChange={e => setCfg({...cfg, lote_id: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 text-sm">
+                  <option value="">— Sin lote (se genera MIX-fecha) —</option>
+                  {lotesCosechados.map(l => (
+                    <option key={l.id} value={l.id}>{l.codigo || `L${l.id}`}{l.fecha_cosecha_real ? ` · ${formatDate(l.fecha_cosecha_real)}` : ''}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Cliente (opcional)</label>
+                <select value={cfg.cliente_id} onChange={e => setCfg({...cfg, cliente_id: e.target.value})} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 text-sm">
+                  <option value="">— Sin cliente —</option>
+                  {clientes.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </select>
+              </div>
+            </div>
+            
+            {/* Preview */}
+            {mezclaSel && (
+              <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3 text-xs">
+                <p className="font-bold text-neutral-700 mb-2">🏷️ Cada etiqueta llevará:</p>
+                <ul className="space-y-0.5 text-neutral-600">
+                  <li>• <strong>Nombre:</strong> {(mezclaSel.nombre || '').toUpperCase()}</li>
+                  <li>• <strong>Mezcla de:</strong> {nombresVariedadesSel.join(', ') || 'Variedades de temporada'}</li>
+                  <li>• <strong>Peso:</strong> {cfg.peso || mezclaSel.formato_gramos || 100}g</li>
+                  <li>• <strong>Lote:</strong> {loteSel ? `${loteSel.codigo || `L${loteSel.id}`}/[1..${cfg.cantidad}]` : `MIX-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-[1..${cfg.cantidad}]`}</li>
+                  <li>• <strong>Cosecha:</strong> hoy · <strong>Consumir antes:</strong> +{cfg.dias} días</li>
+                  {clienteSel && <li>• <strong>Cliente:</strong> {clienteSel.nombre}</li>}
+                  <li>• Aviso LAVAR ANTES DE CONSUMIR, conservación 2-5°C y datos fiscales</li>
+                </ul>
+              </div>
+            )}
+            
+            {/* Acciones */}
+            <div className="flex flex-col gap-2 pt-3 border-t">
+              <Button
+                disabled={!mezclaSel}
+                onClick={async () => {
+                  const zpl = generarZPLCompleto();
+                  try {
+                    await navigator.clipboard.writeText(zpl);
+                  } catch (e) {
+                    const ta = document.createElement('textarea');
+                    ta.value = zpl; document.body.appendChild(ta); ta.select();
+                    document.execCommand('copy'); document.body.removeChild(ta);
+                  }
+                  alert(`✅ ${cfg.cantidad} etiqueta(s) de ${mezclaSel.nombre} copiadas.\n\nPégalas en Zebra Setup Utilities → Raw Print.`);
+                  onCerrar();
+                }}
+                className="bg-purple-600 hover:bg-purple-700 justify-center"
+              >
+                <Copy size={16} /> Copiar ZPL al portapapeles
+              </Button>
+              
+              <Button
+                variant="secondary"
+                disabled={!mezclaSel}
+                onClick={() => {
+                  const zpl = generarZPLCompleto();
+                  const blob = new Blob([zpl], { type: 'text/plain' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `etiquetas_${(mezclaSel.nombre || 'mezcla').replace(/[^a-zA-Z0-9]/g,'_')}_${new Date().toISOString().slice(0,10)}.zpl`;
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                  URL.revokeObjectURL(url);
+                }}
+                className="justify-center"
+              >
+                <Download size={16} /> Descargar .zpl
+              </Button>
+              
+              <Button
+                variant="secondary"
+                disabled={!mezclaSel}
+                onClick={() => {
+                  const zpl = generarZPLMezcla(mezclaSel, 1, {
+                    peso: cfg.peso ? parseInt(cfg.peso) : null,
+                    loteOrigen: loteSel,
+                    clienteVinc: clienteSel,
+                    diasCaducidad: parseInt(cfg.dias) || 7,
+                  });
+                  const w = window.open('https://labelary.com/viewer.html', '_blank');
+                  navigator.clipboard.writeText(zpl).then(() => {
+                    if (!w) alert('Permite pop-ups para abrir el visor. El ZPL ya está copiado.');
+                  }).catch(() => {});
+                }}
+                className="justify-center text-xs"
+              >
+                👁️ Ver cómo queda (copia el ZPL y abre Labelary)
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    );
   };
 
   const handleCreatePedido = async (form) => {
@@ -14165,7 +14559,36 @@ ${logoRootflow}^FS
               )}
             </Card>
             
-            {/* Lista de lotes cosechados */}
+            {/* V74: Etiquetas de MEZCLA (Micromezclum) */}
+            <Card className={`p-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-gradient-to-r from-lime-50 to-emerald-50 border-emerald-200'}`}>
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-500 rounded-xl text-white text-xl leading-none">🌿</div>
+                  <div>
+                    <h3 className={`font-bold ${darkMode ? 'text-white' : 'text-emerald-900'}`}>Etiquetas de mezcla (Micromezclum)</h3>
+                    <p className={`text-sm ${darkMode ? 'text-neutral-400' : 'text-emerald-700'}`}>
+                      Para productos que no son una variedad sino un conjunto. La etiqueta lista las variedades que integra.
+                    </p>
+                  </div>
+                </div>
+                <Button onClick={() => setShowModal('etiquetasMezcla')} className="bg-emerald-600 hover:bg-emerald-700">
+                  <Printer size={16} /> Crear etiquetas de mezcla
+                </Button>
+              </div>
+              {mezclas.filter(m => m.activo !== false).length > 0 && (
+                <div className="flex gap-2 flex-wrap mt-3">
+                  {mezclas.filter(m => m.activo !== false).map(m => {
+                    const ids = Array.isArray(m.variedades_ids) ? m.variedades_ids : [];
+                    return (
+                      <span key={m.id} className="text-[11px] px-2 py-1 bg-white border border-emerald-200 rounded-full text-emerald-800">
+                        🌿 <strong>{m.nombre}</strong> · {ids.length} variedad(es)
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+            
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {lotes.filter(l => l.estado === 'cosechado').map(lote => {
                 const producto = productos.find(p => p.id === lote.producto_id);
@@ -27683,6 +28106,13 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             }}
             onCancel={() => { setShowModal(null); setEditingItem(null); }}
           />
+        </Modal>
+      )}
+      
+      {/* Modal Etiquetas de Mezcla V74 */}
+      {showModal === 'etiquetasMezcla' && (
+        <Modal title="🌿 Etiquetas de mezcla (Micromezclum)" onClose={() => setShowModal(null)} size="max-w-2xl">
+          <EtiquetasMezclaForm onCerrar={() => setShowModal(null)} />
         </Modal>
       )}
       
