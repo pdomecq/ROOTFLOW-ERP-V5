@@ -3211,6 +3211,19 @@ const MainApp = () => {
             alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
           }
         }
+        // V76: fallback si faltan las columnas de portes en clientes
+        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.coste_porte !== undefined || form.porte_gratis_desde !== undefined)) {
+          const { coste_porte, porte_gratis_desde, ...sinPortes } = form;
+          if (id) {
+            result = await supabase.from(table).update(sinPortes).eq('id', id);
+          } else {
+            result = await supabase.from(table).insert(sinPortes).select();
+            if (result.data && result.data[0]) newRecordId = result.data[0].id;
+          }
+          if (!result.error) {
+            alert('⚠️ Cliente guardado, pero el porte no se ha registrado.\n\nEjecuta el SQL V76 en Supabase para activar los portes.');
+          }
+        }
         if (result.error) {
           console.error('Error guardando:', result.error);
           alert('Error: ' + result.error.message);
@@ -4839,6 +4852,33 @@ ${pedidoLinea ? `^FO260,258
                 );
               })}
             </div>
+          </div>
+          
+          {/* V76: Portes / coste de envío por entrega */}
+          <div className="mt-3 pt-3 border-t border-blue-200">
+            <p className="text-xs font-bold text-blue-900 mb-1">🚚 Portes (coste de envío por entrega)</p>
+            <p className="text-[10px] text-blue-700 mb-2">
+              Se añade automáticamente a cada albarán del cliente (una entrega = un porte) y pasa a su factura agrupada con el mismo IVA que el producto. Déjalo en 0 si no se le cobra. En cada albarán se puede cambiar o quitar.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                label="Porte por entrega (€ sin IVA)"
+                type="number" step="0.01" min="0"
+                value={form.coste_porte ?? ''}
+                onChange={e => setForm({...form, coste_porte: e.target.value === '' ? null : parseFloat(e.target.value)})}
+                placeholder="0,00"
+              />
+              <Input
+                label="Porte gratis desde (€ de producto, opcional)"
+                type="number" step="0.01" min="0"
+                value={form.porte_gratis_desde ?? ''}
+                onChange={e => setForm({...form, porte_gratis_desde: e.target.value === '' ? null : parseFloat(e.target.value)})}
+                placeholder="Sin mínimo"
+              />
+            </div>
+            {(parseFloat(form.coste_porte) || 0) > 0 && !['semanal', 'quincenal', 'mensual'].includes(form.periodicidad_facturacion) && (
+              <p className="text-[10px] text-amber-700 mt-1.5">⚠️ Los portes se facturan a través de los albaranes: elige periodicidad semanal, quincenal o mensual para que entren en su factura.</p>
+            )}
           </div>
           
           {/* Datos SEPA si aplica */}
@@ -12616,6 +12656,173 @@ ${transacciones}
               // V70: equilibrio — media de contribución viva y diferencia por socio
               const mediaContribucion = datosPorSocio.length > 0 ? pendienteGlobal / datosPorSocio.length : 0;
               
+              // V75: Export dedicado SOLO de gastos pagados como deuda a socio,
+              // con lo que aportó cada socio en CADA gasto (sin mezclar aportaciones FFPP).
+              const exportarGastosDeudaSocios = () => {
+                const clavesSocio = Object.keys(socioConfig);
+                
+                // Gastos que implican deuda a socio: pagados por un socio o con reparto entre socios
+                const gastosDeuda = gastos.filter(g => {
+                  const rep = Array.isArray(g.reparto_socios) ? g.reparto_socios : [];
+                  return rep.length > 0 || clavesSocio.includes(g.forma_pago);
+                }).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+                
+                if (gastosDeuda.length === 0) {
+                  alert('No hay gastos pagados como deuda a socio todavía.');
+                  return;
+                }
+                
+                // Reparto efectivo de un gasto: {socio_clave: importe}
+                const repartoDe = (g) => {
+                  const rep = Array.isArray(g.reparto_socios) ? g.reparto_socios : [];
+                  const out = {};
+                  clavesSocio.forEach(k => { out[k] = 0; });
+                  if (rep.length > 0) {
+                    rep.forEach(r => {
+                      if (r && clavesSocio.includes(r.socio)) out[r.socio] += parseFloat(r.importe) || 0;
+                    });
+                  } else if (clavesSocio.includes(g.forma_pago)) {
+                    out[g.forma_pago] += parseFloat(g.importe) || 0;
+                  }
+                  return out;
+                };
+                
+                const wb = XLSX.utils.book_new();
+                
+                // ---- Hoja 1: un gasto por fila, con la columna de cada socio ----
+                const filas = gastosDeuda.map(g => {
+                  const prov = proveedores.find(p => p.id === g.proveedor_id);
+                  const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
+                  const total = parseFloat(g.importe) || 0;
+                  const base = total / (1 + ivaPct / 100);
+                  const rep = repartoDe(g);
+                  const sumaRep = clavesSocio.reduce((s, k) => s + rep[k], 0);
+                  const tieneReparto = Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0;
+                  
+                  const fila = {
+                    'Fecha': formatDate(g.fecha),
+                    'Concepto': g.concepto || '',
+                    'Proveedor': prov?.nombre || '',
+                    'CIF Proveedor': prov?.cif || '',
+                    'Categoría': categoriasGasto[g.categoria]?.label || g.categoria || '',
+                    'Tipo gasto': categoriasGasto[g.categoria]?.tipo === 'capex' ? 'Inversión (CAPEX)' : 'Gasto corriente (OPEX)',
+                    'Tipo IVA': `${ivaPct}%`,
+                    'Base imponible (€)': base.toFixed(2),
+                    'Cuota IVA (€)': (total - base).toFixed(2),
+                    'Total factura (€)': total.toFixed(2),
+                    'Pagó contablemente': socioConfig[g.forma_pago]?.alias || '—',
+                    'Repartido entre socios': tieneReparto ? 'Sí' : 'No (100% del pagador)',
+                  };
+                  // Una columna por socio con lo que aportó de ESTE gasto
+                  clavesSocio.forEach(k => {
+                    fila[`${socioConfig[k].alias} (€)`] = rep[k] ? rep[k].toFixed(2) : '';
+                  });
+                  clavesSocio.forEach(k => {
+                    fila[`${socioConfig[k].alias} (%)`] = rep[k] && total > 0 ? ((rep[k] / total) * 100).toFixed(1) : '';
+                  });
+                  fila['Suma aportada (€)'] = sumaRep.toFixed(2);
+                  fila['Descuadre (€)'] = (total - sumaRep).toFixed(2);
+                  fila['Estado pago'] = g.pagado ? 'Pagado' : 'Pendiente';
+                  fila['Factura adjunta'] = g.factura_url ? 'Sí' : 'No';
+                  fila['URL Factura'] = g.factura_url || '';
+                  return fila;
+                });
+                
+                // Fila de totales
+                const totalesFila = {
+                  'Fecha': '', 'Concepto': 'TOTALES', 'Proveedor': '', 'CIF Proveedor': '',
+                  'Categoría': '', 'Tipo gasto': '', 'Tipo IVA': '',
+                  'Base imponible (€)': gastosDeuda.reduce((s, g) => {
+                    const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
+                    return s + (parseFloat(g.importe) || 0) / (1 + ivaPct / 100);
+                  }, 0).toFixed(2),
+                  'Cuota IVA (€)': '',
+                  'Total factura (€)': gastosDeuda.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0).toFixed(2),
+                  'Pagó contablemente': '', 'Repartido entre socios': '',
+                };
+                clavesSocio.forEach(k => {
+                  totalesFila[`${socioConfig[k].alias} (€)`] = gastosDeuda.reduce((s, g) => s + repartoDe(g)[k], 0).toFixed(2);
+                });
+                clavesSocio.forEach(k => { totalesFila[`${socioConfig[k].alias} (%)`] = ''; });
+                totalesFila['Suma aportada (€)'] = gastosDeuda.reduce((s, g) => {
+                  const rep = repartoDe(g);
+                  return s + clavesSocio.reduce((ss, k) => ss + rep[k], 0);
+                }, 0).toFixed(2);
+                totalesFila['Descuadre (€)'] = ''; totalesFila['Estado pago'] = '';
+                totalesFila['Factura adjunta'] = ''; totalesFila['URL Factura'] = '';
+                filas.push(totalesFila);
+                
+                const ws1 = XLSX.utils.json_to_sheet(filas);
+                ws1['!cols'] = [{wch:11},{wch:34},{wch:22},{wch:13},{wch:18},{wch:20},{wch:9},{wch:17},{wch:13},{wch:16},{wch:17},{wch:22},
+                  ...clavesSocio.map(() => ({wch:11})), ...clavesSocio.map(() => ({wch:10})),
+                  {wch:16},{wch:13},{wch:12},{wch:14},{wch:40}];
+                XLSX.utils.book_append_sheet(wb, ws1, 'Gastos por socio');
+                
+                // ---- Hoja 2: una fila por socio y gasto (formato largo, para filtrar/pivotar) ----
+                const filasLargo = [];
+                gastosDeuda.forEach(g => {
+                  const prov = proveedores.find(p => p.id === g.proveedor_id);
+                  const total = parseFloat(g.importe) || 0;
+                  const rep = repartoDe(g);
+                  const tieneReparto = Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0;
+                  clavesSocio.forEach(k => {
+                    if (!rep[k]) return;
+                    filasLargo.push({
+                      'Socio': socioConfig[k].alias,
+                      'Nombre socio': socioConfig[k].nombre,
+                      'Fecha': formatDate(g.fecha),
+                      'Concepto': g.concepto || '',
+                      'Proveedor': prov?.nombre || '',
+                      'Categoría': categoriasGasto[g.categoria]?.label || g.categoria || '',
+                      'Total factura (€)': total.toFixed(2),
+                      'Aportación de este socio (€)': rep[k].toFixed(2),
+                      '% del gasto': total > 0 ? ((rep[k] / total) * 100).toFixed(1) : '',
+                      'Forma': tieneReparto ? 'Parte (repartido por Bizum)' : '100% del pagador',
+                      'Pagó con tarjeta/cuenta': socioConfig[g.forma_pago]?.alias || '—',
+                      'Factura adjunta': g.factura_url ? 'Sí' : 'No',
+                    });
+                  });
+                });
+                const ws2 = XLSX.utils.json_to_sheet(filasLargo);
+                ws2['!cols'] = [{wch:9},{wch:22},{wch:11},{wch:34},{wch:22},{wch:18},{wch:16},{wch:26},{wch:12},{wch:26},{wch:20},{wch:14}];
+                XLSX.utils.book_append_sheet(wb, ws2, 'Detalle socio-gasto');
+                
+                // ---- Hoja 3: totales por socio (solo gastos, sin FFPP ni reembolsos) ----
+                const filasTot = clavesSocio.map(k => {
+                  const suyos = gastosDeuda.filter(g => repartoDe(g)[k] > 0);
+                  const suma = suyos.reduce((s, g) => s + repartoDe(g)[k], 0);
+                  const completos = suyos.filter(g => !(Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0));
+                  const parciales = suyos.filter(g => Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0);
+                  return {
+                    'Socio': socioConfig[k].nombre,
+                    'Alias': socioConfig[k].alias,
+                    'Cuenta': '551',
+                    'Nº gastos en los que participa': suyos.length,
+                    'Nº gastos al 100%': completos.length,
+                    'Nº gastos repartidos': parciales.length,
+                    'Aportado en gastos al 100% (€)': completos.reduce((s, g) => s + repartoDe(g)[k], 0).toFixed(2),
+                    'Aportado en gastos repartidos (€)': parciales.reduce((s, g) => s + repartoDe(g)[k], 0).toFixed(2),
+                    'TOTAL aportado en gastos (€)': suma.toFixed(2),
+                  };
+                });
+                filasTot.push({
+                  'Socio': 'TOTAL', 'Alias': '', 'Cuenta': '',
+                  'Nº gastos en los que participa': gastosDeuda.length,
+                  'Nº gastos al 100%': gastosDeuda.filter(g => !(Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0)).length,
+                  'Nº gastos repartidos': gastosDeuda.filter(g => Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0).length,
+                  'Aportado en gastos al 100% (€)': '', 'Aportado en gastos repartidos (€)': '',
+                  'TOTAL aportado en gastos (€)': gastosDeuda.reduce((s, g) => {
+                    const rep = repartoDe(g);
+                    return s + clavesSocio.reduce((ss, k) => ss + rep[k], 0);
+                  }, 0).toFixed(2),
+                });
+                const ws3 = XLSX.utils.json_to_sheet(filasTot);
+                ws3['!cols'] = [{wch:24},{wch:10},{wch:8},{wch:28},{wch:18},{wch:20},{wch:28},{wch:30},{wch:26}];
+                XLSX.utils.book_append_sheet(wb, ws3, 'Totales por socio');
+                
+                XLSX.writeFile(wb, `Rootflow_Gastos_Deuda_Socios_${new Date().toISOString().slice(0,10)}.xlsx`);
+              };
+              
               return (
                 <>
                   {/* Cabecera explicativa */}
@@ -12629,7 +12836,11 @@ ${transacciones}
                           El objetivo: que la contribución viva sea igual entre los tres para devolverla a partes iguales.
                         </p>
                       </div>
-                      <Button size="sm" className="bg-amber-600 hover:bg-amber-700 flex-shrink-0" onClick={() => {
+                      <div className="flex flex-col gap-1.5 flex-shrink-0">
+                        <Button size="sm" className="bg-amber-600 hover:bg-amber-700" onClick={exportarGastosDeudaSocios}>
+                          <Download size={14} /> Exportar gastos por socio
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => {
                         // V66+V70: Export Excel de deuda a socios para auditoría
                         const wb = XLSX.utils.book_new();
                         
@@ -12732,6 +12943,7 @@ ${transacciones}
                       }}>
                         <Download size={14} /> Exportar auditoría
                       </Button>
+                      </div>
                     </div>
                   </Card>
 
@@ -13335,7 +13547,9 @@ ${logoRootflow}^FS
         cliente_id: parseInt(form.cliente_id),
         fecha_emision: form.fecha_emision || new Date().toISOString().slice(0, 10),
         fecha_entrega_prevista: form.fecha_entrega_prevista || null,
-        estado: form.estado || 'generado',
+        // V76 FIX: al EDITAR se conserva el estado actual (antes volvía a 'generado' y el
+        // albarán desaparecía de los pendientes de facturar)
+        estado: form.estado || (idExistente ? (albaranes.find(a => a.id === idExistente)?.estado || 'generado') : 'generado'),
         valorado: !!form.valorado,
         items_json: form.items,
         cliente_nombre: cliente?.nombre || '',
@@ -13349,20 +13563,38 @@ ${logoRootflow}^FS
         recargo_equivalencia: cliente?.recargo_equivalencia || false,
         re_importe: form.re_importe || 0,
         total: form.total || 0,
+        coste_envio: Math.round((parseFloat(form.coste_envio) || 0) * 100) / 100,   // V76
         repartidor: form.repartidor || '',
         vehiculo: form.vehiculo || '',
         notas: form.notas || '',
       };
       
+      // V76: aviso si falta la columna coste_envio (SQL no ejecutado)
+      const avisoSinColumnaPortes = () => {
+        if ((albaranData.coste_envio || 0) > 0) {
+          alert('⚠️ Albarán guardado, pero el porte NO se ha registrado: falta ejecutar el SQL V76 en Supabase.');
+        }
+      };
+      
       if (idExistente) {
-        const { error } = await supabase.from('albaranes').update(albaranData).eq('id', idExistente);
+        let { error } = await supabase.from('albaranes').update(albaranData).eq('id', idExistente);
+        if (error && error.code === '42703') {
+          const { coste_envio, ...sinPorte } = albaranData;
+          ({ error } = await supabase.from('albaranes').update(sinPorte).eq('id', idExistente));
+          if (!error) avisoSinColumnaPortes();
+        }
         if (error) throw error;
         // Borrar relaciones previas
         await supabase.from('albaran_pedidos').delete().eq('albaran_id', idExistente);
       } else {
         // V73: insert con reintento automático si el ID ya existe
         const year = new Date().getFullYear();
-        const res = await insertarConIdUnico('albaranes', albaranData, `A-${year}-`, 4);
+        let res = await insertarConIdUnico('albaranes', albaranData, `A-${year}-`, 4);
+        if (res.error && res.error.code === '42703') {
+          const { coste_envio, ...sinPorte } = albaranData;
+          res = await insertarConIdUnico('albaranes', sinPorte, `A-${year}-`, 4);
+          if (!res.error) avisoSinColumnaPortes();
+        }
         if (res.error) throw res.error;
         albaranId = res.id; // ID definitivo (puede haber cambiado tras reintento)
       }
@@ -19962,6 +20194,54 @@ SELECT cron.schedule(
   // ==================== V63 — FACTURAS AGRUPADAS ====================
   
   // Calcula los grupos de albaranes facturables por cliente según su periodicidad
+  // ==================== V76 — PORTES / COSTES DE ENVÍO ====================
+  // Porte que corresponde a un cliente para una entrega (base sin IVA).
+  // Si el cliente tiene 'porte gratis desde X €' y los productos llegan a X, es 0.
+  const calcularPorteCliente = (cli, baseProductos = 0) => {
+    const porte = parseFloat(cli?.coste_porte) || 0;
+    if (porte <= 0) return 0;
+    const umbral = parseFloat(cli?.porte_gratis_desde) || 0;
+    if (umbral > 0 && baseProductos >= umbral) return 0;
+    return Math.round(porte * 100) / 100;
+  };
+  
+  // Importes canónicos de UN albarán: productos − descuento + portes → IVA una sola vez.
+  // items_json solo lleva productos; los portes van aparte en coste_envio (base sin IVA,
+  // mismo tipo de IVA que la mercancía por ser gasto accesorio de la entrega).
+  // Albaranes antiguos sin items: su base_imponible/total ya incluyen todo.
+  // Devuelve valores SIN redondear; cada llamada redondea como corresponda.
+  const calcularImportesAlbaran = (a, cli, { aplicarTarifas = false } = {}) => {
+    const aplicaRE = !!cli?.recargo_equivalencia;
+    const factorImp = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
+    const itemsOrig = Array.isArray(a.items_json) ? a.items_json : [];
+    const porte = Math.max(0, parseFloat(a.coste_envio) || 0);
+    let items = itemsOrig;
+    let lineasCambiadas = 0;
+    let productos = 0, descuento = 0, base = 0;
+    
+    if (itemsOrig.length > 0) {
+      if (aplicarTarifas) {
+        items = itemsOrig.map(it => {
+          const p = it.producto_id ? getPrecioCliente(it.producto_id, cli?.id) : (parseFloat(it.precio_unitario) || 0);
+          if (Math.abs(p - (parseFloat(it.precio_unitario) || 0)) > 0.001) lineasCambiadas++;
+          return { ...it, precio_unitario: p };
+        });
+      }
+      productos = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
+      descuento = productos * ((cli?.descuento || 0) / 100);   // el descuento NO afecta a los portes
+      base = productos - descuento + porte;
+    } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
+      base = parseFloat(a.base_imponible);
+      descuento = parseFloat(a.descuento_aplicado) || 0;
+      productos = Math.max(0, base - porte + descuento);
+    } else if (parseFloat(a.total) > 0) {
+      base = parseFloat(a.total) / factorImp;
+      productos = Math.max(0, base - porte);
+    }
+    return { items, lineasCambiadas, productos, descuento, porte, base, factorImp, aplicaRE };
+  };
+  // ==================== V76 (fin helpers) ====================
+
   const calcularGruposFacturables = () => {
     const clientesAgrupados = clientes.filter(c => 
       ['semanal', 'quincenal', 'mensual'].includes(c.periodicidad_facturacion)
@@ -19985,33 +20265,23 @@ SELECT cron.schedule(
       //   - Si tiene base_imponible > 0 y es coherente (base < total), la usamos.
       //   - Si no, derivamos la base desde items (precio×cantidad SIN IVA) o desde el total.
       const aplicaRE = !!cli.recargo_equivalencia;
-      const factorImpuestos = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
       
+      // V76: cálculo canónico por albarán (incluye portes)
       let base = 0;
       let descuento = 0;
+      let portes = 0;
+      let numPortes = 0;
       albsPendientes.forEach(a => {
-        let baseAlb = 0;
-        const items = Array.isArray(a.items_json) ? a.items_json : [];
-        
-        if (items.length > 0) {
-          // Fuente más fiable: los items del albarán (precio unitario = SIN IVA)
-          const subtotalItems = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
-          const descAlb = subtotalItems * ((cli.descuento || 0) / 100);
-          baseAlb = subtotalItems - descAlb;
-          descuento += descAlb;
-        } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
-          // Campo base_imponible fiable (menor que el total → no incluye IVA)
-          baseAlb = parseFloat(a.base_imponible);
-          descuento += parseFloat(a.descuento_aplicado) || 0;
-        } else if (parseFloat(a.total) > 0) {
-          // Solo tenemos total (posiblemente con IVA): derivar la base quitando impuestos
-          baseAlb = parseFloat(a.total) / factorImpuestos;
-        }
-        base += baseAlb;
+        const r = calcularImportesAlbaran(a, cli);
+        base += r.base;
+        descuento += r.descuento;
+        portes += r.porte;
+        if (r.porte > 0) numPortes++;
       });
       
       base = Math.round(base * 100) / 100;
       descuento = Math.round(descuento * 100) / 100;
+      portes = Math.round(portes * 100) / 100;
       const subtotal = Math.round((base + descuento) * 100) / 100;
       const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
       const re = aplicaRE ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
@@ -20023,6 +20293,7 @@ SELECT cron.schedule(
         cliente: cli,
         albaranes: albsPendientes,
         subtotal, descuento, base, iva, re, total,
+        portes, numPortes,
         desde: fechas[0] || null,
         hasta: fechas[fechas.length - 1] || null,
       });
@@ -20047,7 +20318,8 @@ SELECT cron.schedule(
     const fechaVto = new Date(); fechaVto.setDate(fechaVto.getDate() + 30);
     
     const periodLabel = { semanal: 'semana', quincenal: 'quincena', mensual: 'mes' }[grupo.cliente.periodicidad_facturacion] || 'periodo';
-    const concepto = `Factura agrupada (${periodLabel}) · ${grupo.albaranes.length} albarán${grupo.albaranes.length !== 1 ? 'es' : ''} del ${formatDate(grupo.desde)} al ${formatDate(grupo.hasta)}`;
+    const concepto = `Factura agrupada (${periodLabel}) · ${grupo.albaranes.length} albarán${grupo.albaranes.length !== 1 ? 'es' : ''} del ${formatDate(grupo.desde)} al ${formatDate(grupo.hasta)}` +
+      ((grupo.portes || 0) > 0 ? ` · incluye ${grupo.numPortes} porte${grupo.numPortes !== 1 ? 's' : ''} (${formatCurrency(grupo.portes)})` : '');
     
     const facturaData = {
       id: facturaId,
@@ -20070,9 +20342,16 @@ SELECT cron.schedule(
       periodo_desde: grupo.desde,
       periodo_hasta: grupo.hasta,
       concepto,
+      portes_importe: grupo.portes || 0,
     };
     
-    const resFA = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+    let resFA = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+    // V76: si falta la columna portes_importe (SQL V76 sin ejecutar), reintentar sin ella.
+    // Los portes siguen incluidos en la base/total; solo se pierde el dato informativo.
+    if (resFA.error && resFA.error.code === '42703') {
+      delete facturaData.portes_importe;
+      resFA = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+    }
     if (resFA.error) {
       // Reintento sin columnas V63 si no existen (por si falta el SQL)
       if (resFA.error.code === '42703') {
@@ -20130,23 +20409,15 @@ SELECT cron.schedule(
     // Índice CSV resumen (con base canónica, sin doble IVA)
     const fmtF = (d) => d ? `${String(new Date(d).getDate()).padStart(2,'0')}/${String(new Date(d).getMonth()+1).padStart(2,'0')}/${new Date(d).getFullYear()}` : '';
     const aplicaRE = !!cliente?.recargo_equivalencia;
-    const factorImp = 1 + (IVA_VENTAS/100) + (aplicaRE ? RE_VENTAS/100 : 0);
-    const csv = ['\uFEFF' + ['Albarán', 'Fecha entrega', 'Base', 'IVA', 'Total'].join(';')];
+    const csv = ['\uFEFF' + ['Albarán', 'Fecha entrega', 'Productos', 'Portes', 'Base', 'IVA', 'Total'].join(';')];
     albs.forEach(a => {
-      const items = Array.isArray(a.items_json) ? a.items_json : [];
-      let baseA = 0;
-      if (items.length > 0) {
-        const sub = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario)||0) * (parseFloat(it.cantidad)||0)), 0);
-        baseA = sub - sub * ((cliente?.descuento || 0)/100);
-      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
-        baseA = parseFloat(a.base_imponible);
-      } else if (parseFloat(a.total) > 0) {
-        baseA = parseFloat(a.total) / factorImp;
-      }
-      baseA = Math.round(baseA * 100) / 100;
+      // V76: cálculo canónico con portes
+      const r = calcularImportesAlbaran(a, cliente);
+      const baseA = Math.round(r.base * 100) / 100;
       const ivaA = Math.round(baseA * (IVA_VENTAS/100) * 100) / 100;
       const reA = aplicaRE ? Math.round(baseA * (RE_VENTAS/100) * 100) / 100 : 0;
-      csv.push([a.id, fmtF(a.fecha_entrega_real || a.fecha_emision), baseA.toFixed(2).replace('.', ','), (ivaA+reA).toFixed(2).replace('.', ','), (baseA+ivaA+reA).toFixed(2).replace('.', ',')].join(';'));
+      const coma = (x) => x.toFixed(2).replace('.', ',');
+      csv.push([a.id, fmtF(a.fecha_entrega_real || a.fecha_emision), coma(r.productos - r.descuento), coma(r.porte), coma(baseA), coma(ivaA+reA), coma(baseA+ivaA+reA)].join(';'));
     });
     carpeta.file('_indice.csv', csv.join('\n'));
     carpeta.file('_LEEME.txt', `Albaranes de la factura ${factura.id}\nCliente: ${cliente?.nombre || ''}\nPeriodo: ${fmtF(factura.periodo_desde)} - ${fmtF(factura.periodo_hasta)}\n\nCada archivo .html es un albarán valorado. Ábrelo en el navegador y usa "Imprimir > Guardar como PDF" si necesitas el PDF.\nEl archivo _indice.csv resume los importes.\n`);
@@ -20176,53 +20447,41 @@ SELECT cron.schedule(
     
     const cli = clientes.find(c => c.id === factura.cliente_id);
     const aplicaRE = !!cli?.recargo_equivalencia;
-    const factorImpuestos = 1 + (IVA_VENTAS / 100) + (aplicaRE ? RE_VENTAS / 100 : 0);
     
-    // Paso 1: recalcular los items de cada albarán con las TARIFAS ACTUALES
+    // Paso 1: recalcular cada albarán con las TARIFAS ACTUALES (+ sus portes, V76)
     let base = 0;
     let descuento = 0;
-    let albaranesActualizables = []; // [{id, items, subtotal, descuentoAplicado, baseAlb, iva, re, total}]
+    let portes = 0;
+    let albaranesActualizables = [];
     let itemsConTarifaCambiada = 0;
     
     albs.forEach(a => {
-      const items = Array.isArray(a.items_json) ? a.items_json : [];
-      let baseAlb = 0;
+      const r = calcularImportesAlbaran(a, cli, { aplicarTarifas: true });
+      itemsConTarifaCambiada += r.lineasCambiadas;
+      base += r.base;
+      descuento += r.descuento;
+      portes += r.porte;
       
-      if (items.length > 0) {
-        // Aplicar tarifa actual a cada item
-        const itemsCorregidos = items.map(it => {
-          const precioTarifa = it.producto_id ? getPrecioCliente(it.producto_id, factura.cliente_id) : (parseFloat(it.precio_unitario) || 0);
-          if (Math.abs(precioTarifa - (parseFloat(it.precio_unitario) || 0)) > 0.001) itemsConTarifaCambiada++;
-          return { ...it, precio_unitario: precioTarifa };
-        });
-        const sub = itemsCorregidos.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
-        const descAlb = sub * ((cli?.descuento || 0) / 100);
-        baseAlb = sub - descAlb;
-        descuento += descAlb;
-        
+      if (Array.isArray(a.items_json) && a.items_json.length > 0) {
+        const baseAlb = Math.round(r.base * 100) / 100;
         const ivaAlb = Math.round(baseAlb * (IVA_VENTAS/100) * 100) / 100;
         const reAlb = aplicaRE ? Math.round(baseAlb * (RE_VENTAS/100) * 100) / 100 : 0;
         albaranesActualizables.push({
           id: a.id,
-          items_json: itemsCorregidos,
-          subtotal: Math.round(sub * 100) / 100,
-          descuento_aplicado: Math.round(descAlb * 100) / 100,
-          base_imponible: Math.round(baseAlb * 100) / 100,
+          items_json: r.items,
+          subtotal: Math.round(r.productos * 100) / 100,          // subtotal de productos
+          descuento_aplicado: Math.round(r.descuento * 100) / 100,
+          base_imponible: baseAlb,                                // productos − dto + portes
           iva: ivaAlb,
           re_importe: reAlb,
           total: Math.round((baseAlb + ivaAlb + reAlb) * 100) / 100,
         });
-      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
-        baseAlb = parseFloat(a.base_imponible);
-        descuento += parseFloat(a.descuento_aplicado) || 0;
-      } else if (parseFloat(a.total) > 0) {
-        baseAlb = parseFloat(a.total) / factorImpuestos;
       }
-      base += baseAlb;
     });
     
     base = Math.round(base * 100) / 100;
     descuento = Math.round(descuento * 100) / 100;
+    portes = Math.round(portes * 100) / 100;
     const subtotal = Math.round((base + descuento) * 100) / 100;
     const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
     const re = aplicaRE ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
@@ -20245,6 +20504,7 @@ SELECT cron.schedule(
       `  IVA:   ${formatCurrency(factura.iva || 0)}\n` +
       `  TOTAL: ${formatCurrency(totalActual)}\n\n` +
       `━━━ CORREGIDO (tarifas actuales + cálculo canónico) ━━━\n` +
+      (portes > 0 ? `  (incluye portes: ${formatCurrency(portes)})\n` : '') +
       `  Base:  ${formatCurrency(base)}\n` +
       `  IVA (${IVA_VENTAS}%): ${formatCurrency(iva)}\n` +
       (re > 0 ? `  R.E.:  ${formatCurrency(re)}\n` : '') +
@@ -20261,7 +20521,7 @@ SELECT cron.schedule(
         await supabase.from('albaranes').update(campos).eq('id', id);
       }
       
-      const { error } = await supabase.from('facturas').update({
+      const updFactura = {
         subtotal,
         descuento_aplicado: descuento,
         base_imponible: base,
@@ -20271,7 +20531,13 @@ SELECT cron.schedule(
         re_porcentaje: re > 0 ? RE_VENTAS : 0,
         re_importe: re,
         total,
-      }).eq('id', factura.id);
+        portes_importe: portes,
+      };
+      let { error } = await supabase.from('facturas').update(updFactura).eq('id', factura.id);
+      if (error && error.code === '42703') {
+        delete updFactura.portes_importe;   // V76: SQL sin ejecutar
+        ({ error } = await supabase.from('facturas').update(updFactura).eq('id', factura.id));
+      }
       if (error) throw error;
       refetchFacturas();
       refetchAlbaranes();
@@ -20367,6 +20633,27 @@ SELECT cron.schedule(
     const cliente = clientes.find(c => c.id === factura.cliente_id);
     const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
     const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
+    // V76: filas canónicas por albarán (productos − dto + portes), usadas en tabla y totales
+    const cliPDF = clientes.find(c => c.id === factura.cliente_id);
+    const filasPDF = albs.map(a => {
+      const r = calcularImportesAlbaran(a, cliPDF);
+      const baseA = Math.round(r.base * 100) / 100;
+      const ivaA = Math.round(baseA * (IVA_VENTAS/100) * 100) / 100;
+      const reA = r.aplicaRE ? Math.round(baseA * (RE_VENTAS/100) * 100) / 100 : 0;
+      return {
+        id: a.id,
+        fecha: a.fecha_entrega_real || a.fecha_emision,
+        productos: Math.round((r.productos - r.descuento) * 100) / 100,
+        porte: Math.round(r.porte * 100) / 100,
+        base: baseA,
+        imp: Math.round((ivaA + reA) * 100) / 100,
+        total: Math.round((baseA + ivaA + reA) * 100) / 100,
+      };
+    });
+    const hayPortesPDF = filasPDF.some(f => f.porte > 0);
+    const totPortesPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.porte, 0) * 100) / 100;
+    const numPortesPDF = filasPDF.filter(f => f.porte > 0).length;
+    const totProductosPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.productos, 0) * 100) / 100;
     
     const fmtF = (d) => d ? `${String(new Date(d).getDate()).padStart(2,'0')}/${String(new Date(d).getMonth()+1).padStart(2,'0')}/${new Date(d).getFullYear()}` : '';
     
@@ -20441,40 +20728,23 @@ table.lines tbody tr:nth-child(even) { background: #fafafa; }
 ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura.concepto}</div>` : ''}
 
 <table class="lines">
-  <thead><tr><th>Albarán</th><th>Fecha entrega</th><th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
+  <thead><tr><th>Albarán</th><th>Fecha entrega</th>${hayPortesPDF ? '<th class="r">Productos</th><th class="r">Portes</th>' : ''}<th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
   <tbody>
-    ${albs.map(a => {
-      // V67: derivar base/iva/total de cada albarán de forma canónica (sin doble IVA)
-      const cliF = clientes.find(c => c.id === factura.cliente_id);
-      const aplicaRE = !!cliF?.recargo_equivalencia;
-      const factorImp = 1 + (IVA_VENTAS/100) + (aplicaRE ? RE_VENTAS/100 : 0);
-      const items = Array.isArray(a.items_json) ? a.items_json : [];
-      let baseA = 0;
-      if (items.length > 0) {
-        const sub = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario)||0) * (parseFloat(it.cantidad)||0)), 0);
-        baseA = sub - sub * ((cliF?.descuento || 0)/100);
-      } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
-        baseA = parseFloat(a.base_imponible);
-      } else if (parseFloat(a.total) > 0) {
-        baseA = parseFloat(a.total) / factorImp;
-      }
-      baseA = Math.round(baseA * 100) / 100;
-      const ivaA = Math.round(baseA * (IVA_VENTAS/100) * 100) / 100;
-      const reA = aplicaRE ? Math.round(baseA * (RE_VENTAS/100) * 100) / 100 : 0;
-      const totA = Math.round((baseA + ivaA + reA) * 100) / 100;
-      return `<tr>
-      <td style="font-family:'Courier New',monospace;font-weight:600">${a.id}</td>
-      <td>${fmtF(a.fecha_entrega_real || a.fecha_emision)}</td>
-      <td class="r">${formatCurrency(baseA)}</td>
-      <td class="r">${formatCurrency(ivaA + reA)}</td>
-      <td class="r">${formatCurrency(totA)}</td>
-    </tr>`;
-    }).join('')}
+    ${filasPDF.map(f => `<tr>
+      <td style="font-family:'Courier New',monospace;font-weight:600">${f.id}</td>
+      <td>${fmtF(f.fecha)}</td>
+      ${hayPortesPDF ? `<td class="r">${formatCurrency(f.productos)}</td><td class="r">${f.porte > 0 ? formatCurrency(f.porte) : '—'}</td>` : ''}
+      <td class="r">${formatCurrency(f.base)}</td>
+      <td class="r">${formatCurrency(f.imp)}</td>
+      <td class="r">${formatCurrency(f.total)}</td>
+    </tr>`).join('')}
   </tbody>
 </table>
 
 <div class="clear">
   <div class="totals">
+    ${hayPortesPDF ? `<div class="trow"><span class="l">Productos (neto)</span><span class="v">${formatCurrency(totProductosPDF)}</span></div>
+    <div class="trow"><span class="l">Portes (${numPortesPDF} entrega${numPortesPDF !== 1 ? 's' : ''})</span><span class="v">${formatCurrency(totPortesPDF)}</span></div>` : ''}
     <div class="trow"><span class="l">Base imponible</span><span class="v">${formatCurrency(factura.base_imponible || 0)}</span></div>
     <div class="trow"><span class="l">IVA (${factura.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(factura.iva || 0)}</span></div>
     ${(factura.re_importe || 0) > 0 ? `<div class="trow"><span class="l">Recargo Eq. (${RE_VENTAS}%)</span><span class="v">${formatCurrency(factura.re_importe)}</span></div>` : ''}
@@ -20510,8 +20780,74 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
     
     const periodEmoji = { semanal: '📆', quincenal: '🗓️', mensual: '📅' };
     
+    // V76: albaranes aún sin facturar, de clientes con porte configurado, que no llevan porte
+    // (típicamente creados antes de configurar el porte). Se proponen para aplicarlo en bloque.
+    const [aplicandoPortes, setAplicandoPortes] = useState(false);
+    const propuestasPorte = albaranes
+      .filter(a => ['generado', 'entregado'].includes(a.estado) && !a.numero_factura && !a.factura_semanal_id)
+      .filter(a => !((parseFloat(a.coste_envio) || 0) > 0))
+      .map(a => {
+        const cli = clientes.find(c => c.id === a.cliente_id);
+        if (!cli || !['semanal', 'quincenal', 'mensual'].includes(cli.periodicidad_facturacion)) return null;
+        if (!((parseFloat(cli.coste_porte) || 0) > 0)) return null;
+        const rOld = calcularImportesAlbaran({ ...a, coste_envio: 0 }, cli);
+        const porte = calcularPorteCliente(cli, rOld.productos - rOld.descuento);
+        return porte > 0 ? { a, cli, porte, rOld } : null;
+      })
+      .filter(Boolean);
+    
+    const aplicarPortesEnBloque = async () => {
+      const porCliente = {};
+      propuestasPorte.forEach(p => {
+        porCliente[p.cli.nombre] = porCliente[p.cli.nombre] || { n: 0, imp: 0 };
+        porCliente[p.cli.nombre].n++;
+        porCliente[p.cli.nombre].imp += p.porte;
+      });
+      const resumen = Object.entries(porCliente).map(([n, d]) => `• ${n}: ${d.n} albarán(es) × porte = ${formatCurrency(d.imp)}`).join('\n');
+      if (!window.confirm(`Se añadirá el porte configurado a ${propuestasPorte.length} albarán(es) pendientes de facturar:\n\n${resumen}\n\nSe recalculan su base, IVA y total. ¿Continuar?`)) return;
+      
+      setAplicandoPortes(true);
+      let ok = 0;
+      try {
+        for (const { a, cli, porte, rOld } of propuestasPorte) {
+          const base = Math.round((rOld.base + porte) * 100) / 100;
+          const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
+          const re = cli.recargo_equivalencia ? Math.round(base * (RE_VENTAS / 100) * 100) / 100 : 0;
+          const upd = { coste_envio: porte, base_imponible: base, iva, re_importe: re, total: Math.round((base + iva + re) * 100) / 100 };
+          if (Array.isArray(a.items_json) && a.items_json.length > 0) {
+            upd.subtotal = Math.round(rOld.productos * 100) / 100;
+            upd.descuento_aplicado = Math.round(rOld.descuento * 100) / 100;
+          }
+          const { error } = await supabase.from('albaranes').update(upd).eq('id', a.id);
+          if (error) {
+            if (error.code === '42703') { alert('❌ Falta ejecutar el SQL V76 (columna coste_envio en albaranes).'); break; }
+            throw error;
+          }
+          ok++;
+        }
+        refetchAlbaranes();
+        if (ok > 0) alert(`✅ Porte aplicado a ${ok} albarán(es). Las facturas de abajo ya lo incluyen.`);
+      } catch (e) {
+        alert('❌ Error: ' + e.message + (ok > 0 ? `\n\n(${ok} albarán(es) ya se actualizaron)` : ''));
+      } finally {
+        setAplicandoPortes(false);
+      }
+    };
+    
     return (
       <div className="space-y-4">
+        {propuestasPorte.length > 0 && (
+          <div className="bg-sky-50 border-2 border-sky-300 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-xs text-sky-900">
+              <p className="font-bold text-sm">🚚 {propuestasPorte.length} albarán(es) sin porte</p>
+              <p>De clientes con porte configurado y aún sin facturar (probablemente creados antes de configurarlo). Total: <strong>{formatCurrency(propuestasPorte.reduce((s2, p) => s2 + p.porte, 0))}</strong> + IVA.</p>
+            </div>
+            <Button size="sm" disabled={aplicandoPortes} onClick={aplicarPortesEnBloque} className="bg-sky-600 hover:bg-sky-700">
+              {aplicandoPortes ? '⏳ Aplicando...' : '🚚 Aplicar portes'}
+            </Button>
+          </div>
+        )}
+        
         {grupos.length === 0 ? (
           <div className="text-center py-8 text-neutral-500">
             <p className="text-4xl mb-2">✓</p>
@@ -20543,6 +20879,11 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
                     <p className="text-[10px] text-neutral-400 mt-0.5">
                       {g.albaranes.map(a => a.id).join(' · ')}
                     </p>
+                    {(g.portes || 0) > 0 && (
+                      <p className="text-[11px] text-sky-700 mt-0.5 font-medium">
+                        🚚 Incluye {g.numPortes} porte{g.numPortes !== 1 ? 's' : ''}: {formatCurrency(g.portes)}
+                      </p>
+                    )}
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="font-black text-green-700">{formatCurrency(g.total)}</p>
@@ -21372,6 +21713,12 @@ ${pedidosVinculados.length > 0 ? `<div class="refs"><strong>Pedidos asociados:</
       </tr>`;
     }).join('')}
     ${itemsArr.length === 0 ? `<tr><td colspan="${valorado ? 5 : 3}" style="text-align:center;color:#999;padding:20px;font-style:italic;">Sin productos</td></tr>` : ''}
+    ${(parseFloat(albaran.coste_envio) || 0) > 0 ? `<tr>
+        <td class="desc">Portes / transporte</td>
+        <td class="center">1</td>
+        <td class="center">servicio</td>
+        ${valorado ? `<td class="right">${formatCurrency(parseFloat(albaran.coste_envio))}</td><td class="right">${formatCurrency(parseFloat(albaran.coste_envio))}</td>` : ''}
+      </tr>` : ''}
   </tbody>
 </table>
 
@@ -21381,6 +21728,7 @@ ${valorado ? `
   <div class="totals">
     <div class="totals-row"><span class="l">Subtotal</span><span class="v">${formatCurrency(albaran.subtotal || 0)}</span></div>
     ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span class="l">Descuento</span><span class="v">−${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
+    ${(parseFloat(albaran.coste_envio) || 0) > 0 ? `<div class="totals-row"><span class="l">Portes</span><span class="v">+${formatCurrency(parseFloat(albaran.coste_envio))}</span></div>` : ''}
     <div class="totals-row"><span class="l">Base imponible</span><span class="v">${formatCurrency(albaran.base_imponible || 0)}</span></div>
     <div class="totals-row"><span class="l">IVA (${albaran.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(albaran.iva || 0)}</span></div>
     ${(albaran.re_importe || 0) > 0 ? `<div class="totals-row"><span class="l">R.E. (${RE_VENTAS}%)</span><span class="v">${formatCurrency(albaran.re_importe)}</span></div>` : ''}
@@ -22301,6 +22649,11 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
       repartidor: albaran?.repartidor || '',
       vehiculo: albaran?.vehiculo || '',
       notas: albaran?.notas || '',
+      // V76: portes. Nuevo → 'auto' (tarifa del cliente). Edición → respeta lo guardado.
+      porte_modo: esEdicion
+        ? ((parseFloat(albaran?.coste_envio) || 0) > 0 ? 'manual' : 'sin')
+        : 'auto',
+      coste_envio_manual: esEdicion && (parseFloat(albaran?.coste_envio) || 0) > 0 ? String(albaran.coste_envio) : '',
     });
     
     const clienteSel = clientes.find(c => c.id === parseInt(form.cliente_id));
@@ -22377,7 +22730,18 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
     const subtotal = form.items.reduce((s, it) => s + ((it.precio_unitario || 0) * (it.cantidad || 0)), 0);
     const descuento = clienteSel?.descuento || 0;
     const descuentoAplicado = subtotal * (descuento / 100);
-    const baseImponible = subtotal - descuentoAplicado;
+    // V76: portes (base sin IVA, no les afecta el descuento, llevan el mismo IVA que la mercancía)
+    const baseProductos = subtotal - descuentoAplicado;
+    const clienteEsAgrupado = ['semanal', 'quincenal', 'mensual'].includes(clienteSel?.periodicidad_facturacion);
+    const porteTarifaCliente = parseFloat(clienteSel?.coste_porte) || 0;
+    const porteAuto = clienteEsAgrupado ? calcularPorteCliente(clienteSel, baseProductos) : 0;
+    const porteGratisPorMinimo = clienteEsAgrupado && porteTarifaCliente > 0 && porteAuto === 0;
+    const porteAplicado = form.porte_modo === 'auto'
+      ? porteAuto
+      : form.porte_modo === 'manual'
+        ? Math.max(0, Math.round((parseFloat(form.coste_envio_manual) || 0) * 100) / 100)
+        : 0;
+    const baseImponible = baseProductos + porteAplicado;
     const iva = baseImponible * (IVA_VENTAS / 100);
     const re = (clienteSel?.recargo_equivalencia ? baseImponible * (RE_VENTAS / 100) : 0);
     const total = baseImponible + iva + re;
@@ -22520,12 +22884,54 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
           )}
         </div>
         
+        {/* V76: Portes / coste de envío */}
+        {clienteSel && (
+          <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl space-y-2">
+            <div className="flex items-start justify-between flex-wrap gap-2">
+              <div>
+                <p className="font-semibold text-sm text-sky-900">🚚 Portes / coste de envío</p>
+                <p className="text-[11px] text-sky-700">
+                  {porteTarifaCliente > 0
+                    ? `Tarifa del cliente: ${formatCurrency(porteTarifaCliente)} por entrega${(parseFloat(clienteSel.porte_gratis_desde) || 0) > 0 ? ` · gratis desde ${formatCurrency(clienteSel.porte_gratis_desde)} de producto` : ''}`
+                    : 'Este cliente no tiene porte configurado (se ajusta en su ficha de cliente).'}
+                </p>
+              </div>
+              <div className="flex rounded-lg overflow-hidden border border-sky-300 text-xs">
+                {[['auto', 'Del cliente'], ['manual', 'Otro importe'], ['sin', 'Sin porte']].map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setForm({ ...form, porte_modo: k })}
+                    className={`px-2.5 py-1 font-semibold ${form.porte_modo === k ? 'bg-sky-600 text-white' : 'bg-white text-neutral-600'}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {form.porte_modo === 'manual' && (
+              <div className="flex items-center gap-2">
+                <input type="number" step="0.01" min="0" value={form.coste_envio_manual}
+                  onChange={e => setForm({ ...form, coste_envio_manual: e.target.value })}
+                  className="w-28 px-2 py-1.5 rounded-lg border border-sky-300 text-sm text-right" placeholder="0,00" autoFocus />
+                <span className="text-xs text-neutral-500">€ sin IVA (solo para esta entrega)</span>
+              </div>
+            )}
+            <p className="text-xs font-semibold text-sky-900">
+              Porte en este albarán: {formatCurrency(porteAplicado)}{porteAplicado > 0 ? ` + IVA ${IVA_VENTAS}%` : ''}
+              {form.porte_modo === 'auto' && porteGratisPorMinimo && <span className="font-normal text-green-700"> · gratis por superar el mínimo</span>}
+            </p>
+            {form.porte_modo === 'auto' && !clienteEsAgrupado && porteTarifaCliente > 0 && (
+              <p className="text-[11px] text-amber-700">
+                ⚠️ Este cliente se factura por pedido, no por albaranes, así que el porte automático no se aplica. Para cobrarle portes, pon su periodicidad en semanal/quincenal/mensual (o usa "Otro importe").
+              </p>
+            )}
+          </div>
+        )}
+        
         {/* Totales (sólo si valorado) */}
         {form.valorado && form.items.length > 0 && (
           <div className="bg-green-50 border border-green-200 rounded-xl p-3">
             <div className="flex flex-col items-end space-y-1 text-sm">
               <div className="flex justify-between w-64"><span>Subtotal:</span><span>{formatCurrency(subtotal)}</span></div>
               {descuentoAplicado > 0 && <div className="flex justify-between w-64 text-green-700"><span>Descuento ({descuento}%):</span><span>-{formatCurrency(descuentoAplicado)}</span></div>}
+              {porteAplicado > 0 && <div className="flex justify-between w-64 text-sky-700"><span>Portes:</span><span>+{formatCurrency(porteAplicado)}</span></div>}
               <div className="flex justify-between w-64"><span>Base imponible:</span><span>{formatCurrency(baseImponible)}</span></div>
               <div className="flex justify-between w-64"><span>IVA ({IVA_VENTAS}%):</span><span>{formatCurrency(iva)}</span></div>
               {re > 0 && <div className="flex justify-between w-64"><span>R.E. ({RE_VENTAS}%):</span><span>{formatCurrency(re)}</span></div>}
@@ -22552,7 +22958,7 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
             if (form.items.length === 0) { alert('Añade al menos un producto'); return; }
             const itemsValidos = form.items.filter(it => it.producto_id && (it.cantidad || 0) > 0);
             if (itemsValidos.length === 0) { alert('Las cantidades deben ser mayores que 0'); return; }
-            onSave({ ...form, items: itemsValidos, subtotal, descuento_aplicado: descuentoAplicado, base_imponible: baseImponible, iva, re_importe: re, total });
+            onSave({ ...form, items: itemsValidos, subtotal, descuento_aplicado: descuentoAplicado, base_imponible: baseImponible, iva, re_importe: re, total, coste_envio: porteAplicado });
           }}>
             {esEdicion ? 'Guardar albarán' : 'Crear albarán'}
           </Button>
