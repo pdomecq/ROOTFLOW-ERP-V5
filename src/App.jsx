@@ -2378,42 +2378,97 @@ const MainApp = () => {
   };
 
   // Registrar cobro de factura
+  // V77 FIX: antes escribía 'estado_cobro' (campo que nada lee y que puede no existir) y no
+  // comprobaba errores → decía "registrado para factura undefined" sin guardar nada.
+  // Ahora marca estado = 'pagada', que es lo que leen el seguimiento de cobros, el KPI
+  // "Cobrado", informes y exports; comprueba cada paso y no duplica el asiento de cobro.
   const registrarCobro = async (facturaId, fechaCobro = new Date().toISOString().split('T')[0]) => {
     try {
       const factura = facturas.find(f => f.id === facturaId);
-      if (!factura) return;
+      if (!factura) { alert('❌ No se encuentra la factura ' + facturaId); return; }
+      if (factura.estado === 'pagada') { alert(`La factura ${factura.id} ya está cobrada.`); return; }
+      const cli = clientes.find(c => c.id === factura.cliente_id);
       
-      await supabase.from('facturas').update({
-        estado_cobro: 'cobrada',
-        fecha_cobro: fechaCobro,
-      }).eq('id', facturaId);
+      if (!window.confirm(
+        `¿Registrar el cobro de la factura ${factura.id}?\n\n` +
+        `Cliente: ${cli?.nombre || '—'}\n` +
+        `Importe: ${formatCurrency(factura.total || 0)}\n` +
+        `Fecha de cobro: ${formatDate(fechaCobro)}\n\n` +
+        `Se marcará como PAGADA y se generará el asiento 572 Bancos / 430 Clientes.`
+      )) return;
       
-      // Crear asiento de cobro
-      // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
-      const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
+      // 1. Marcar la factura como pagada (+ fecha de cobro si existe la columna)
+      let { error: errUpd } = await supabase.from('facturas').update({ estado: 'pagada', fecha_cobro: fechaCobro }).eq('id', facturaId);
+      if (errUpd && errUpd.code === '42703') {
+        ({ error: errUpd } = await supabase.from('facturas').update({ estado: 'pagada' }).eq('id', facturaId));
+      }
+      if (errUpd) throw errUpd;
       
-      const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
-        fecha: fechaCobro,
-        numero,
-        concepto: `Cobro Factura ${factura.numero_factura}`,
-        referencia: `COB-${facturaId}`,
-      }).select().single();
-      
-      if (!error) {
-        const lineas = [
-          { asiento_id: nuevoAsiento.id, cuenta: '572', concepto: 'Bancos c/c', debe: factura.total, haber: 0 },
-          { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: 0, haber: factura.total },
-        ];
-        await supabase.from('asiento_lineas').insert(lineas);
+      // 2. Asiento de cobro. Si ya existe uno (clics anteriores que no marcaron la factura),
+      //    se reutiliza en vez de duplicarlo. Si falla, la factura queda cobrada y se avisa.
+      let avisoAsiento = '';
+      try {
+        const referencia = `COB-${facturaId}`;
+        const concepto = `Cobro Factura ${factura.id}${cli?.nombre ? ' - ' + cli.nombre : ''}`;
+        const { data: existentes } = await supabase.from('asientos_contables').select('id').eq('referencia', referencia);
+        
+        if (existentes && existentes.length > 0) {
+          await supabase.from('asientos_contables').update({ concepto, fecha: fechaCobro }).eq('id', existentes[0].id);
+        } else {
+          const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
+          const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
+            fecha: fechaCobro,
+            numero,
+            concepto,
+            referencia,
+          }).select().single();
+          if (error) throw error;
+          
+          const { error: errLin } = await supabase.from('asiento_lineas').insert([
+            { asiento_id: nuevoAsiento.id, cuenta: '572', concepto: 'Bancos c/c', debe: factura.total, haber: 0 },
+            { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: 0, haber: factura.total },
+          ]);
+          if (errLin) throw errLin;
+        }
+      } catch (eAs) {
+        console.warn('Asiento de cobro no creado:', eAs);
+        avisoAsiento = `\n\n⚠️ No se pudo crear el asiento contable (${eAs.message}). La factura sí queda cobrada.`;
       }
       
       refetchFacturas();
       refetchAsientos();
       refetchAsientoLineas();
-      alert(`✅ Cobro registrado para factura ${factura.numero_factura}`);
+      alert(`✅ Cobro registrado: factura ${factura.id} (${formatCurrency(factura.total || 0)}) marcada como PAGADA.${avisoAsiento}`);
     } catch (error) {
       console.error('Error registrando cobro:', error);
-      alert('❌ Error: ' + error.message);
+      alert('❌ No se pudo registrar el cobro: ' + (error.message || String(error)));
+    }
+  };
+  
+  // V77: deshacer un cobro registrado por error (vuelve a pendiente y borra su asiento de cobro)
+  const anularCobro = async (facturaId) => {
+    const factura = facturas.find(f => f.id === facturaId);
+    if (!factura) return;
+    if (!window.confirm(`¿Deshacer el cobro de la factura ${factura.id}?\n\nVolverá a estado PENDIENTE y se borrará su asiento de cobro (572/430).`)) return;
+    try {
+      let { error } = await supabase.from('facturas').update({ estado: 'pendiente', fecha_cobro: null }).eq('id', facturaId);
+      if (error && error.code === '42703') {
+        ({ error } = await supabase.from('facturas').update({ estado: 'pendiente' }).eq('id', facturaId));
+      }
+      if (error) throw error;
+      
+      const { data: asientosCobro } = await supabase.from('asientos_contables').select('id').eq('referencia', `COB-${facturaId}`);
+      for (const a of asientosCobro || []) {
+        await supabase.from('asiento_lineas').delete().eq('asiento_id', a.id);
+        await supabase.from('asientos_contables').delete().eq('id', a.id);
+      }
+      
+      refetchFacturas();
+      refetchAsientos();
+      refetchAsientoLineas();
+      alert(`↩️ Cobro deshecho: la factura ${factura.id} vuelve a estar pendiente.`);
+    } catch (e) {
+      alert('❌ Error: ' + e.message);
     }
   };
 
@@ -11813,6 +11868,15 @@ ${transacciones}
                             title="Registrar cobro (genera asiento 572/430)"
                           >
                             <Check size={16} />
+                          </button>
+                        )}
+                        {factura.estado === 'pagada' && (
+                          <button 
+                            onClick={() => anularCobro(factura.id)} 
+                            className="p-2 text-neutral-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg" 
+                            title={`Deshacer cobro${factura.fecha_cobro ? ' (cobrada el ' + formatDate(factura.fecha_cobro) + ')' : ''}`}
+                          >
+                            <RotateCcw size={16} />
                           </button>
                         )}
                         <button onClick={() => handleDeleteFactura(factura.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
@@ -24955,7 +25019,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           { header: 'R.E.', accessor: f => f.recargo_equivalencia ? (f.re_importe?.toFixed(2) || '0.00') : '0.00' },
           { header: 'Total', accessor: f => f.total?.toFixed(2) || '0.00' },
           { header: 'Estado', accessor: f => estadoFacturaConfig[f.estado]?.label || f.estado },
-          { header: 'Fecha Cobro', accessor: f => f.estado === 'pagada' ? formatDate(f.updated_at) : '' },
+          { header: 'Fecha Cobro', accessor: f => f.estado === 'pagada' ? formatDate(f.fecha_cobro || f.updated_at) : '' },
         ];
         exportToExcel(facturasFiltradas, `facturas_emitidas_${periodoLabel}`, columns);
       } else if (tipo === 'facturas_recibidas') {
