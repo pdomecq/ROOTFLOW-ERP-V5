@@ -316,6 +316,16 @@ const tipoClienteConfig = {
 };
 
 // Tipos de IVA en España
+// V78: tipos de ausencia (compartido por formulario, calendario y PDF)
+const TIPOS_AUSENCIA_INFO = {
+  vacaciones: { label: 'Vacaciones', icon: '🏖️', corto: 'Vacaciones' },
+  evento:     { label: 'Evento',     icon: '🎉', corto: 'Evento' },
+  viaje:      { label: 'Viaje',      icon: '✈️', corto: 'Viaje' },
+  baja:       { label: 'Baja médica', icon: '🏥', corto: 'Baja' },
+  personal:   { label: 'Personal',   icon: '👤', corto: 'Personal' },
+  otro:       { label: 'Otro',       icon: '📌', corto: 'Otro' },
+};
+
 const TIPOS_IVA = {
   general: { valor: 21, label: '21% General', re: 5.2 },
   reducido: { valor: 10, label: '10% Reducido', re: 1.4 },
@@ -7990,23 +8000,19 @@ ${pedidoLinea ? `^FO260,258
     );
   };
 
-  // ==================== AUSENCIA FORM ====================
-  const AusenciaForm = ({ ausencia, socioInicial, onSave, onCancel }) => {
-    const tiposAusencia = [
-      { value: 'vacaciones', label: '🏖️ Vacaciones' },
-      { value: 'evento', label: '🎉 Evento (boda, cumple, etc.)' },
-      { value: 'viaje', label: '✈️ Viaje' },
-      { value: 'baja', label: '🏥 Baja médica' },
-      { value: 'personal', label: '👤 Asunto personal' },
-      { value: 'otro', label: '📌 Otro' },
-    ];
-
+  // ==================== AUSENCIA FORM (V78) ====================
+  const AusenciaForm = ({ ausencia, socioInicial, fechaInicial, fechaFinInicial, onSave, onCancel }) => {
+    const tiposAusencia = Object.entries(TIPOS_AUSENCIA_INFO).map(([value, t]) => ({ value, label: `${t.icon} ${t.label}` }));
     const sociosActivos = socios.filter(s => s.activo !== false);
+    const esEdicion = !!ausencia?.id;
+    const hoyIsoF = isoLocal(new Date());
+    const hayPrefill = !!(socioInicial || fechaInicial);
 
     const initialForm = {
       socio_id: ausencia?.socio_id || socioInicial || (sociosActivos.length > 0 ? sociosActivos[0].id : null),
-      fecha_inicio: ausencia?.fecha_inicio || new Date().toISOString().split('T')[0],
-      fecha_fin: ausencia?.fecha_fin || new Date().toISOString().split('T')[0],
+      socio_ids: esEdicion ? [] : (socioInicial ? [socioInicial] : (sociosActivos.length > 0 ? [sociosActivos[0].id] : [])),
+      fecha_inicio: ausencia?.fecha_inicio || fechaInicial || hoyIsoF,
+      fecha_fin: ausencia?.fecha_fin || fechaFinInicial || fechaInicial || hoyIsoF,
       tipo: ausencia?.tipo || 'personal',
       motivo: ausencia?.motivo || '',
       todo_el_dia: ausencia?.todo_el_dia !== false,
@@ -8014,18 +8020,12 @@ ${pedidoLinea ? `^FO260,258
       hora_fin: ausencia?.hora_fin || '',
     };
 
-    const [form, setForm, clearFormStorage] = useFormPersistence(`ausencia_${ausencia?.id || 'new'}`, initialForm, !ausencia);
+    // El borrador guardado solo se usa en "nueva ausencia" sin datos precargados
+    // (si no, al hacer clic en un día del calendario se cargaba el borrador viejo)
+    const [form, setForm, clearFormStorage] = useFormPersistence(`ausencia_${ausencia?.id || 'new'}`, initialForm, !esEdicion && !hayPrefill);
 
     const handleSaveWithClear = (formData) => { clearFormStorage(); onSave(formData); };
     const handleCancelWithClear = () => { clearFormStorage(); onCancel(); };
-
-    // Verificar conflictos con turnos ya asignados
-    const turnosConflicto = turnos.filter(t => 
-      t.socio_id === form.socio_id &&
-      t.fecha >= form.fecha_inicio &&
-      t.fecha <= form.fecha_fin &&
-      !t.completado
-    );
 
     if (sociosActivos.length === 0) {
       return (
@@ -8038,72 +8038,179 @@ ${pedidoLinea ? `^FO260,258
       );
     }
 
-    // Calcular días de la ausencia
-    const diasAusencia = form.fecha_inicio && form.fecha_fin 
-      ? Math.ceil((new Date(form.fecha_fin) - new Date(form.fecha_inicio)) / (1000*60*60*24)) + 1
-      : 1;
+    const idsSeleccionados = esEdicion ? [form.socio_id] : (form.socio_ids || []);
+
+    // Días del rango (fechas locales)
+    const diasRango = (() => {
+      if (!form.fecha_inicio || !form.fecha_fin || form.fecha_fin < form.fecha_inicio) return [];
+      const [y, m, d] = form.fecha_inicio.split('-').map(Number);
+      const out = [];
+      for (let k = 0; k < 370; k++) {
+        const f = new Date(y, m - 1, d + k);
+        const iso = isoLocal(f);
+        if (iso > form.fecha_fin) break;
+        out.push({ iso, dow: f.getDay() });
+      }
+      return out;
+    })();
+    const nFinde = diasRango.filter(x => [5, 6, 0].includes(x.dow)).length;
+
+    // Conflictos con turnos ya asignados
+    const turnosConflicto = turnos.filter(t =>
+      idsSeleccionados.includes(t.socio_id) &&
+      t.fecha >= form.fecha_inicio && t.fecha <= form.fecha_fin && !t.completado
+    );
+
+    // Días que se quedarían SIN NADIE disponible con esta ausencia (solo ausencias de día completo)
+    const diasSinNadie = !form.todo_el_dia ? [] : diasRango.filter(x => {
+      const disponibles = sociosActivos.filter(s => {
+        if (idsSeleccionados.includes(s.id)) return false;
+        const fuera = ausenciasSocios.some(a =>
+          a.id !== ausencia?.id && a.socio_id === s.id && a.todo_el_dia !== false &&
+          x.iso >= a.fecha_inicio && x.iso <= a.fecha_fin
+        );
+        return !fuera;
+      });
+      return disponibles.length === 0;
+    });
+
+    // Atajos de fechas
+    const hoyD = new Date();
+    const dowH = hoyD.getDay();
+    const base = new Date(hoyD.getFullYear(), hoyD.getMonth(), hoyD.getDate());
+    const offVie = dowH === 0 ? -2 : dowH === 6 ? -1 : 5 - dowH;
+    const vie = new Date(base); vie.setDate(base.getDate() + offVie);
+    const sab = new Date(vie); sab.setDate(vie.getDate() + 1);
+    const dom = new Date(vie); dom.setDate(vie.getDate() + 2);
+    const vie2 = new Date(vie); vie2.setDate(vie.getDate() + 7);
+    const dom2 = new Date(dom); dom2.setDate(dom.getDate() + 7);
+    const maxIso = (a, b) => (a > b ? a : b);
+    const atajos = [
+      { label: 'Hoy', ini: hoyIsoF, fin: hoyIsoF },
+      { label: 'Este finde (V-D)', ini: maxIso(hoyIsoF, isoLocal(vie)), fin: isoLocal(dom) },
+      { label: 'Sáb + Dom', ini: maxIso(hoyIsoF, isoLocal(sab)), fin: isoLocal(dom) },
+      { label: 'Próximo finde', ini: isoLocal(vie2), fin: isoLocal(dom2) },
+    ];
+
+    const nombreCortoS = (id) => nombreCortoSocio(sociosActivos.find(s => s.id === id));
 
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <Select 
-            label="Socio" 
-            value={form.socio_id} 
-            onChange={e => setForm({...form, socio_id: parseInt(e.target.value)})} 
-            options={sociosActivos.map(s => ({ value: s.id, label: s.nombre }))} 
+        {/* Socio(s) */}
+        {esEdicion ? (
+          <Select
+            label="Socio"
+            value={form.socio_id}
+            onChange={e => setForm({ ...form, socio_id: parseInt(e.target.value) })}
+            options={sociosActivos.map(s => ({ value: s.id, label: s.nombre }))}
           />
-          <Select 
-            label="Tipo de ausencia" 
-            value={form.tipo} 
-            onChange={e => setForm({...form, tipo: e.target.value})} 
-            options={tiposAusencia} 
-          />
-          <Input label="Desde" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value, fecha_fin: e.target.value > form.fecha_fin ? e.target.value : form.fecha_fin})} />
-          <Input label="Hasta" type="date" value={form.fecha_fin} onChange={e => setForm({...form, fecha_fin: e.target.value})} min={form.fecha_inicio} />
-        </div>
-
-        {/* Indicador de días */}
-        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between">
-          <span className="text-sm text-blue-700">📆 Duración:</span>
-          <span className="font-bold text-blue-800">{diasAusencia} día{diasAusencia !== 1 ? 's' : ''}</span>
-        </div>
-
-        {/* Aviso conflictos turnos */}
-        {turnosConflicto.length > 0 && (
-          <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-xl">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="text-amber-500 flex-shrink-0" size={24} />
-              <div className="flex-1">
-                <p className="font-bold text-amber-800">⚠️ Hay {turnosConflicto.length} turno(s) asignado(s) en estos días</p>
-                <p className="text-sm text-amber-700 mt-1">
-                  Considera reasignar estos turnos a otro socio:
-                </p>
-                <ul className="text-xs text-amber-700 mt-2 space-y-1 max-h-32 overflow-y-auto">
-                  {turnosConflicto.slice(0, 8).map(t => (
-                    <li key={t.id}>• {formatDate(t.fecha)} - {t.tipo} ({t.hora || 'sin hora'})</li>
-                  ))}
-                  {turnosConflicto.length > 8 && <li className="italic">... y {turnosConflicto.length - 8} más</li>}
-                </ul>
-              </div>
+        ) : (
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">¿Quién no está? <span className="font-normal text-neutral-400">(puedes marcar varios)</span></label>
+            <div className="flex flex-wrap gap-2">
+              {sociosActivos.map((s, idx) => {
+                const sel = (form.socio_ids || []).includes(s.id);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, socio_ids: sel ? form.socio_ids.filter(x => x !== s.id) : [...(form.socio_ids || []), s.id] })}
+                    className={`px-3 py-1.5 rounded-xl text-sm font-semibold border-2 flex items-center gap-2 transition-all ${sel ? 'text-white shadow' : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-300'}`}
+                    style={sel ? { backgroundColor: colorSocio(s, idx), borderColor: colorSocio(s, idx) } : {}}
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: sel ? 'white' : colorSocio(s, idx) }}></span>
+                    {nombreCortoSocio(s)}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {/* Todo el día / hora específica */}
+        <Select
+          label="Tipo de ausencia"
+          value={form.tipo}
+          onChange={e => setForm({ ...form, tipo: e.target.value })}
+          options={tiposAusencia}
+        />
+
+        {/* Atajos de fechas */}
+        <div>
+          <p className="text-xs font-semibold text-neutral-500 mb-1.5">Atajos</p>
+          <div className="flex flex-wrap gap-1.5">
+            {atajos.map(a => {
+              const activo = form.fecha_inicio === a.ini && form.fecha_fin === a.fin;
+              return (
+                <button
+                  key={a.label}
+                  type="button"
+                  onClick={() => setForm({ ...form, fecha_inicio: a.ini, fecha_fin: a.fin })}
+                  className={`text-xs px-2.5 py-1 rounded-lg border font-medium ${activo ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-neutral-700 border-neutral-300 hover:border-orange-300'}`}
+                >
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Desde" type="date" value={form.fecha_inicio} onChange={e => setForm({ ...form, fecha_inicio: e.target.value, fecha_fin: e.target.value > form.fecha_fin ? e.target.value : form.fecha_fin })} />
+          <Input label="Hasta" type="date" value={form.fecha_fin} onChange={e => setForm({ ...form, fecha_fin: e.target.value })} min={form.fecha_inicio} />
+        </div>
+
+        {/* Duración */}
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between flex-wrap gap-2">
+          <span className="text-sm text-blue-700">📆 Duración</span>
+          <span className="font-bold text-blue-800">
+            {diasRango.length} día{diasRango.length !== 1 ? 's' : ''}
+            {nFinde > 0 && <span className="font-semibold text-orange-600"> · {nFinde} de vie/sáb/dom</span>}
+            {!esEdicion && idsSeleccionados.length > 1 && <span className="font-normal text-blue-700"> · {idsSeleccionados.length} socios</span>}
+          </span>
+        </div>
+
+        {/* Aviso: días sin nadie */}
+        {diasSinNadie.length > 0 && (
+          <div className="p-3 bg-red-50 border-2 border-red-300 rounded-xl">
+            <p className="font-bold text-red-800 text-sm flex items-center gap-2"><AlertTriangle size={16} /> Con esta ausencia no quedaría nadie disponible</p>
+            <p className="text-xs text-red-700 mt-1">
+              {diasSinNadie.slice(0, 10).map(x => { const [yy, mm, dd] = x.iso.split('-'); return `${['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][x.dow]} ${Number(dd)}/${Number(mm)}`; }).join(' · ')}
+              {diasSinNadie.length > 10 ? ` · y ${diasSinNadie.length - 10} más` : ''}
+            </p>
+            <p className="text-[11px] text-red-600 mt-1">Puedes guardarla igualmente, pero organizad quién cubre riego y entregas esos días.</p>
+          </div>
+        )}
+
+        {/* Aviso: turnos asignados */}
+        {turnosConflicto.length > 0 && (
+          <div className="p-3 bg-amber-50 border-2 border-amber-300 rounded-xl">
+            <p className="font-bold text-amber-800 text-sm flex items-center gap-2"><AlertTriangle size={16} /> Hay {turnosConflicto.length} turno(s) asignado(s) en esos días</p>
+            <ul className="text-xs text-amber-700 mt-1.5 space-y-0.5 max-h-28 overflow-y-auto">
+              {turnosConflicto.slice(0, 8).map(t => (
+                <li key={t.id}>• {nombreCortoS(t.socio_id)} · {formatDate(t.fecha)} · {t.tipo} ({t.hora || 'sin hora'})</li>
+              ))}
+              {turnosConflicto.length > 8 && <li className="italic">… y {turnosConflicto.length - 8} más</li>}
+            </ul>
+            <p className="text-[11px] text-amber-700 mt-1">Reasígnalos a otro socio desde la pestaña Turnos.</p>
+          </div>
+        )}
+
+        {/* Todo el día / horas */}
         <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl space-y-2">
           <label className="flex items-center gap-2 cursor-pointer">
-            <input 
-              type="checkbox" 
-              checked={form.todo_el_dia} 
-              onChange={e => setForm({...form, todo_el_dia: e.target.checked})} 
-              className="w-4 h-4 rounded" 
+            <input
+              type="checkbox"
+              checked={form.todo_el_dia}
+              onChange={e => setForm({ ...form, todo_el_dia: e.target.checked })}
+              className="w-4 h-4 rounded"
             />
             <span className="text-sm font-medium">Todo el día</span>
+            <span className="text-xs text-neutral-400">(desmárcalo si solo falta unas horas)</span>
           </label>
           {!form.todo_el_dia && (
             <div className="grid grid-cols-2 gap-2 pl-6">
-              <Input label="Desde" type="time" value={form.hora_inicio} onChange={e => setForm({...form, hora_inicio: e.target.value})} />
-              <Input label="Hasta" type="time" value={form.hora_fin} onChange={e => setForm({...form, hora_fin: e.target.value})} />
+              <Input label="Fuera desde" type="time" value={form.hora_inicio} onChange={e => setForm({ ...form, hora_inicio: e.target.value })} />
+              <Input label="Hasta" type="time" value={form.hora_fin} onChange={e => setForm({ ...form, hora_fin: e.target.value })} />
             </div>
           )}
         </div>
@@ -8111,18 +8218,25 @@ ${pedidoLinea ? `^FO260,258
         {/* Motivo */}
         <div>
           <label className="block text-sm font-semibold text-neutral-700 mb-1">Motivo (opcional)</label>
-          <textarea 
-            value={form.motivo} 
-            onChange={e => setForm({...form, motivo: e.target.value})} 
-            className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none" 
-            rows={2} 
-            placeholder="Boda de Pedro, viaje a Italia, etc."
+          <textarea
+            value={form.motivo}
+            onChange={e => setForm({ ...form, motivo: e.target.value })}
+            className="w-full px-4 py-2 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 outline-none"
+            rows={2}
+            placeholder="Boda, viaje, feria, médico…"
           />
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t">
           <Button variant="secondary" onClick={handleCancelWithClear}>Cancelar</Button>
-          <Button onClick={() => handleSaveWithClear(form)}>{ausencia ? 'Guardar' : 'Marcar Ausencia'}</Button>
+          <Button onClick={() => {
+            if (!esEdicion && idsSeleccionados.length === 0) { alert('Elige al menos un socio'); return; }
+            if (!form.fecha_inicio || !form.fecha_fin || form.fecha_fin < form.fecha_inicio) { alert('Revisa las fechas'); return; }
+            if (!form.todo_el_dia && (!form.hora_inicio || !form.hora_fin)) { alert('Indica el horario o marca "Todo el día"'); return; }
+            handleSaveWithClear({ ...form, socio_ids: idsSeleccionados });
+          }}>
+            {esEdicion ? 'Guardar' : idsSeleccionados.length > 1 ? `Marcar ausencia (${idsSeleccionados.length} socios)` : 'Marcar ausencia'}
+          </Button>
         </div>
       </div>
     );
@@ -16082,6 +16196,298 @@ ${logoRootflow}^FS
   };
 
   // ==================== CALENDARIO ====================
+  // ==================== V78 — DISPONIBILIDAD Y AUSENCIAS ====================
+  // Fecha local → 'YYYY-MM-DD' (sin el desfase de toISOString en horario de Madrid)
+  const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const ESTADOS_ENTREGA_ACTIVOS = ['pendiente', 'confirmado', 'preparando', 'enviado'];
+  const COLORES_SOCIO_DEFECTO = ['#3B82F6', '#F97316', '#22C55E', '#A855F7', '#EC4899', '#14B8A6'];
+  const colorSocio = (s, idx = 0) => s?.color || COLORES_SOCIO_DEFECTO[idx % COLORES_SOCIO_DEFECTO.length];
+  // Nombre corto legible: alias si existe; "Domingo de Guzmán" → "Guzmán"; si no, el primer nombre
+  const nombreCortoSocio = (s) => {
+    if (!s) return '';
+    if (s.alias) return s.alias;
+    const n = (s.nombre || '').trim();
+    const m = n.match(/\sde\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñü]+)\s*$/);
+    if (m) return m[1];
+    return n.split(/\s+/)[0];
+  };
+  
+  // Estado de un socio en un día: 'ausente' (todo el día), 'parcial' (unas horas) o 'disponible'
+  const estadoSocioDia = (socioId, iso) => {
+    const aus = ausenciasSocios.filter(a => a.socio_id === socioId && iso >= a.fecha_inicio && iso <= a.fecha_fin);
+    const completa = aus.find(a => a.todo_el_dia !== false);
+    if (completa) return { estado: 'ausente', ausencia: completa };
+    if (aus.length > 0) return { estado: 'parcial', ausencia: aus[0] };
+    return { estado: 'disponible', ausencia: null };
+  };
+  
+  // Resumen completo de un día: quién está, quién falta, turnos, entregas y tareas de producción
+  const resumenDisponibilidadDia = (iso) => {
+    const activos = socios.filter(s => s.activo !== false);
+    const disponibles = [], ausentes = [], parciales = [];
+    activos.forEach((s, idx) => {
+      const e = estadoSocioDia(s.id, iso);
+      const item = { socio: s, color: colorSocio(s, idx), ausencia: e.ausencia };
+      if (e.estado === 'ausente') ausentes.push(item);
+      else if (e.estado === 'parcial') { parciales.push(item); disponibles.push(item); }
+      else disponibles.push(item);
+    });
+    const [y, m, d] = iso.split('-').map(Number);
+    const dow = new Date(y, m - 1, d).getDay(); // 0 dom … 6 sáb
+    const turnosDia = turnos.filter(t => t.fecha === iso).sort((a, b) => (a.hora || '').localeCompare(b.hora || ''));
+    const entregas = pedidos.filter(p => p.fecha_entrega === iso && ESTADOS_ENTREGA_ACTIVOS.includes(p.estado));
+    const tareas = tareasCalendario.filter(t => t.fecha === iso && t.estado === 'pendiente');
+    const nDisp = disponibles.length - parciales.length; // disponibles el día completo
+    const cobertura = nDisp === 0 ? 'nadie' : nDisp === 1 ? 'uno' : 'ok';
+    return { iso, dow, esFinde: [5, 6, 0].includes(dow), disponibles, ausentes, parciales, turnos: turnosDia, entregas, tareas, nDisp, cobertura, totalSocios: activos.length };
+  };
+  
+  // Fines de semana (vie-sáb-dom) que tocan el mes; incluye días del mes vecino para ver el finde entero
+  const findesDelMes = (anio, mes0) => {
+    const findes = [];
+    const ultimo = new Date(anio, mes0 + 1, 0).getDate();
+    const vistos = new Set();
+    for (let dia = 1; dia <= ultimo; dia++) {
+      const f = new Date(anio, mes0, dia);
+      const dow = f.getDay();
+      if (![5, 6, 0].includes(dow)) continue;
+      const viernes = new Date(f);
+      viernes.setDate(f.getDate() - (dow === 5 ? 0 : dow === 6 ? 1 : 2));
+      const clave = isoLocal(viernes);
+      if (vistos.has(clave)) continue;
+      vistos.add(clave);
+      const dias = [0, 1, 2].map(k => {
+        const x = new Date(viernes); x.setDate(viernes.getDate() + k);
+        return { iso: isoLocal(x), fecha: x, enMes: x.getMonth() === mes0 };
+      });
+      findes.push({ clave, dias });
+    }
+    return findes;
+  };
+  
+  // ---------- PDF mensual para imprimir ----------
+  const generarPDFCalendarioMes = (mesDate) => {
+    const anio = mesDate.getFullYear();
+    const mes0 = mesDate.getMonth();
+    const mesLabel = mesDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+    const MesLabel = mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1);
+    const esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const nombreCorto = (s) => esc(nombreCortoSocio(s));
+    const tiposTurnoPDF = { riego: 'Riego', cosecha: 'Cosecha', empaquetado: 'Empaquetado', siembra: 'Siembra', reparto: 'Reparto', limpieza: 'Limpieza', otros: 'Otros' };
+    const diasSemana = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const activos = socios.filter(s => s.activo !== false);
+    const hoyIso = isoLocal(new Date());
+    
+    // Rejilla del mes (lunes primero)
+    const primero = new Date(anio, mes0, 1);
+    const offset = primero.getDay() === 0 ? 6 : primero.getDay() - 1;
+    const ultimo = new Date(anio, mes0 + 1, 0).getDate();
+    const celdas = [];
+    for (let i = 0; i < offset; i++) celdas.push(null);
+    for (let d = 1; d <= ultimo; d++) celdas.push(d);
+    while (celdas.length % 7 !== 0) celdas.push(null);
+    const semanas = celdas.length / 7;
+    const altoCelda = Math.floor(158 / semanas);
+    
+    const resumenes = {};
+    for (let d = 1; d <= ultimo; d++) {
+      const iso = isoLocal(new Date(anio, mes0, d));
+      resumenes[iso] = resumenDisponibilidadDia(iso);
+    }
+    
+    const badgeCob = (r) => r.totalSocios === 0 ? '' :
+      r.cobertura === 'nadie' ? '<span class="cob bad">SIN NADIE</span>' :
+      r.cobertura === 'uno' ? '<span class="cob warn">SOLO 1</span>' :
+      `<span class="cob ok">${r.nDisp}/${r.totalSocios}</span>`;
+    
+    const celdaHTML = (dia, col) => {
+      const esFindeCol = col >= 4; // vie, sáb, dom
+      if (!dia) return `<td class="fuera ${esFindeCol ? 'finde' : ''}"></td>`;
+      const iso = isoLocal(new Date(anio, mes0, dia));
+      const r = resumenes[iso];
+      const lineas = [];
+      r.ausentes.forEach(a => lineas.push(`<div class="l aus">&#10007; ${nombreCorto(a.socio)} · ${esc(TIPOS_AUSENCIA_INFO[a.ausencia.tipo]?.corto || a.ausencia.tipo)}</div>`));
+      r.parciales.forEach(a => lineas.push(`<div class="l par">&#189; ${nombreCorto(a.socio)} ${esc((a.ausencia.hora_inicio || '').slice(0,5))}-${esc((a.ausencia.hora_fin || '').slice(0,5))}</div>`));
+      const maxTurnos = 3;
+      r.turnos.slice(0, maxTurnos).forEach(t => {
+        const s = socios.find(x => x.id === t.socio_id);
+        lineas.push(`<div class="l tur${t.completado ? ' hecho' : ''}">&#8226; ${nombreCorto(s)} · ${esc(tiposTurnoPDF[t.tipo] || t.tipo || 'Turno')}${t.hora ? ' ' + esc(t.hora.slice(0,5)) : ''}</div>`);
+      });
+      if (r.turnos.length > maxTurnos) lineas.push(`<div class="l tur">+${r.turnos.length - maxTurnos} turnos más</div>`);
+      if (r.entregas.length > 0) {
+        const nombres = r.entregas.slice(0, 2).map(p => esc((clientes.find(c => c.id === p.cliente_id)?.nombre || '').split(' ')[0])).join(', ');
+        lineas.push(`<div class="l ent">Entregas: ${r.entregas.length}${nombres ? ' (' + nombres + (r.entregas.length > 2 ? '…' : '') + ')' : ''}</div>`);
+      }
+      if (r.tareas.length > 0) lineas.push(`<div class="l prod">Producción: ${r.tareas.length} tarea${r.tareas.length !== 1 ? 's' : ''}</div>`);
+      const clases = [esFindeCol ? 'finde' : '', r.cobertura === 'nadie' && r.totalSocios > 0 ? 'nadie' : '', iso === hoyIso ? 'hoy' : ''].join(' ');
+      return `<td class="${clases}"><div class="num">${dia}${badgeCob(r)}</div>${lineas.join('')}</td>`;
+    };
+    
+    let filas = '';
+    for (let w = 0; w < semanas; w++) {
+      filas += '<tr>' + celdas.slice(w * 7, w * 7 + 7).map((d, col) => celdaHTML(d, col)).join('') + '</tr>';
+    }
+    
+    // Página de fines de semana
+    const findes = findesDelMes(anio, mes0);
+    const findesHTML = findes.map(f => {
+      const rs = f.dias.map(d => ({ ...d, r: resumenDisponibilidadDia(d.iso) }));
+      const peor = rs.filter(x => x.enMes).reduce((acc, x) => x.r.cobertura === 'nadie' ? 'nadie' : (x.r.cobertura === 'uno' && acc !== 'nadie' ? 'uno' : acc), 'ok');
+      const estado = peor === 'nadie' ? '<span class="cob bad">HAY DÍAS SIN NADIE</span>' : peor === 'uno' ? '<span class="cob warn">COBERTURA JUSTA</span>' : '<span class="cob ok">CUBIERTO</span>';
+      const d0 = f.dias[0].fecha, d2 = f.dias[2].fecha;
+      const titulo = `Fin de semana del ${d0.getDate()} ${d0.toLocaleDateString('es-ES', { month: 'short' })} al ${d2.getDate()} ${d2.toLocaleDateString('es-ES', { month: 'short' })}`;
+      const filasFinde = rs.map(x => {
+        const r = x.r;
+        const disp = r.disponibles.map(a => `<span class="chip"><span class="dot" style="background:${a.color}"></span>${nombreCorto(a.socio)}${r.parciales.includes(a) ? ' (parcial)' : ''}</span>`).join(' ') || '<span class="aus">Nadie</span>';
+        const aus = r.ausentes.map(a => `${nombreCorto(a.socio)} <span class="muted">(${esc(TIPOS_AUSENCIA_INFO[a.ausencia.tipo]?.corto || a.ausencia.tipo)}${a.ausencia.motivo ? ': ' + esc(a.ausencia.motivo) : ''})</span>`).join('<br>') || '<span class="muted">—</span>';
+        const turs = r.turnos.map(t => {
+          const s = socios.find(z => z.id === t.socio_id);
+          return `${nombreCorto(s)} · ${esc(tiposTurnoPDF[t.tipo] || t.tipo || 'Turno')}${t.hora ? ' ' + esc(t.hora.slice(0,5)) : ''}`;
+        }).join('<br>') || '<span class="muted">—</span>';
+        const ents = r.entregas.length ? `${r.entregas.length}: ${r.entregas.slice(0, 4).map(p => esc((clientes.find(c => c.id === p.cliente_id)?.nombre || '').split(' ').slice(0, 2).join(' '))).join(', ')}${r.entregas.length > 4 ? '…' : ''}` : '<span class="muted">—</span>';
+        return `<tr class="${x.enMes ? '' : 'otromes'}">
+          <td class="dia"><strong>${diasSemana[x.fecha.getDay()]}</strong><br>${x.fecha.getDate()}/${x.fecha.getMonth() + 1}${x.enMes ? '' : '<br><span class="muted">(otro mes)</span>'}</td>
+          <td>${disp}</td>
+          <td>${aus}</td>
+          <td>${turs}</td>
+          <td>${ents}${r.tareas.length ? `<br><span class="prod">Producción: ${r.tareas.length}</span>` : ''}</td>
+          <td class="blank"></td>
+          <td class="blank"></td>
+        </tr>`;
+      }).join('');
+      return `<div class="finde-bloque">
+        <div class="finde-tit">${titulo} ${estado}</div>
+        <table class="fin">
+          <thead><tr><th style="width:10%">Día</th><th style="width:17%">Disponibles</th><th style="width:17%">Ausentes</th><th style="width:17%">Turnos</th><th style="width:15%">Entregas / producción</th><th style="width:12%">Responsable</th><th style="width:12%">Notas</th></tr></thead>
+          <tbody>${filasFinde}</tbody>
+        </table>
+      </div>`;
+    }).join('');
+    
+    // Resumen por socio + lista de ausencias del mes
+    const isoIni = isoLocal(new Date(anio, mes0, 1));
+    const isoFin = isoLocal(new Date(anio, mes0, ultimo));
+    const filasSocio = activos.map((s, idx) => {
+      let diasAus = 0, diasAusFinde = 0, turnosMes = 0, turnosFinde = 0;
+      for (let d = 1; d <= ultimo; d++) {
+        const iso = isoLocal(new Date(anio, mes0, d));
+        const r = resumenes[iso];
+        if (estadoSocioDia(s.id, iso).estado === 'ausente') { diasAus++; if (r.esFinde) diasAusFinde++; }
+        const nT = turnos.filter(t => t.fecha === iso && t.socio_id === s.id).length;
+        turnosMes += nT; if (r.esFinde) turnosFinde += nT;
+      }
+      return `<tr><td><span class="dot" style="background:${colorSocio(s, idx)}"></span><strong>${esc(s.nombre)}</strong></td><td class="c">${diasAus}</td><td class="c">${diasAusFinde}</td><td class="c">${ultimo - diasAus}</td><td class="c">${turnosMes}</td><td class="c">${turnosFinde}</td></tr>`;
+    }).join('');
+    
+    const ausMes = ausenciasSocios
+      .filter(a => a.fecha_fin >= isoIni && a.fecha_inicio <= isoFin)
+      .sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
+    const fmtCorta = (iso) => { const [yy, mm, dd] = iso.split('-'); return `${dd}/${mm}/${yy.slice(2)}`; };
+    const filasAus = ausMes.map(a => {
+      const s = socios.find(x => x.id === a.socio_id);
+      const dias = Math.round((new Date(a.fecha_fin + 'T12:00:00') - new Date(a.fecha_inicio + 'T12:00:00')) / 86400000) + 1;
+      return `<tr><td>${esc(s?.nombre || '—')}</td><td>${esc(TIPOS_AUSENCIA_INFO[a.tipo]?.label || a.tipo)}</td><td>${fmtCorta(a.fecha_inicio)} → ${fmtCorta(a.fecha_fin)}</td><td class="c">${dias}</td><td>${a.todo_el_dia === false ? `${esc((a.hora_inicio || '').slice(0,5))}-${esc((a.hora_fin || '').slice(0,5))}` : 'Todo el día'}</td><td>${esc(a.motivo || '')}</td></tr>`;
+    }).join('') || '<tr><td colspan="6" class="muted c">Sin ausencias este mes</td></tr>';
+    
+    const diasSinNadie = Object.values(resumenes).filter(r => r.totalSocios > 0 && r.cobertura === 'nadie');
+    const diasSolo1 = Object.values(resumenes).filter(r => r.cobertura === 'uno');
+    const leyendaSocios = activos.map((s, idx) => `<span><span class="dot" style="background:${colorSocio(s, idx)}"></span>${esc(s.nombre)}</span>`).join('');
+    const generado = new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<title>Planificación ${esc(MesLabel)} · Rootflow</title>
+<style>
+@page { size: A4 landscape; margin: 9mm; }
+* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: Helvetica, Arial, sans-serif; color: #1a1a1a; font-size: 8.5pt; margin: 0; }
+.toolbar { position: fixed; top: 8px; right: 8px; } .toolbar button { background:#1D4F37; color:#fff; border:0; padding:8px 14px; border-radius:8px; font-weight:700; cursor:pointer; }
+@media print { .toolbar { display:none; } }
+.head { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2.5px solid #1D4F37; padding-bottom:4px; margin-bottom:5px; }
+.head h1 { font-size:17pt; margin:0; color:#1D4F37; letter-spacing:-.3px; }
+.head .sub { font-size:8pt; color:#555; margin-top:2px; }
+.leg { display:flex; gap:12px; flex-wrap:wrap; font-size:7.5pt; color:#333; justify-content:flex-end; }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:3px; vertical-align:-1px; }
+table.cal { width:100%; border-collapse:collapse; table-layout:fixed; }
+table.cal th { background:#1D4F37; color:#fff; font-size:8.5pt; padding:3px; border:1px solid #1D4F37; }
+table.cal th.fin { background:#ED7E1F; border-color:#ED7E1F; }
+table.cal td { border:1px solid #b9b9b9; vertical-align:top; height:${altoCelda}mm; padding:2px 3px; overflow:hidden; }
+td.finde { background:#FFF3E6; }
+td.fuera { background:#f2f2f2; }
+td.fuera.finde { background:#f5ebe0; }
+td.nadie { box-shadow: inset 0 0 0 2px #DC2626; }
+td.hoy .num { color:#ED7E1F; }
+.num { font-weight:800; font-size:10.5pt; margin-bottom:1px; }
+.cob { float:right; font-size:6.5pt; font-weight:800; padding:1px 4px; border-radius:6px; margin-top:1px; }
+.cob.ok { background:#DCFCE7; color:#166534; } .cob.warn { background:#FEF3C7; color:#92400E; } .cob.bad { background:#FEE2E2; color:#991B1B; }
+.l { font-size:7pt; line-height:1.28; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aus { color:#B91C1C; font-weight:600; } .par { color:#B45309; } .tur { color:#1f2937; } .tur.hecho { color:#9ca3af; text-decoration:line-through; }
+.ent { color:#1D4ED8; } .prod { color:#166534; } .muted { color:#888; font-weight:400; }
+.pie { display:flex; justify-content:space-between; font-size:7pt; color:#666; margin-top:4px; }
+.alertas { font-size:7.5pt; margin-top:3px; }
+.alertas .bad { color:#991B1B; font-weight:700; } .alertas .warn { color:#92400E; }
+.pag { page-break-before: always; }
+h2 { font-size:13pt; color:#1D4F37; margin:0 0 4px; border-bottom:2px solid #1D4F37; padding-bottom:3px; }
+.finde-bloque { page-break-inside: avoid; margin-bottom:4mm; }
+.finde-tit { font-weight:800; font-size:9.5pt; margin:0 0 2px; }
+table.fin, table.res { width:100%; border-collapse:collapse; }
+table.fin th, table.res th { background:#f1f1f1; border:1px solid #bbb; font-size:7.5pt; padding:2px 4px; text-align:left; }
+table.fin td, table.res td { border:1px solid #bbb; padding:3px 4px; font-size:8pt; vertical-align:top; }
+tr.otromes td { background:#f7f7f7; color:#777; }
+td.dia { background:#FFF3E6; }
+td.blank { background:#fff; }
+.chip { white-space:nowrap; margin-right:4px; }
+.c { text-align:center; }
+.dos { display:flex; gap:6mm; } .dos > div { flex:1; }
+</style></head>
+<body>
+<div class="toolbar"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+
+<div class="head">
+  <div><h1>Planificación · ${esc(MesLabel)}</h1><div class="sub">Disponibilidad de socios, ausencias, turnos y entregas · Fines de semana (vie-sáb-dom) resaltados</div></div>
+  <div class="leg">${leyendaSocios}<span><span class="cob ok" style="float:none">2/3</span> disponibles</span><span><span class="cob warn" style="float:none">SOLO 1</span></span><span><span class="cob bad" style="float:none">SIN NADIE</span></span></div>
+</div>
+<table class="cal">
+  <thead><tr><th>Lunes</th><th>Martes</th><th>Miércoles</th><th>Jueves</th><th class="fin">Viernes</th><th class="fin">Sábado</th><th class="fin">Domingo</th></tr></thead>
+  <tbody>${filas}</tbody>
+</table>
+<div class="alertas">
+  ${diasSinNadie.length ? `<span class="bad">Días sin nadie disponible: ${diasSinNadie.map(r => Number(r.iso.slice(8))).join(', ')}.</span> ` : ''}
+  ${diasSolo1.length ? `<span class="warn">Días con un solo socio: ${diasSolo1.map(r => Number(r.iso.slice(8))).join(', ')}.</span>` : ''}
+</div>
+<div class="pie"><span>&#10007; ausente todo el día · &#189; ausente unas horas · &#8226; turno asignado</span><span>Rootflow Hydroponics · generado ${esc(generado)}</span></div>
+
+<div class="pag">
+  <h2>Fines de semana de ${esc(mesLabel)}</h2>
+  ${findesHTML || '<p class="muted">Sin fines de semana en el periodo.</p>'}
+</div>
+
+<div class="pag">
+  <h2>Resumen del mes por socio</h2>
+  <div class="dos">
+    <div>
+      <table class="res">
+        <thead><tr><th>Socio</th><th class="c">Días ausente</th><th class="c">De ellos vie/sáb/dom</th><th class="c">Días disponible</th><th class="c">Turnos</th><th class="c">Turnos en finde</th></tr></thead>
+        <tbody>${filasSocio || '<tr><td colspan="6" class="muted c">Sin socios activos</td></tr>'}</tbody>
+      </table>
+    </div>
+  </div>
+  <h2 style="margin-top:6mm">Ausencias del mes</h2>
+  <table class="res">
+    <thead><tr><th>Socio</th><th>Tipo</th><th>Fechas</th><th class="c">Días</th><th>Horario</th><th>Motivo</th></tr></thead>
+    <tbody>${filasAus}</tbody>
+  </table>
+</div>
+</body></html>`;
+    
+    const w = window.open('', '_blank');
+    if (!w) { alert('⚠️ Permite las ventanas emergentes para generar el PDF.'); return; }
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch (e) { /* el usuario puede usar el botón */ } }, 500);
+  };
+  // ==================== V78 (fin helpers) ====================
+
   const renderCalendario = () => {
     const mesActual = mesCalendario || new Date();
     
@@ -16153,7 +16559,7 @@ ${logoRootflow}^FS
           <div>
             <h1 className="text-3xl font-black text-neutral-900">Calendario</h1>
             <p className="text-neutral-500 font-medium">
-              {calendarioTab === 'eventos' ? 'Entregas y cosechas programadas' : 'Turnos y reparto de tareas entre socios'}
+              {calendarioTab === 'eventos' ? 'Entregas y cosechas programadas' : calendarioTab === 'ausencias' ? 'Quién está cada día · ausencias y fines de semana' : 'Turnos y reparto de tareas entre socios'}
             </p>
           </div>
           <div className="flex gap-2 flex-wrap">
@@ -16203,7 +16609,412 @@ ${logoRootflow}^FS
               </span>
             )}
           </button>
+          <button 
+            onClick={() => setCalendarioTab('ausencias')} 
+            className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${calendarioTab === 'ausencias' ? 'bg-orange-500 text-white' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
+          >
+            <CalendarClock size={18} />Disponibilidad
+            {(() => {
+              // Aviso: días sin nadie disponible en los próximos 30 días
+              const base = new Date();
+              let n = 0;
+              for (let k = 0; k < 30; k++) {
+                const f = new Date(base.getFullYear(), base.getMonth(), base.getDate() + k);
+                if (resumenDisponibilidadDia(isoLocal(f)).cobertura === 'nadie' && socios.some(s => s.activo !== false)) n++;
+              }
+              return n > 0 ? (
+                <span className={`text-xs px-2 py-0.5 rounded-full ${calendarioTab === 'ausencias' ? 'bg-white/20' : 'bg-red-500 text-white'}`} title="Días sin nadie disponible en los próximos 30 días">{n}</span>
+              ) : null;
+            })()}
+          </button>
         </div>
+
+        {calendarioTab === 'ausencias' && (() => {
+          /* === V78: DISPONIBILIDAD Y AUSENCIAS (vista mensual, foco en fines de semana) === */
+          const anio = mesActual.getFullYear();
+          const mes0 = mesActual.getMonth();
+          const ultimoDia = new Date(anio, mes0 + 1, 0).getDate();
+          const activos = socios.filter(s => s.activo !== false);
+          const hoyIsoD = isoLocal(new Date());
+          const letras = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
+          const nombresDia = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+          const mesNombre = mesActual.toLocaleDateString('es-ES', { month: 'long' });
+          
+          if (activos.length === 0) {
+            return (
+              <Card className="p-8 text-center">
+                <Users size={48} className="mx-auto text-neutral-300 mb-4" />
+                <h3 className="text-lg font-bold text-neutral-900 mb-2">No hay socios registrados</h3>
+                <p className="text-sm text-neutral-500 mb-4">Crea los socios para poder ver su disponibilidad</p>
+                <Button onClick={() => setShowModal('socio')}><UserPlus size={18} />Añadir socio</Button>
+              </Card>
+            );
+          }
+          
+          const dias = Array.from({ length: ultimoDia }, (_, i) => {
+            const f = new Date(anio, mes0, i + 1);
+            const iso = isoLocal(f);
+            return { dia: i + 1, iso, dow: f.getDay(), r: resumenDisponibilidadDia(iso) };
+          });
+          const findes = findesDelMes(anio, mes0).map(f => {
+            const rs = f.dias.map(x => ({ ...x, r: resumenDisponibilidadDia(x.iso) }));
+            const enMes = rs.filter(x => x.enMes);
+            const peor = enMes.some(x => x.r.cobertura === 'nadie') ? 'nadie' : enMes.some(x => x.r.cobertura === 'uno') ? 'uno' : 'ok';
+            return { ...f, rs, peor };
+          });
+          const diasSinNadie = dias.filter(d => d.r.cobertura === 'nadie');
+          const diasSolo1 = dias.filter(d => d.r.cobertura === 'uno');
+          const findesCubiertos = findes.filter(f => f.peor === 'ok').length;
+          const diasConAusencias = dias.filter(d => d.r.ausentes.length > 0 || d.r.parciales.length > 0).length;
+          const isoIni = dias[0].iso;
+          const isoFin = dias[dias.length - 1].iso;
+          const ausenciasMes = ausenciasSocios
+            .filter(a => a.fecha_fin >= isoIni && a.fecha_inicio <= isoFin)
+            .sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
+          const diasEntre = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000) + 1;
+          
+          return (
+            <>
+              {/* Navegación + acciones */}
+              <Card className="p-3">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => cambiarMes(-1)} className="p-2 hover:bg-neutral-100 rounded-lg" title="Mes anterior"><ChevronDown size={20} className="rotate-90" /></button>
+                    <div className="text-center min-w-[170px]">
+                      <h2 className="text-lg font-bold text-neutral-900 capitalize">{mesActual.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</h2>
+                      <button onClick={() => setMesCalendario(new Date())} className="text-xs text-orange-600 hover:underline">Ir a este mes</button>
+                    </div>
+                    <button onClick={() => cambiarMes(1)} className="p-2 hover:bg-neutral-100 rounded-lg" title="Mes siguiente"><ChevronDown size={20} className="-rotate-90" /></button>
+                  </div>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button variant="secondary" size="sm" onClick={() => { setEditingItem(null); setShowModal('ausencia'); }} className="text-amber-700 border-amber-300 bg-amber-50">
+                      <Plus size={16} /> Marcar ausencia
+                    </Button>
+                    <Button size="sm" onClick={() => generarPDFCalendarioMes(mesActual)} className="bg-emerald-700 hover:bg-emerald-800">
+                      <Printer size={16} /> Imprimir mes (PDF)
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+              
+              {/* KPIs */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Card className={`p-4 ${findes.length > 0 && findesCubiertos === findes.length ? 'bg-green-50 border-green-300' : 'bg-amber-50 border-amber-300'}`}>
+                  <p className="text-xs uppercase tracking-wide font-bold text-neutral-600">Fines de semana cubiertos</p>
+                  <p className="text-2xl font-black text-neutral-900">{findesCubiertos}<span className="text-base text-neutral-400">/{findes.length}</span></p>
+                  <p className="text-[11px] text-neutral-500">2 o más socios cada vie, sáb y dom</p>
+                </Card>
+                <Card className={`p-4 ${diasSinNadie.length > 0 ? 'bg-red-50 border-red-300' : ''}`}>
+                  <p className={`text-xs uppercase tracking-wide font-bold ${diasSinNadie.length > 0 ? 'text-red-700' : 'text-neutral-600'}`}>Días sin nadie</p>
+                  <p className={`text-2xl font-black ${diasSinNadie.length > 0 ? 'text-red-700' : 'text-green-700'}`}>{diasSinNadie.length}</p>
+                  <p className="text-[11px] text-neutral-500">todos los socios fuera</p>
+                </Card>
+                <Card className={`p-4 ${diasSolo1.length > 0 ? 'bg-amber-50 border-amber-300' : ''}`}>
+                  <p className="text-xs uppercase tracking-wide font-bold text-neutral-600">Días con 1 solo socio</p>
+                  <p className={`text-2xl font-black ${diasSolo1.length > 0 ? 'text-amber-700' : 'text-neutral-900'}`}>{diasSolo1.length}</p>
+                  <p className="text-[11px] text-neutral-500">cobertura justa</p>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs uppercase tracking-wide font-bold text-neutral-600">Días con ausencias</p>
+                  <p className="text-2xl font-black text-neutral-900">{diasConAusencias}<span className="text-base text-neutral-400">/{ultimoDia}</span></p>
+                  <p className="text-[11px] text-neutral-500">{ausenciasMes.length} ausencia{ausenciasMes.length !== 1 ? 's' : ''} este mes</p>
+                </Card>
+              </div>
+              
+              {diasSinNadie.length > 0 && (
+                <Card className="p-3 bg-red-50 border-2 border-red-300">
+                  <p className="text-sm font-bold text-red-800 flex items-center gap-2"><AlertTriangle size={16} /> Días sin ningún socio disponible</p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {diasSinNadie.map(d => (
+                      <span key={d.iso} className="text-xs px-2 py-1 rounded-lg bg-white border border-red-300 text-red-700 font-semibold">
+                        {nombresDia[d.dow]} {d.dia}{d.r.entregas.length > 0 ? ` · 🚚 ${d.r.entregas.length}` : ''}{d.r.tareas.length > 0 ? ` · 🌱 ${d.r.tareas.length}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-red-700 mt-1.5">Revisa esas ausencias o busca a alguien que cubra (sobre todo si hay entregas o tareas de producción).</p>
+                </Card>
+              )}
+              
+              {/* Matriz socio × día */}
+              <Card className="p-4">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <h3 className="font-bold text-neutral-900 flex items-center gap-2"><Users size={18} className="text-orange-500" /> Quién está cada día</h3>
+                  <div className="flex flex-wrap gap-3 text-[11px] text-neutral-600">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 border border-green-300"></span>Disponible</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-300"></span>Con turno</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-200"></span>Unas horas fuera</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-200"></span>Ausente</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-100 border border-orange-300"></span>Vie/Sáb/Dom</span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto pb-1">
+                  <table className="border-separate" style={{ borderSpacing: '2px' }}>
+                    <thead>
+                      <tr>
+                        <th className="sticky left-0 bg-white z-10 min-w-[92px]"></th>
+                        {dias.map(d => (
+                          <th key={d.iso} className={`min-w-[30px] rounded-t-md px-0.5 py-1 ${d.r.esFinde ? 'bg-orange-100 text-orange-800' : 'text-neutral-500'} ${d.iso === hoyIsoD ? 'ring-2 ring-orange-500' : ''}`}>
+                            <div className="text-[9px] font-semibold leading-none">{letras[d.dow]}</div>
+                            <div className="text-xs font-bold leading-tight">{d.dia}</div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activos.map((s, idx) => (
+                        <tr key={s.id}>
+                          <td className="sticky left-0 bg-white z-10 pr-2">
+                            <div className="flex items-center gap-1.5 text-sm font-semibold whitespace-nowrap">
+                              <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: colorSocio(s, idx) }}></span>
+                              {nombreCortoSocio(s)}
+                            </div>
+                          </td>
+                          {dias.map(d => {
+                            const e = estadoSocioDia(s.id, d.iso);
+                            const turnosS = d.r.turnos.filter(t => t.socio_id === s.id);
+                            let cls, contenido, titulo, onClick;
+                            if (e.estado === 'ausente') {
+                              const info = TIPOS_AUSENCIA_INFO[e.ausencia.tipo] || TIPOS_AUSENCIA_INFO.otro;
+                              cls = 'bg-red-200 hover:bg-red-300 text-red-800';
+                              contenido = info.icon;
+                              titulo = `${s.nombre} · ${info.label}${e.ausencia.motivo ? ': ' + e.ausencia.motivo : ''} (${formatDate(e.ausencia.fecha_inicio)} → ${formatDate(e.ausencia.fecha_fin)}) · clic para editar`;
+                              onClick = () => { setEditingItem(e.ausencia); setShowModal('ausencia'); };
+                            } else if (e.estado === 'parcial') {
+                              cls = 'bg-amber-200 hover:bg-amber-300 text-amber-900';
+                              contenido = '½';
+                              titulo = `${s.nombre} fuera de ${(e.ausencia.hora_inicio || '').slice(0, 5)} a ${(e.ausencia.hora_fin || '').slice(0, 5)}${e.ausencia.motivo ? ' · ' + e.ausencia.motivo : ''} · clic para editar`;
+                              onClick = () => { setEditingItem(e.ausencia); setShowModal('ausencia'); };
+                            } else {
+                              cls = turnosS.length > 0 ? 'bg-green-300 hover:bg-green-400 text-green-900' : 'bg-green-100 hover:bg-green-200 text-green-500';
+                              contenido = turnosS.length > 0 ? (tiposTurno[turnosS[0].tipo] || tiposTurno.otros).icon + (turnosS.length > 1 ? '+' : '') : '·';
+                              titulo = `${s.nombre} disponible${turnosS.length ? ' · turnos: ' + turnosS.map(t => `${(tiposTurno[t.tipo] || tiposTurno.otros).label}${t.hora ? ' ' + t.hora.slice(0, 5) : ''}`).join(', ') : ''} · clic para marcar ausencia`;
+                              onClick = () => { setEditingItem({ socio_id: s.id, fecha_inicio: d.iso, fecha_fin: d.iso }); setShowModal('ausencia'); };
+                            }
+                            return (
+                              <td key={d.iso} className="p-0">
+                                <button
+                                  onClick={onClick}
+                                  title={titulo}
+                                  className={`w-full h-8 min-w-[30px] rounded-md text-xs font-bold transition-colors ${cls} ${d.r.esFinde ? 'ring-1 ring-orange-300' : ''} ${d.iso < hoyIsoD ? 'opacity-50' : ''}`}
+                                >
+                                  {contenido}
+                                </button>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                      <tr>
+                        <td className="sticky left-0 bg-white z-10 pr-2 text-xs font-bold text-neutral-600 whitespace-nowrap">Disponibles</td>
+                        {dias.map(d => (
+                          <td key={d.iso} className="p-0">
+                            <div
+                              className={`h-7 rounded-md flex items-center justify-center text-xs font-black ${d.r.cobertura === 'nadie' ? 'bg-red-500 text-white' : d.r.cobertura === 'uno' ? 'bg-amber-300 text-amber-900' : 'bg-green-500 text-white'}`}
+                              title={`${d.r.nDisp} de ${d.r.totalSocios} disponibles todo el día`}
+                            >
+                              {d.r.nDisp}
+                            </div>
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="sticky left-0 bg-white z-10 pr-2 text-xs font-semibold text-blue-700 whitespace-nowrap">🚚 Entregas</td>
+                        {dias.map(d => (
+                          <td key={d.iso} className="text-center text-[11px] font-bold text-blue-700" title={d.r.entregas.map(p => clientes.find(c => c.id === p.cliente_id)?.nombre).filter(Boolean).join(', ')}>
+                            {d.r.entregas.length || ''}
+                          </td>
+                        ))}
+                      </tr>
+                      <tr>
+                        <td className="sticky left-0 bg-white z-10 pr-2 text-xs font-semibold text-green-700 whitespace-nowrap">🌱 Producción</td>
+                        {dias.map(d => (
+                          <td key={d.iso} className="text-center text-[11px] font-bold text-green-700" title={`${d.r.tareas.length} tarea(s) de producción pendientes`}>
+                            {d.r.tareas.length || ''}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[11px] text-neutral-400 mt-2">Clic en un día disponible → marcar ausencia de ese socio ese día · Clic en una ausencia → editarla · Pasa el ratón para ver el detalle</p>
+              </Card>
+              
+              {/* Fines de semana */}
+              <Card className="p-4">
+                <h3 className="font-bold text-neutral-900 mb-3 flex items-center gap-2"><Sun size={18} className="text-orange-500" /> Fines de semana de {mesNombre}</h3>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {findes.map(f => {
+                    const d0 = f.dias[0].fecha, d2 = f.dias[2].fecha;
+                    return (
+                      <div key={f.clave} className={`rounded-xl border-2 p-3 ${f.peor === 'nadie' ? 'border-red-300 bg-red-50/50' : f.peor === 'uno' ? 'border-amber-300 bg-amber-50/50' : 'border-green-200 bg-green-50/40'}`}>
+                        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                          <p className="font-bold text-sm text-neutral-900">
+                            Vie {d0.getDate()} {d0.toLocaleDateString('es-ES', { month: 'short' })} – Dom {d2.getDate()} {d2.toLocaleDateString('es-ES', { month: 'short' })}
+                          </p>
+                          <Badge className={f.peor === 'nadie' ? 'bg-red-100 text-red-700' : f.peor === 'uno' ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-700'}>
+                            {f.peor === 'nadie' ? '🚨 Hay días sin nadie' : f.peor === 'uno' ? '⚠️ Cobertura justa' : '✅ Cubierto'}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {f.rs.map(x => (
+                            <div key={x.iso} className={`bg-white rounded-lg border p-2 flex flex-col ${!x.enMes ? 'opacity-50' : ''} ${x.r.cobertura === 'nadie' ? 'border-red-400' : 'border-neutral-200'}`}>
+                              <p className="text-xs font-bold text-neutral-800">
+                                {nombresDia[x.fecha.getDay()]} {x.fecha.getDate()}
+                                {!x.enMes && <span className="font-normal text-neutral-400"> (otro mes)</span>}
+                              </p>
+                              <div className="mt-1 space-y-0.5 flex-1">
+                                {x.r.disponibles.map(a => (
+                                  <div key={a.socio.id} className="flex items-center gap-1 text-[11px] text-neutral-800">
+                                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: a.color }}></span>
+                                    <span className="truncate">{nombreCortoSocio(a.socio)}</span>
+                                    {x.r.parciales.includes(a) && <span className="text-amber-600 font-bold" title={`Fuera ${(a.ausencia.hora_inicio || '').slice(0, 5)}-${(a.ausencia.hora_fin || '').slice(0, 5)}`}>½</span>}
+                                  </div>
+                                ))}
+                                {x.r.ausentes.map(a => (
+                                  <div key={a.socio.id} className="flex items-center gap-1 text-[11px] text-red-600" title={a.ausencia.motivo || ''}>
+                                    <span className="flex-shrink-0">✗</span>
+                                    <span className="truncate">{nombreCortoSocio(a.socio)}</span>
+                                    <span>{(TIPOS_AUSENCIA_INFO[a.ausencia.tipo] || TIPOS_AUSENCIA_INFO.otro).icon}</span>
+                                  </div>
+                                ))}
+                                {x.r.disponibles.length === 0 && <p className="text-[11px] font-bold text-red-600">Nadie disponible</p>}
+                              </div>
+                              {x.r.turnos.length > 0 && (
+                                <div className="mt-1 pt-1 border-t border-neutral-100 space-y-0.5">
+                                  {x.r.turnos.slice(0, 3).map(t => {
+                                    const so = socios.find(z => z.id === t.socio_id);
+                                    const tp = tiposTurno[t.tipo] || tiposTurno.otros;
+                                    return (
+                                      <div key={t.id} onClick={() => { setEditingItem(t); setShowModal('turno'); }} className={`text-[10px] text-neutral-600 truncate cursor-pointer hover:text-orange-600 ${t.completado ? 'line-through opacity-60' : ''}`}>
+                                        {tp.icon} {nombreCortoSocio(so)}{t.hora ? ` ${t.hora.slice(0, 5)}` : ''}
+                                      </div>
+                                    );
+                                  })}
+                                  {x.r.turnos.length > 3 && <p className="text-[10px] text-neutral-400">+{x.r.turnos.length - 3} más</p>}
+                                </div>
+                              )}
+                              {(x.r.entregas.length > 0 || x.r.tareas.length > 0) && (
+                                <p className="mt-1 text-[10px] font-semibold">
+                                  {x.r.entregas.length > 0 && <span className="text-blue-700">🚚 {x.r.entregas.length} </span>}
+                                  {x.r.tareas.length > 0 && <span className="text-green-700">🌱 {x.r.tareas.length}</span>}
+                                </p>
+                              )}
+                              <div className="flex gap-1 mt-1.5">
+                                <button onClick={() => { setEditingItem({ fecha: x.iso }); setShowModal('turno'); }} className="flex-1 text-[10px] px-1 py-0.5 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 font-semibold">+ turno</button>
+                                <button onClick={() => { setEditingItem({ fecha_inicio: x.iso, fecha_fin: x.iso }); setShowModal('ausencia'); }} className="flex-1 text-[10px] px-1 py-0.5 rounded bg-red-50 text-red-600 hover:bg-red-100 font-semibold">+ ausencia</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+              
+              {/* Resumen por socio + ausencias del mes */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <Card className="p-4">
+                  <h3 className="font-bold text-neutral-900 mb-3 flex items-center gap-2"><BarChart3 size={18} className="text-orange-500" /> Reparto de {mesNombre} por socio</h3>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[11px] text-neutral-500 border-b">
+                        <th className="text-left py-1.5 font-semibold">Socio</th>
+                        <th className="text-center font-semibold">Días fuera</th>
+                        <th className="text-center font-semibold">Fuera en finde</th>
+                        <th className="text-center font-semibold">Turnos</th>
+                        <th className="text-center font-semibold">Turnos en finde</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activos.map((s, idx) => {
+                        let fuera = 0, fueraFinde = 0, tMes = 0, tFinde = 0;
+                        dias.forEach(d => {
+                          if (estadoSocioDia(s.id, d.iso).estado === 'ausente') { fuera++; if (d.r.esFinde) fueraFinde++; }
+                          const n = d.r.turnos.filter(t => t.socio_id === s.id).length;
+                          tMes += n; if (d.r.esFinde) tFinde += n;
+                        });
+                        return (
+                          <tr key={s.id} className="border-b border-neutral-100">
+                            <td className="py-2">
+                              <div className="flex items-center gap-1.5 font-semibold">
+                                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: colorSocio(s, idx) }}></span>
+                                {nombreCortoSocio(s)}
+                              </div>
+                            </td>
+                            <td className="text-center">{fuera}</td>
+                            <td className="text-center">{fueraFinde > 0 ? <span className="font-bold text-orange-700">{fueraFinde}</span> : 0}</td>
+                            <td className="text-center">{tMes}</td>
+                            <td className="text-center font-semibold">{tFinde}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-neutral-400 mt-2">Sirve para repartir los fines de semana de forma equilibrada entre los socios.</p>
+                </Card>
+                
+                <Card className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-bold text-neutral-900 flex items-center gap-2"><Calendar size={18} className="text-amber-500" /> Ausencias de {mesNombre} ({ausenciasMes.length})</h3>
+                  </div>
+                  <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                    {ausenciasMes.length === 0 ? (
+                      <div className="text-center py-6">
+                        <p className="text-neutral-400 text-sm mb-2">Sin ausencias este mes</p>
+                        <button onClick={() => { setEditingItem(null); setShowModal('ausencia'); }} className="text-xs text-amber-600 hover:underline font-medium">+ Marcar ausencia</button>
+                      </div>
+                    ) : ausenciasMes.map(a => {
+                      const idxS = activos.findIndex(x => x.id === a.socio_id);
+                      const so = socios.find(x => x.id === a.socio_id);
+                      const info = TIPOS_AUSENCIA_INFO[a.tipo] || TIPOS_AUSENCIA_INFO.otro;
+                      const nDias = diasEntre(a.fecha_inicio, a.fecha_fin);
+                      let nFinde = 0;
+                      for (let k = 0; k < nDias && k < 400; k++) {
+                        const [yy, mm, dd] = a.fecha_inicio.split('-').map(Number);
+                        const f = new Date(yy, mm - 1, dd + k);
+                        if ([5, 6, 0].includes(f.getDay())) nFinde++;
+                      }
+                      const enCurso = a.fecha_inicio <= hoyIsoD && a.fecha_fin >= hoyIsoD;
+                      return (
+                        <div key={a.id} onClick={() => { setEditingItem(a); setShowModal('ausencia'); }} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer hover:shadow-sm ${enCurso ? 'bg-red-50 border-red-300' : 'bg-amber-50/60 border-amber-200'}`}>
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs flex-shrink-0" style={{ backgroundColor: colorSocio(so, idxS >= 0 ? idxS : 0) }}>
+                            {so?.nombre?.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-semibold text-sm">{nombreCortoSocio(so) || '—'}</span>
+                              <span className="text-xs">{info.icon} {info.label}</span>
+                              {enCurso && <Badge className="bg-red-500 text-white text-[10px]">EN CURSO</Badge>}
+                              {a.todo_el_dia === false && <Badge className="bg-amber-100 text-amber-800 text-[10px]">{(a.hora_inicio || '').slice(0, 5)}-{(a.hora_fin || '').slice(0, 5)}</Badge>}
+                            </div>
+                            <p className="text-xs text-neutral-600">
+                              {formatDate(a.fecha_inicio)} → {formatDate(a.fecha_fin)} · {nDias} día{nDias !== 1 ? 's' : ''}{nFinde > 0 ? ` (${nFinde} en finde)` : ''}
+                            </p>
+                            {a.motivo && <p className="text-xs text-neutral-500 italic truncate">"{a.motivo}"</p>}
+                          </div>
+                          <button
+                            onClick={async (ev) => {
+                              ev.stopPropagation();
+                              if (window.confirm('¿Eliminar esta ausencia?')) {
+                                await supabase.from('ausencias_socios').delete().eq('id', a.id);
+                                refetchAusenciasSocios();
+                              }
+                            }}
+                            className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded flex-shrink-0"
+                            title="Eliminar"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              </div>
+            </>
+          );
+        })()}
 
         {calendarioTab === 'eventos' && (
           /* === VISTA EVENTOS === */
@@ -16956,7 +17767,7 @@ ${logoRootflow}^FS
                                         style={{borderLeft: `2px solid ${socio?.color || '#DC2626'}`}}
                                         title={`${socio?.nombre} - ${a.tipo}${a.motivo ? ': ' + a.motivo : ''}`}
                                       >
-                                        {tipoIcon}
+                                        {tipoIcon}<span className="font-bold ml-0.5">{socio?.nombre?.charAt(0).toUpperCase()}</span>
                                       </span>
                                     );
                                   })}
@@ -17483,12 +18294,13 @@ ${logoRootflow}^FS
           <Modal title={editingItem?.id ? 'Editar Ausencia' : 'Marcar Ausencia / Día Libre'} onClose={() => { setShowModal(null); setEditingItem(null); }}>
             <AusenciaForm 
               ausencia={editingItem?.id ? editingItem : null} 
-              socioInicial={editingItem?.socio_id}
+              socioInicial={editingItem?.id ? undefined : editingItem?.socio_id}
+              fechaInicial={editingItem?.id ? undefined : editingItem?.fecha_inicio}
+              fechaFinInicial={editingItem?.id ? undefined : editingItem?.fecha_fin}
               onSave={async (form) => {
                 try {
                   // Limpiar campos: TIME vacío en Postgres da error
-                  const datos = {
-                    socio_id: form.socio_id,
+                  const base = {
                     fecha_inicio: form.fecha_inicio,
                     fecha_fin: form.fecha_fin,
                     tipo: form.tipo,
@@ -17498,13 +18310,13 @@ ${logoRootflow}^FS
                     hora_fin: form.todo_el_dia ? null : (form.hora_fin || null),
                   };
                   
-                  console.log('📤 Guardando ausencia:', datos);
-                  
                   let result;
                   if (editingItem?.id) {
-                    result = await supabase.from('ausencias_socios').update(datos).eq('id', editingItem.id).select();
+                    result = await supabase.from('ausencias_socios').update({ ...base, socio_id: form.socio_id }).eq('id', editingItem.id).select();
                   } else {
-                    result = await supabase.from('ausencias_socios').insert(datos).select();
+                    // V78: una fila por cada socio marcado
+                    const ids = Array.isArray(form.socio_ids) && form.socio_ids.length > 0 ? form.socio_ids : [form.socio_id];
+                    result = await supabase.from('ausencias_socios').insert(ids.map(id => ({ ...base, socio_id: id }))).select();
                   }
                   
                   if (result.error) {
@@ -17525,11 +18337,11 @@ ${logoRootflow}^FS
                     return;
                   }
                   
-                  console.log('✅ Ausencia guardada:', result.data);
                   refetchAusenciasSocios();
                   setShowModal(null);
                   setEditingItem(null);
-                  alert(`✅ Ausencia ${editingItem?.id ? 'actualizada' : 'registrada'}`);
+                  const nGuardadas = Array.isArray(result.data) ? result.data.length : 1;
+                  alert(`✅ Ausencia ${editingItem?.id ? 'actualizada' : nGuardadas > 1 ? `registrada para ${nGuardadas} socios` : 'registrada'}`);
                 } catch (e) { 
                   console.error('Error general:', e);
                   alert('❌ Error: ' + (e.message || String(e))); 
