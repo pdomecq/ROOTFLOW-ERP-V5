@@ -3276,9 +3276,9 @@ const MainApp = () => {
             alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
           }
         }
-        // V76: fallback si faltan las columnas de portes en clientes
-        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.coste_porte !== undefined || form.porte_gratis_desde !== undefined)) {
-          const { coste_porte, porte_gratis_desde, ...sinPortes } = form;
+        // V76/V79: fallback si faltan las columnas de portes o de descuentos por fechas en clientes
+        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.coste_porte !== undefined || form.porte_gratis_desde !== undefined || form.descuentos_fechas !== undefined)) {
+          const { coste_porte, porte_gratis_desde, descuentos_fechas, ...sinPortes } = form;
           if (id) {
             result = await supabase.from(table).update(sinPortes).eq('id', id);
           } else {
@@ -3286,7 +3286,7 @@ const MainApp = () => {
             if (result.data && result.data[0]) newRecordId = result.data[0].id;
           }
           if (!result.error) {
-            alert('⚠️ Cliente guardado, pero el porte no se ha registrado.\n\nEjecuta el SQL V76 en Supabase para activar los portes.');
+            alert('⚠️ Cliente guardado, pero los portes y/o los descuentos por fechas no se han registrado.\n\nEjecuta los SQL V76 y V79 en Supabase.');
           }
         }
         if (result.error) {
@@ -4288,7 +4288,7 @@ ${pedidoLinea ? `^FO260,258
   const handleCreatePedido = async (form) => {
     try {
       const cliente = clientes.find(c => c.id === form.cliente_id);
-      const descuento = cliente?.descuento || 0;
+      const descuento = descuentoClienteEnFecha(cliente, form.fecha_entrega || form.fecha);   // V79
       let subtotal = 0;
       const itemsData = form.items.map(item => {
         // V72 FIX: usar la tarifa especial del cliente (antes usaba el precio base y las tarifas se ignoraban)
@@ -4602,11 +4602,65 @@ ${pedidoLinea ? `^FO260,258
             { value: 'autonomo', label: '👤 Autónomo (persona física)' },
           ]} />
           <Select label="Zona" value={form.zona} onChange={e => setForm({...form, zona: e.target.value})} options={Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }))} />
-          <Input label="Descuento (%)" type="number" value={form.descuento} onChange={e => setForm({...form, descuento: parseInt(e.target.value) || 0})} />
+          <Input label="Descuento general (%)" type="number" step="0.5" value={form.descuento} onChange={e => setForm({...form, descuento: parseFloat(e.target.value) || 0})} />
           <Input label="Dirección" className="col-span-2" value={form.direccion} onChange={e => setForm({...form, direccion: e.target.value})} />
           <Input label="Código Postal" value={form.codigo_postal} onChange={e => setForm({...form, codigo_postal: e.target.value})} placeholder="28001" />
           <Input label="Ciudad" value={form.ciudad} onChange={e => setForm({...form, ciudad: e.target.value})} />
         </div>
+
+        {/* V79: Descuentos por fechas */}
+        {(() => {
+          const tramos = Array.isArray(form.descuentos_fechas) ? form.descuentos_fechas : [];
+          const setTramos = (t) => setForm({ ...form, descuentos_fechas: t });
+          const ordenados = [...tramos].map((t, i) => ({ ...t, _i: i })).sort((a, b) => String(a.hasta || '9999').localeCompare(String(b.hasta || '9999')));
+          const fmt = (iso) => iso ? iso.split('-').reverse().join('/') : '—';
+          return (
+            <div className="border border-orange-200 rounded-xl p-4 bg-orange-50/50">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <p className="text-sm font-bold text-orange-900">📅 Descuentos por fechas <span className="font-normal text-orange-700">(opcional)</span></p>
+                  <p className="text-[11px] text-orange-700">Para condiciones que cambian: "hasta el 20/09 un 20 %, después el general". Se aplica según la fecha de entrega.</p>
+                </div>
+                <button type="button" onClick={() => setTramos([...tramos, { hasta: '', pct: form.descuento || 0 }])} className="text-xs px-2.5 py-1.5 rounded-lg bg-white border border-orange-300 text-orange-700 font-semibold hover:bg-orange-100">
+                  + Añadir tramo
+                </button>
+              </div>
+              {tramos.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {tramos.map((t, i) => (
+                    <div key={i} className="flex items-end gap-2 bg-white rounded-lg p-2 border border-orange-200">
+                      <div className="flex-1">
+                        <label className="block text-[11px] font-semibold text-neutral-600 mb-0.5">Entregas hasta el (incluido)</label>
+                        <input type="date" value={t.hasta || ''} onChange={e => setTramos(tramos.map((x, k) => k === i ? { ...x, hasta: e.target.value } : x))} className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 text-sm" />
+                      </div>
+                      <div className="w-24">
+                        <label className="block text-[11px] font-semibold text-neutral-600 mb-0.5">Descuento %</label>
+                        <input type="number" step="0.5" min="0" max="100" value={t.pct ?? ''} onChange={e => setTramos(tramos.map((x, k) => k === i ? { ...x, pct: e.target.value === '' ? '' : parseFloat(e.target.value) } : x))} className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 text-sm text-right" />
+                      </div>
+                      <button type="button" onClick={() => setTramos(tramos.filter((_, k) => k !== i))} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Quitar tramo"><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                  {/* Resumen legible */}
+                  <div className="text-[11px] text-orange-900 bg-white/70 rounded-lg p-2">
+                    {(() => {
+                      const validos = ordenados.filter(t => t.hasta && t.pct !== '' && t.pct !== null && t.pct !== undefined);
+                      if (validos.length === 0) return 'Completa la fecha y el % de cada tramo.';
+                      const partes = [];
+                      let desde = null;
+                      validos.forEach(t => {
+                        partes.push(`${desde ? `del ${fmt(desde)} ` : ''}hasta el ${fmt(t.hasta)}: ${t.pct}%`);
+                        const d = new Date(t.hasta + 'T12:00:00'); d.setDate(d.getDate() + 1);
+                        desde = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                      });
+                      partes.push(`desde el ${fmt(desde)}: ${form.descuento || 0}% (general)`);
+                      return <>Resultado → {partes.join(' · ')}</>;
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* CONTACTO PRINCIPAL */}
         <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50">
@@ -5595,7 +5649,7 @@ ${pedidoLinea ? `^FO260,258
       const precio = getPrecioCliente(item.producto_id, form.cliente_id);
       return sum + precio * item.cantidad; 
     }, 0);
-    const descuento = cliente?.descuento || 0;
+    const descuento = descuentoClienteEnFecha(cliente, form.fecha_entrega || form.fecha);   // V79
     const total = subtotal * (1 - descuento / 100);
     
     return (
@@ -10321,8 +10375,8 @@ ${pedidoLinea ? `^FO260,258
         return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: precioUnitario, subtotal };
       });
 
-      // Aplicar descuento del cliente
-      const descuento = cliente?.descuento || 0;
+      // Aplicar descuento del cliente (V79: el que toque por fecha; el pedido se entrega hoy)
+      const descuento = descuentoClienteEnFecha(cliente, new Date().toISOString().split('T')[0]);
       total = total * (1 - descuento / 100);
 
       // Crear pedido
@@ -10981,7 +11035,7 @@ ${pedidoLinea ? `^FO260,258
   };
 
   // Componente para ver factura
-  const FacturaPreview = ({ factura, cliente, pedidoItemsList, onDescargarAlbaranes, onRecalcular, onClose }) => {
+  const FacturaPreview = ({ factura, cliente, pedidoItemsList, onDescargarAlbaranes, onRecalcular, onCorregir, onClose }) => {
     const items = pedidoItemsList.filter(i => i.pedido_id === factura.pedido_id);
     const logoUrl = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
     
@@ -11263,6 +11317,11 @@ ${pedidoLinea ? `^FO260,258
             {factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0 && onDescargarAlbaranes && (
               <Button variant="secondary" onClick={() => onDescargarAlbaranes(factura)} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
                 🗂️ Albaranes (ZIP)
+              </Button>
+            )}
+            {((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && onCorregir && (
+              <Button variant="secondary" onClick={() => { onCorregir(factura); onClose(); }} className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                <Edit2 size={16} /> Corregir dto / portes
               </Button>
             )}
             {((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && onRecalcular && (
@@ -11975,6 +12034,9 @@ ${transacciones}
                         {factura.tipo !== 'agrupada' && factura.pedido_id && (
                           <button onClick={() => recalcularFacturaPedido(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales del cliente"><Calculator size={16} /></button>
                         )}
+                        {((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && (
+                          <button onClick={() => { setEditingItem(factura); setShowModal('corregirFactura'); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Corregir descuento y portes de esta factura"><Edit2 size={16} /></button>
+                        )}
                         {factura.estado === 'pendiente' && (
                           <button 
                             onClick={() => registrarCobro(factura.id)} 
@@ -12012,6 +12074,7 @@ ${transacciones}
             pedidoItemsList={pedidoItems}
             onDescargarAlbaranes={descargarZipAlbaranesFactura}
             onRecalcular={(f) => f.tipo === 'agrupada' ? recalcularFacturaAgrupada(f) : recalcularFacturaPedido(f)}
+            onCorregir={(f) => { setEditingItem(f); setShowModal('corregirFactura'); }}
             onClose={() => setSelectedFactura(null)} 
           />
         )}
@@ -21081,6 +21144,24 @@ SELECT cron.schedule(
     return Math.round(porte * 100) / 100;
   };
   
+  // ==================== V79 — DESCUENTO POR FECHAS ====================
+  // Tramos del cliente: [{ hasta: 'YYYY-MM-DD', pct: 20 }] → hasta esa fecha (incluida) se aplica ese %.
+  // Pasadas todas las fechas, se aplica el descuento general del cliente (campo 'descuento').
+  const descuentoClienteEnFecha = (cli, fechaIso) => {
+    const general = parseFloat(cli?.descuento) || 0;
+    const tramos = (Array.isArray(cli?.descuentos_fechas) ? cli.descuentos_fechas : [])
+      .filter(t => t && t.hasta && t.pct !== null && t.pct !== undefined && t.pct !== '');
+    if (!fechaIso || tramos.length === 0) return general;
+    const ordenados = [...tramos].sort((a, b) => String(a.hasta).localeCompare(String(b.hasta)));
+    const tramo = ordenados.find(t => String(fechaIso).slice(0, 10) <= String(t.hasta).slice(0, 10));
+    return tramo ? (parseFloat(tramo.pct) || 0) : general;
+  };
+  // Fecha que decide el descuento de un albarán: la de entrega (es la que figura en la factura)
+  const fechaReferenciaAlbaran = (a) => a?.fecha_entrega_real || a?.fecha_entrega_prevista || a?.fecha_emision || null;
+  // % de descuento de un albarán: el fijado a mano en ese albarán, o el que toque al cliente por fecha
+  const tieneDescuentoFijado = (x) => x?.descuento_pct !== null && x?.descuento_pct !== undefined && x?.descuento_pct !== '';
+  const descuentoPctAlbaran = (a, cli) => tieneDescuentoFijado(a) ? (parseFloat(a.descuento_pct) || 0) : descuentoClienteEnFecha(cli, fechaReferenciaAlbaran(a));
+
   // Importes canónicos de UN albarán: productos − descuento + portes → IVA una sola vez.
   // items_json solo lleva productos; los portes van aparte en coste_envio (base sin IVA,
   // mismo tipo de IVA que la mercancía por ser gasto accesorio de la entrega).
@@ -21104,7 +21185,7 @@ SELECT cron.schedule(
         });
       }
       productos = items.reduce((s, it) => s + ((parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0)), 0);
-      descuento = productos * ((cli?.descuento || 0) / 100);   // el descuento NO afecta a los portes
+      descuento = productos * (descuentoPctAlbaran(a, cli) / 100);   // V79: por fecha o fijado · NO afecta a los portes
       base = productos - descuento + porte;
     } else if (parseFloat(a.base_imponible) > 0 && parseFloat(a.base_imponible) < parseFloat(a.total || Infinity) + 0.01) {
       base = parseFloat(a.base_imponible);
@@ -21114,7 +21195,8 @@ SELECT cron.schedule(
       base = parseFloat(a.total) / factorImp;
       productos = Math.max(0, base - porte);
     }
-    return { items, lineasCambiadas, productos, descuento, porte, base, factorImp, aplicaRE };
+    const descuentoPct = productos > 0 ? Math.round((descuento / productos) * 10000) / 100 : 0;
+    return { items, lineasCambiadas, productos, descuento, descuentoPct, porte, base, factorImp, aplicaRE };
   };
   // ==================== V76 (fin helpers) ====================
 
@@ -21448,7 +21530,11 @@ SELECT cron.schedule(
       return { id: it.id, precio_unitario: precioTarifa, subtotal: Math.round(sub * 100) / 100 };
     });
     
-    const descuentoPct = cli?.descuento || 0;
+    // V79: % fijado en la factura (corrección manual) o el del cliente según la fecha de entrega del pedido
+    const pedidoFac = pedidos.find(p => p.id === factura.pedido_id);
+    const descuentoPct = tieneDescuentoFijado(factura)
+      ? (parseFloat(factura.descuento_pct) || 0)
+      : descuentoClienteEnFecha(cli, pedidoFac?.fecha_entrega || pedidoFac?.fecha || factura.fecha);
     const descuentoAplicado = subtotal * (descuentoPct / 100);
     const base = Math.round((subtotal - descuentoAplicado) * 100) / 100;
     const iva = Math.round(base * (IVA_VENTAS / 100) * 100) / 100;
@@ -21519,6 +21605,9 @@ SELECT cron.schedule(
       return {
         id: a.id,
         fecha: a.fecha_entrega_real || a.fecha_emision,
+        bruto: Math.round(r.productos * 100) / 100,                       // V79: productos antes de descuento
+        dtoPct: r.descuentoPct || 0,
+        dto: Math.round(r.descuento * 100) / 100,
         productos: Math.round((r.productos - r.descuento) * 100) / 100,
         porte: Math.round(r.porte * 100) / 100,
         base: baseA,
@@ -21527,9 +21616,15 @@ SELECT cron.schedule(
       };
     });
     const hayPortesPDF = filasPDF.some(f => f.porte > 0);
+    const hayDtoPDF = filasPDF.some(f => f.dto > 0);
     const totPortesPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.porte, 0) * 100) / 100;
     const numPortesPDF = filasPDF.filter(f => f.porte > 0).length;
     const totProductosPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.productos, 0) * 100) / 100;
+    const totBrutoPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.bruto, 0) * 100) / 100;
+    const totDtoPDF = Math.round(filasPDF.reduce((s2, f) => s2 + f.dto, 0) * 100) / 100;
+    const pctsDto = [...new Set(filasPDF.filter(f => f.dto > 0).map(f => f.dtoPct))];
+    const etiquetaDtoPDF = pctsDto.length === 1 ? `Descuento (${pctsDto[0]}%)` : 'Descuento';
+    const desglosePDF = hayPortesPDF || hayDtoPDF;
     
     const fmtF = (d) => d ? `${String(new Date(d).getDate()).padStart(2,'0')}/${String(new Date(d).getMonth()+1).padStart(2,'0')}/${new Date(d).getFullYear()}` : '';
     
@@ -21604,12 +21699,14 @@ table.lines tbody tr:nth-child(even) { background: #fafafa; }
 ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura.concepto}</div>` : ''}
 
 <table class="lines">
-  <thead><tr><th>Albarán</th><th>Fecha entrega</th>${hayPortesPDF ? '<th class="r">Productos</th><th class="r">Portes</th>' : ''}<th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
+  <thead><tr><th>Albarán</th><th>Fecha entrega</th>${desglosePDF ? '<th class="r">Productos</th>' : ''}${hayDtoPDF ? '<th class="r">Dto.</th>' : ''}${hayPortesPDF ? '<th class="r">Portes</th>' : ''}<th class="r">Base</th><th class="r">IVA</th><th class="r">Importe</th></tr></thead>
   <tbody>
     ${filasPDF.map(f => `<tr>
       <td style="font-family:'Courier New',monospace;font-weight:600">${f.id}</td>
       <td>${fmtF(f.fecha)}</td>
-      ${hayPortesPDF ? `<td class="r">${formatCurrency(f.productos)}</td><td class="r">${f.porte > 0 ? formatCurrency(f.porte) : '—'}</td>` : ''}
+      ${desglosePDF ? `<td class="r">${formatCurrency(f.bruto)}</td>` : ''}
+      ${hayDtoPDF ? `<td class="r">${f.dto > 0 ? `−${formatCurrency(f.dto)} <span style="color:#888;font-size:9px">(${f.dtoPct}%)</span>` : '—'}</td>` : ''}
+      ${hayPortesPDF ? `<td class="r">${f.porte > 0 ? formatCurrency(f.porte) : '—'}</td>` : ''}
       <td class="r">${formatCurrency(f.base)}</td>
       <td class="r">${formatCurrency(f.imp)}</td>
       <td class="r">${formatCurrency(f.total)}</td>
@@ -21619,8 +21716,9 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
 
 <div class="clear">
   <div class="totals">
-    ${hayPortesPDF ? `<div class="trow"><span class="l">Productos (neto)</span><span class="v">${formatCurrency(totProductosPDF)}</span></div>
-    <div class="trow"><span class="l">Portes (${numPortesPDF} entrega${numPortesPDF !== 1 ? 's' : ''})</span><span class="v">${formatCurrency(totPortesPDF)}</span></div>` : ''}
+    ${desglosePDF ? `<div class="trow"><span class="l">Productos</span><span class="v">${formatCurrency(totBrutoPDF)}</span></div>` : ''}
+    ${hayDtoPDF ? `<div class="trow"><span class="l">${etiquetaDtoPDF}</span><span class="v">−${formatCurrency(totDtoPDF)}</span></div>` : ''}
+    ${hayPortesPDF ? `<div class="trow"><span class="l">Portes (${numPortesPDF} entrega${numPortesPDF !== 1 ? 's' : ''})</span><span class="v">${formatCurrency(totPortesPDF)}</span></div>` : ''}
     <div class="trow"><span class="l">Base imponible</span><span class="v">${formatCurrency(factura.base_imponible || 0)}</span></div>
     <div class="trow"><span class="l">IVA (${factura.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(factura.iva || 0)}</span></div>
     ${(factura.re_importe || 0) > 0 ? `<div class="trow"><span class="l">Recargo Eq. (${RE_VENTAS}%)</span><span class="v">${formatCurrency(factura.re_importe)}</span></div>` : ''}
@@ -21643,6 +21741,289 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
   };
   
   // Modal/Form de facturas agrupadas
+  // ==================== V79 — CORREGIR FACTURA EMITIDA (descuento y portes) ====================
+  const CorregirFacturaForm = ({ factura, onCerrar }) => {
+    const r2 = (x) => Math.round((x + Number.EPSILON) * 100) / 100;
+    const cli = clientes.find(c => c.id === factura.cliente_id);
+    const aplicaRE = !!cli?.recargo_equivalencia;
+    const esAgrupada = factura.tipo === 'agrupada';
+    const [guardando, setGuardando] = useState(false);
+    const [pctTodos, setPctTodos] = useState('');
+    
+    // ---- Datos de partida ----
+    const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
+    const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
+    const basesAlb = albs.map(a => {
+      const r = calcularImportesAlbaran(a, cli);
+      const fecha = fechaReferenciaAlbaran(a);
+      return {
+        a, fecha,
+        productos: r.productos,
+        pctGuardado: parseFloat(a.subtotal) > 0 ? r2(((parseFloat(a.descuento_aplicado) || 0) / parseFloat(a.subtotal)) * 100) : 0,
+        porteGuardado: parseFloat(a.coste_envio) || 0,
+        pctRegla: descuentoClienteEnFecha(cli, fecha),
+        fijado: tieneDescuentoFijado(a),
+      };
+    });
+    const pedidoFac = !esAgrupada ? pedidos.find(p => p.id === factura.pedido_id) : null;
+    const itemsPed = !esAgrupada ? pedidoItems.filter(i => i.pedido_id === factura.pedido_id) : [];
+    const productosPed = itemsPed.reduce((s, it) => s + (parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0), 0);
+    const fechaPed = pedidoFac?.fecha_entrega || pedidoFac?.fecha || factura.fecha;
+    const pctReglaPed = descuentoClienteEnFecha(cli, fechaPed);
+    
+    // Por defecto: % fijado si lo hay; si no, el que toca por fecha. Portes: los actuales.
+    const [lineas, setLineas] = useState(() => basesAlb.map(b => ({
+      id: b.a.id,
+      pct: b.fijado ? (parseFloat(b.a.descuento_pct) || 0) : b.pctRegla,
+      porte: b.porteGuardado,
+    })));
+    const [pctPed, setPctPed] = useState(() => tieneDescuentoFijado(factura) ? (parseFloat(factura.descuento_pct) || 0) : pctReglaPed);
+    
+    // ---- Cálculo del resultado (misma fórmula que el cálculo canónico) ----
+    const calcLinea = (b, l) => {
+      const pct = Math.min(100, Math.max(0, parseFloat(l.pct) || 0));
+      const porte = Math.max(0, r2(parseFloat(l.porte) || 0));
+      const descRaw = b.productos * pct / 100;
+      const baseRaw = b.productos - descRaw + porte;
+      const base = r2(baseRaw);
+      const iva = r2(base * IVA_VENTAS / 100);
+      const re = aplicaRE ? r2(base * RE_VENTAS / 100) : 0;
+      return { pct, porte, descRaw, baseRaw, desc: r2(descRaw), base, iva, re, total: r2(base + iva + re) };
+    };
+    
+    let nuevo;
+    if (esAgrupada) {
+      const calc = basesAlb.map((b, i) => calcLinea(b, lineas[i]));
+      const base = r2(calc.reduce((s, c) => s + c.baseRaw, 0));
+      const descuento = r2(calc.reduce((s, c) => s + c.descRaw, 0));
+      const portes = r2(calc.reduce((s, c) => s + c.porte, 0));
+      const iva = r2(base * IVA_VENTAS / 100);
+      const re = aplicaRE ? r2(base * RE_VENTAS / 100) : 0;
+      nuevo = { calc, base, descuento, portes, numPortes: calc.filter(c => c.porte > 0).length, subtotal: r2(base + descuento), iva, re, total: r2(base + iva + re) };
+    } else {
+      const pct = Math.min(100, Math.max(0, parseFloat(pctPed) || 0));
+      const descRaw = productosPed * pct / 100;
+      const base = r2(productosPed - descRaw);
+      const iva = r2(base * IVA_VENTAS / 100);
+      const re = aplicaRE ? r2(base * RE_VENTAS / 100) : 0;
+      nuevo = { pct, base, descuento: r2(descRaw), subtotal: r2(productosPed), iva, re, total: r2(base + iva + re) };
+    }
+    const totalAntes = parseFloat(factura.total) || 0;
+    const diff = r2(nuevo.total - totalAntes);
+    const fmtF = (iso) => iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—';
+    
+    const aplicar = async () => {
+      if (!window.confirm(
+        `¿Aplicar la corrección a la factura ${factura.id}?\n\n` +
+        `Total antes: ${formatCurrency(totalAntes)}\nTotal nuevo: ${formatCurrency(nuevo.total)}\n` +
+        `${Math.abs(diff) < 0.01 ? '' : diff < 0 ? `⬇️ Baja ${formatCurrency(-diff)}` : `⬆️ Sube ${formatCurrency(diff)}`}\n\n` +
+        `Se mantiene el número de factura.` +
+        (factura.estado === 'pagada' ? `\n\n⚠️ Esta factura ya está COBRADA: revisa el importe cobrado con el cliente.` : '') +
+        `\nSi ya contabilizaste o presentaste el IVA de esta factura, revisa el asiento.`
+      )) return;
+      setGuardando(true);
+      let avisoSinColumna = false;
+      try {
+        if (esAgrupada) {
+          for (let i = 0; i < basesAlb.length; i++) {
+            const b = basesAlb[i]; const c = nuevo.calc[i];
+            const upd = {
+              descuento_pct: c.pct,
+              descuento_aplicado: c.desc,
+              coste_envio: c.porte,
+              subtotal: r2(b.productos),
+              base_imponible: c.base,
+              iva: c.iva,
+              re_importe: c.re,
+              total: c.total,
+            };
+            let { error } = await supabase.from('albaranes').update(upd).eq('id', b.a.id);
+            if (error && error.code === '42703') {
+              const { descuento_pct, ...sinPct } = upd;
+              avisoSinColumna = true;
+              ({ error } = await supabase.from('albaranes').update(sinPct).eq('id', b.a.id));
+            }
+            if (error) throw error;
+          }
+          // Concepto: actualizar la mención a los portes
+          const conceptoBase = String(factura.concepto || '').replace(/\s·\sincluye \d+ portes? \([^)]*\)/, '');
+          const concepto = conceptoBase + (nuevo.portes > 0 ? ` · incluye ${nuevo.numPortes} porte${nuevo.numPortes !== 1 ? 's' : ''} (${formatCurrency(nuevo.portes)})` : '');
+          const updF = {
+            subtotal: nuevo.subtotal,
+            descuento_aplicado: nuevo.descuento,
+            base_imponible: nuevo.base,
+            iva_porcentaje: IVA_VENTAS,
+            iva: nuevo.iva,
+            recargo_equivalencia: nuevo.re > 0,
+            re_porcentaje: nuevo.re > 0 ? RE_VENTAS : 0,
+            re_importe: nuevo.re,
+            total: nuevo.total,
+            portes_importe: nuevo.portes,
+            concepto,
+          };
+          let { error } = await supabase.from('facturas').update(updF).eq('id', factura.id);
+          if (error && error.code === '42703') {
+            const { portes_importe, ...sinPortes } = updF;
+            ({ error } = await supabase.from('facturas').update(sinPortes).eq('id', factura.id));
+          }
+          if (error) throw error;
+        } else {
+          const updF = {
+            subtotal: nuevo.subtotal,
+            descuento_aplicado: nuevo.descuento,
+            base_imponible: nuevo.base,
+            iva_porcentaje: IVA_VENTAS,
+            iva: nuevo.iva,
+            recargo_equivalencia: nuevo.re > 0,
+            re_porcentaje: nuevo.re > 0 ? RE_VENTAS : 0,
+            re_importe: nuevo.re,
+            total: nuevo.total,
+            descuento_pct: nuevo.pct,
+          };
+          let { error } = await supabase.from('facturas').update(updF).eq('id', factura.id);
+          if (error && error.code === '42703') {
+            const { descuento_pct, ...sinPct } = updF;
+            avisoSinColumna = true;
+            ({ error } = await supabase.from('facturas').update(sinPct).eq('id', factura.id));
+          }
+          if (error) throw error;
+          if (pedidoFac) await supabase.from('pedidos').update({ total: nuevo.base }).eq('id', pedidoFac.id);
+        }
+        refetchFacturas();
+        refetchAlbaranes();
+        refetchPedidos();
+        alert(`✅ Factura ${factura.id} corregida. Nuevo total: ${formatCurrency(nuevo.total)}` +
+          (avisoSinColumna ? `\n\n⚠️ Falta ejecutar el SQL V79: la corrección se ha aplicado, pero el % no queda "fijado" y un recálculo posterior volvería a usar la regla del cliente.` : ''));
+        onCerrar();
+      } catch (e) {
+        alert('❌ Error al corregir: ' + (e.message || String(e)));
+      } finally {
+        setGuardando(false);
+      }
+    };
+    
+    // ---- Factura agrupada sin albaranes localizables ----
+    if (esAgrupada && basesAlb.length === 0) {
+      return <p className="text-sm text-neutral-500 py-6 text-center">No se encuentran los albaranes de esta factura, no se puede corregir.</p>;
+    }
+    if (!esAgrupada && itemsPed.length === 0) {
+      return <p className="text-sm text-neutral-500 py-6 text-center">Esta factura no tiene pedido con líneas, no se puede corregir aquí.</p>;
+    }
+    
+    const hayReglaFechas = Array.isArray(cli?.descuentos_fechas) && cli.descuentos_fechas.length > 0;
+    
+    return (
+      <div className="space-y-4 max-h-[78vh] overflow-y-auto pr-1">
+        <div className="text-xs text-neutral-600 bg-neutral-50 border rounded-xl p-3">
+          <strong>{cli?.nombre}</strong> · descuento general {cli?.descuento || 0}%
+          {hayReglaFechas && <> · tramos: {cli.descuentos_fechas.map(t => `hasta ${fmtF(t.hasta)} → ${t.pct}%`).join(', ')}</>}
+          {factura.estado === 'pagada' && <span className="ml-2 text-amber-700 font-semibold">· ⚠️ factura ya cobrada</span>}
+        </div>
+        
+        {esAgrupada ? (
+          <>
+            {/* Atajos */}
+            <div className="flex flex-wrap gap-2 items-center">
+              <button type="button" onClick={() => setLineas(lineas.map(l => ({ ...l, porte: 0 })))} className="text-xs px-3 py-1.5 rounded-lg border border-sky-300 bg-sky-50 text-sky-800 font-semibold hover:bg-sky-100">🚚 Quitar todos los portes</button>
+              <button type="button" onClick={() => setLineas(lineas.map((l, i) => ({ ...l, pct: basesAlb[i].pctRegla })))} className="text-xs px-3 py-1.5 rounded-lg border border-orange-300 bg-orange-50 text-orange-800 font-semibold hover:bg-orange-100">📅 Descuentos según fecha</button>
+              <div className="flex items-center gap-1">
+                <input type="number" step="0.5" min="0" max="100" value={pctTodos} onChange={e => setPctTodos(e.target.value)} placeholder="%" className="w-16 px-2 py-1.5 rounded-lg border text-xs text-right" />
+                <button type="button" disabled={pctTodos === ''} onClick={() => setLineas(lineas.map(l => ({ ...l, pct: parseFloat(pctTodos) || 0 })))} className="text-xs px-3 py-1.5 rounded-lg border border-neutral-300 bg-white font-semibold hover:bg-neutral-50 disabled:opacity-40">Mismo % a todos</button>
+              </div>
+            </div>
+            
+            {/* Tabla de albaranes */}
+            <div className="overflow-x-auto border rounded-xl">
+              <table className="w-full text-xs">
+                <thead className="bg-neutral-50 text-neutral-600">
+                  <tr>
+                    <th className="text-left p-2">Albarán</th>
+                    <th className="text-left p-2">Entrega</th>
+                    <th className="text-right p-2">Productos</th>
+                    <th className="text-center p-2">Dto %</th>
+                    <th className="text-center p-2">Porte €</th>
+                    <th className="text-right p-2">Base</th>
+                    <th className="text-right p-2">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {basesAlb.map((b, i) => {
+                    const c = nuevo.calc[i];
+                    const cambiaPct = Math.abs(c.pct - b.pctGuardado) > 0.001;
+                    const cambiaPorte = Math.abs(c.porte - b.porteGuardado) > 0.001;
+                    return (
+                      <tr key={b.a.id} className="border-t">
+                        <td className="p-2 font-mono font-semibold">{b.a.id}</td>
+                        <td className="p-2 whitespace-nowrap">{fmtF(b.fecha)}</td>
+                        <td className="p-2 text-right">{formatCurrency(b.productos)}</td>
+                        <td className="p-2 text-center">
+                          <input type="number" step="0.5" min="0" max="100" value={lineas[i].pct}
+                            onChange={e => setLineas(lineas.map((l, k) => k === i ? { ...l, pct: e.target.value } : l))}
+                            className={`w-16 px-1.5 py-1 rounded border text-right ${cambiaPct ? 'border-orange-400 bg-orange-50' : 'border-neutral-300'}`} />
+                          <div className="text-[9px] text-neutral-400 mt-0.5">antes {b.pctGuardado}%{b.pctRegla !== b.pctGuardado ? ` · por fecha ${b.pctRegla}%` : ''}</div>
+                        </td>
+                        <td className="p-2 text-center">
+                          <input type="number" step="0.01" min="0" value={lineas[i].porte}
+                            onChange={e => setLineas(lineas.map((l, k) => k === i ? { ...l, porte: e.target.value } : l))}
+                            className={`w-16 px-1.5 py-1 rounded border text-right ${cambiaPorte ? 'border-sky-400 bg-sky-50' : 'border-neutral-300'}`} />
+                          <div className="text-[9px] text-neutral-400 mt-0.5">antes {formatCurrency(b.porteGuardado)}</div>
+                        </td>
+                        <td className="p-2 text-right">{formatCurrency(c.base)}</td>
+                        <td className="p-2 text-right font-semibold">{formatCurrency(c.total)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div className="border rounded-xl p-3 space-y-2">
+            <p className="text-sm">Pedido <strong>#{factura.pedido_id}</strong> · entrega {fmtF(fechaPed)} · {itemsPed.length} línea(s) · productos {formatCurrency(productosPed)}</p>
+            <div className="flex items-end gap-3 flex-wrap">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-600 mb-1">Descuento %</label>
+                <input type="number" step="0.5" min="0" max="100" value={pctPed} onChange={e => setPctPed(e.target.value)} className="w-24 px-2 py-1.5 rounded-lg border text-right" />
+              </div>
+              {pctReglaPed !== (parseFloat(pctPed) || 0) && (
+                <button type="button" onClick={() => setPctPed(pctReglaPed)} className="text-xs px-3 py-1.5 rounded-lg border border-orange-300 bg-orange-50 text-orange-800 font-semibold">📅 Usar el de su fecha ({pctReglaPed}%)</button>
+              )}
+            </div>
+            <p className="text-[11px] text-neutral-500">Las facturas por pedido no llevan portes (los portes van en los albaranes de clientes con facturación agrupada).</p>
+          </div>
+        )}
+        
+        {/* Antes / después */}
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="rounded-xl border p-3 bg-neutral-50">
+            <p className="text-xs font-bold text-neutral-500 uppercase mb-1">Ahora</p>
+            <p>Base: {formatCurrency(factura.base_imponible || 0)}</p>
+            {(parseFloat(factura.descuento_aplicado) || 0) > 0 && <p>Descuento: −{formatCurrency(factura.descuento_aplicado)}</p>}
+            {(parseFloat(factura.portes_importe) || 0) > 0 && <p>Portes: {formatCurrency(factura.portes_importe)}</p>}
+            <p>IVA{(parseFloat(factura.re_importe) || 0) > 0 ? ' + R.E.' : ''}: {formatCurrency((parseFloat(factura.iva) || 0) + (parseFloat(factura.re_importe) || 0))}</p>
+            <p className="font-black text-lg">{formatCurrency(totalAntes)}</p>
+          </div>
+          <div className={`rounded-xl border-2 p-3 ${Math.abs(diff) < 0.01 ? 'border-neutral-200' : 'border-emerald-400 bg-emerald-50'}`}>
+            <p className="text-xs font-bold text-emerald-700 uppercase mb-1">Corregida</p>
+            <p>Base: {formatCurrency(nuevo.base)}</p>
+            {nuevo.descuento > 0 && <p>Descuento: −{formatCurrency(nuevo.descuento)}</p>}
+            {esAgrupada && nuevo.portes > 0 && <p>Portes: {formatCurrency(nuevo.portes)}</p>}
+            <p>IVA{nuevo.re > 0 ? ' + R.E.' : ''}: {formatCurrency(nuevo.iva + nuevo.re)}</p>
+            <p className="font-black text-lg text-emerald-800">{formatCurrency(nuevo.total)}</p>
+            {Math.abs(diff) >= 0.01 && <p className={`text-xs font-bold ${diff < 0 ? 'text-green-700' : 'text-red-700'}`}>{diff < 0 ? `⬇️ ${formatCurrency(-diff)} menos` : `⬆️ ${formatCurrency(diff)} más`}</p>}
+          </div>
+        </div>
+        
+        <div className="flex justify-end gap-3 pt-3 border-t">
+          <Button variant="secondary" onClick={onCerrar}>Cancelar</Button>
+          <Button disabled={guardando} onClick={aplicar} className="bg-emerald-600 hover:bg-emerald-700">
+            {guardando ? '⏳ Guardando…' : 'Aplicar corrección'}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const FacturasAgrupadasForm = ({ onCerrar }) => {
     const grupos = calcularGruposFacturables();
     const [seleccionados, setSeleccionados] = useState(grupos.map((_, i) => i));
@@ -22603,7 +22984,7 @@ ${valorado ? `
 <div class="clearfix">
   <div class="totals">
     <div class="totals-row"><span class="l">Subtotal</span><span class="v">${formatCurrency(albaran.subtotal || 0)}</span></div>
-    ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span class="l">Descuento</span><span class="v">−${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
+    ${(albaran.descuento_aplicado || 0) > 0 ? `<div class="totals-row"><span class="l">Descuento${(() => { const p = tieneDescuentoFijado(albaran) ? parseFloat(albaran.descuento_pct) : (parseFloat(albaran.subtotal) > 0 ? Math.round(parseFloat(albaran.descuento_aplicado) / parseFloat(albaran.subtotal) * 1000) / 10 : 0); return p > 0 ? ` (${p}%)` : ''; })()}</span><span class="v">−${formatCurrency(albaran.descuento_aplicado)}</span></div>` : ''}
     ${(parseFloat(albaran.coste_envio) || 0) > 0 ? `<div class="totals-row"><span class="l">Portes</span><span class="v">+${formatCurrency(parseFloat(albaran.coste_envio))}</span></div>` : ''}
     <div class="totals-row"><span class="l">Base imponible</span><span class="v">${formatCurrency(albaran.base_imponible || 0)}</span></div>
     <div class="totals-row"><span class="l">IVA (${albaran.iva_porcentaje || 4}%)</span><span class="v">${formatCurrency(albaran.iva || 0)}</span></div>
@@ -23604,7 +23985,10 @@ ${albaran.notas ? `<div class="notas"><div class="label">Observaciones</div>${al
     
     // Recalcular totales
     const subtotal = form.items.reduce((s, it) => s + ((it.precio_unitario || 0) * (it.cantidad || 0)), 0);
-    const descuento = clienteSel?.descuento || 0;
+    // V79: el descuento depende de la fecha de entrega (o del % fijado en este albarán)
+    const descuento = (esEdicion && tieneDescuentoFijado(albaran))
+      ? (parseFloat(albaran.descuento_pct) || 0)
+      : descuentoClienteEnFecha(clienteSel, albaran?.fecha_entrega_real || form.fecha_entrega_prevista || form.fecha_emision);
     const descuentoAplicado = subtotal * (descuento / 100);
     // V76: portes (base sin IVA, no les afecta el descuento, llevan el mismo IVA que la mercancía)
     const baseProductos = subtotal - descuentoAplicado;
@@ -28622,7 +29006,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       </main>
 
       {/* Modals */}
-      {showModal === 'cliente' && <Modal title={editingItem ? 'Editar Cliente' : 'Nuevo Cliente'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ClienteForm cliente={editingItem} onSave={form => handleSave('clientes', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'cliente' && <Modal title={editingItem ? 'Editar Cliente' : 'Nuevo Cliente'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ClienteForm cliente={editingItem} onSave={form => handleSave('clientes', (Array.isArray(form.descuentos_fechas) ? { ...form, descuentos_fechas: form.descuentos_fechas.filter(t => t && t.hasta && t.pct !== '' && t.pct !== null && t.pct !== undefined).map(t => ({ hasta: t.hasta, pct: parseFloat(t.pct) || 0 })) } : form), editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lead' && <Modal title={editingItem ? 'Editar Lead' : 'Nuevo Lead'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LeadForm lead={editingItem} onSave={form => handleSave('leads', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       
       {/* Panel de seguimiento de lead (prospecting) */}
@@ -29388,6 +29772,13 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             }}
             onCancel={() => { setShowModal(null); setEditingItem(null); }}
           />
+        </Modal>
+      )}
+      
+      {/* Modal Corregir Factura V79 */}
+      {showModal === 'corregirFactura' && editingItem && (
+        <Modal title={`✏️ Corregir factura ${editingItem.id}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl">
+          <CorregirFacturaForm factura={editingItem} onCerrar={() => { setShowModal(null); setEditingItem(null); }} />
         </Modal>
       )}
       
