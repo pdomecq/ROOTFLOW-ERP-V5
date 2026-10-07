@@ -1564,6 +1564,8 @@ const MainApp = () => {
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
   const { data: lotesData, refetch: refetchLotes } = useRealtime('lotes');
   const { data: proveedoresData, refetch: refetchProveedores } = useRealtime('proveedores');
+  // V80 - Compras a particulares (Wallapop)
+  const { data: comprasParticularesData, refetch: refetchComprasParticulares } = useRealtime('compras_particulares');
   const { data: tareasData, refetch: refetchTareas } = useRealtime('tareas');
   const { data: mermasData, refetch: refetchMermas } = useRealtime('mermas');
   const { data: pedidosRecurrentesData, refetch: refetchPedidosRecurrentes } = useRealtime('pedidos_recurrentes');
@@ -1671,6 +1673,7 @@ const MainApp = () => {
   const gastos = gastosData || [];
   const lotes = lotesData || [];
   const proveedores = proveedoresData || [];
+  const comprasParticulares = comprasParticularesData || [];
   const tareas = tareasData || [];
   const mermas = mermasData || [];
   const pedidosRecurrentes = pedidosRecurrentesData || [];
@@ -1900,7 +1903,7 @@ const MainApp = () => {
   };
 
   // Crear asiento automático desde un gasto
-  const crearAsientoDesdeGasto = async (gasto, proveedor) => {
+  const crearAsientoDesdeGasto = async (gasto, proveedor, silencioso = false) => {
     try {
       // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
       const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
@@ -1915,7 +1918,10 @@ const MainApp = () => {
       const iva = parseFloat((importeTotal - base).toFixed(2));
       
       // Determinar cuenta de gasto según categoría usando el mapeo PGC
-      const mapeo = CATEGORIA_A_CUENTA[gasto.categoria] || { cuenta: '629', nombre: 'Otros servicios' };
+      // V80: las categorías CAPEX (213, 216, 217…) no estaban en el mapeo y caían en 629
+      const mapeo = CATEGORIA_A_CUENTA[gasto.categoria]
+        || (categoriasGasto[gasto.categoria]?.cuenta ? { cuenta: categoriasGasto[gasto.categoria].cuenta, nombre: categoriasGasto[gasto.categoria].label.replace(/^[^A-Za-zÁÉÍÓÚáéíóúÑñ]+/, '').replace(/\s*\(\d+\)$/, '') } : null)
+        || { cuenta: '629', nombre: 'Otros servicios' };
       const cuentaGasto = mapeo.cuenta;
       
       // Determinar cuenta de pago según forma de pago
@@ -1976,7 +1982,7 @@ const MainApp = () => {
       refetchAsientos();
       refetchAsientoLineas();
       
-      alert(`✅ Asiento ${numero} creado:\n\n${cuentaGasto} ${nombreCuenta}: ${base.toFixed(2)}€ (DEBE)\n472 IVA Soportado: ${iva.toFixed(2)}€ (DEBE)\n${cuentaPago} ${conceptoPago}: ${importeTotal.toFixed(2)}€ (HABER)`);
+      if (!silencioso) alert(`✅ Asiento ${numero} creado:\n\n${cuentaGasto} ${nombreCuenta}: ${base.toFixed(2)}€ (DEBE)\n472 IVA Soportado: ${iva.toFixed(2)}€ (DEBE)\n${cuentaPago} ${conceptoPago}: ${importeTotal.toFixed(2)}€ (HABER)`);
     } catch (error) {
       console.error('Error creando asiento desde gasto:', error);
       alert('❌ Error inesperado: ' + error.message);
@@ -2860,10 +2866,28 @@ const MainApp = () => {
       });
     }
 
+    // V80: ITP (modelo 600) pendiente de compras a particulares
+    comprasParticulares.filter(c => c.itp_estado !== 'presentado' && c.itp_plazo && (parseFloat(c.itp_importe) || 0) > 0).forEach(c => {
+      const plazo = new Date(String(c.itp_plazo).slice(0, 10) + 'T00:00:00');
+      const hoy0 = new Date(); hoy0.setHours(0, 0, 0, 0);
+      const dias = Math.round((plazo - hoy0) / 86400000);
+      if (dias > 7) return;
+      alertasList.push({
+        id: `itp-compra-${c.id}`,
+        tipo: 'fiscal',
+        prioridad: dias < 0 ? 'critica' : dias <= 3 ? 'alta' : 'media',
+        titulo: dias < 0 ? `ITP fuera de plazo: compra a ${c.vendedor_nombre || 'particular'}` : `Presentar modelo 600 (ITP ${formatCurrency(c.itp_importe)})`,
+        mensaje: `Compra del ${formatDate(c.fecha)} · ${dias < 0 ? `venció el ${formatDate(c.itp_plazo)}` : `plazo hasta el ${formatDate(c.itp_plazo)}`}`,
+        icono: Receipt,
+        color: dias < 0 ? 'bg-red-500' : 'bg-amber-500',
+        accion: () => { setActiveSection('gastos'); setGastosTab('particulares'); }
+      });
+    });
+
     // Ordenar por prioridad
     const prioridadOrden = { critica: 0, alta: 1, media: 2, baja: 3 };
     return alertasList.sort((a, b) => prioridadOrden[a.prioridad] - prioridadOrden[b.prioridad]);
-  }, [productos, pedidos, facturas, lotes, tareas, clientes, condiciones]);
+  }, [productos, pedidos, facturas, lotes, tareas, clientes, condiciones, comprasParticulares]);
 
   const alertasNoLeidas = alertas.length;
   const alertasCriticas = alertas.filter(a => a.prioridad === 'critica').length;
@@ -12082,6 +12106,879 @@ ${transacciones}
     );
   };
 
+  // ==================== V80 — COMPRAS A PARTICULARES (Wallapop y similares) ====================
+  // Flujo: datos de la compra → contrato prerrellenado para firmar → gasto automático (IVA 0 %)
+  // → documentos adjuntos → ITP 4 % (modelo 600) con plazo de 30 días hábiles y aviso.
+  const TIPO_ITP_MUEBLES = 4; // % ITP bienes muebles en la Comunidad de Madrid
+  const OVT_MADRID_URL = 'https://gestiona.comunidad.madrid/opti_webapp_contrib';
+  const PROVEEDOR_PARTICULARES = 'Particulares (Wallapop)';
+  const PROVEEDOR_ITP = 'Comunidad de Madrid (tributos)';
+
+  // Suma N días hábiles desde una fecha (se empieza a contar el día siguiente).
+  // Descuenta sábados, domingos y festivos nacionales de fecha fija. Los festivos móviles,
+  // autonómicos y locales NO se descuentan: la fecha sale igual o ANTES que la real
+  // (cálculo a la baja, para no pasarse nunca de plazo).
+  const sumarDiasHabiles = (fechaIso, n) => {
+    const festivos = ['01-01', '01-06', '05-01', '08-15', '10-12', '11-01', '12-06', '12-08', '12-25'];
+    const [y, m, d] = String(fechaIso || '').slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const f = new Date(y, m - 1, d);
+    let cuenta = 0;
+    while (cuenta < n) {
+      f.setDate(f.getDate() + 1);
+      const dow = f.getDay();
+      const md = `${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
+      if (dow !== 0 && dow !== 6 && !festivos.includes(md)) cuenta++;
+    }
+    return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
+  };
+
+  const diasNaturalesHasta = (iso) => {
+    if (!iso) return null;
+    const h = new Date(); h.setHours(0, 0, 0, 0);
+    return Math.round((new Date(String(iso).slice(0, 10) + 'T00:00:00') - h) / 86400000);
+  };
+
+  // Importe en letra para el contrato ("sesenta euros con cincuenta céntimos")
+  const importeEnLetras = (num) => {
+    const unidades = ['', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'];
+    const decenas = ['', '', '', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+    const centenas = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+    const menorMil = (n) => {
+      if (n === 0) return '';
+      if (n === 100) return 'cien';
+      const c = Math.floor(n / 100), r = n % 100;
+      let t = '';
+      if (r > 0) {
+        if (r < 30) t = unidades[r];
+        else { const dd = Math.floor(r / 10), u = r % 10; t = decenas[dd] + (u ? ' y ' + unidades[u] : ''); }
+      }
+      return [c ? centenas[c] : '', t].filter(Boolean).join(' ');
+    };
+    const apocope = (txt) => txt.replace(/veintiuno$/, 'veintiún').replace(/(^|\s)uno$/, '$1un');
+    const enPalabras = (n) => {
+      if (n === 0) return 'cero';
+      const millones = Math.floor(n / 1000000), miles = Math.floor((n % 1000000) / 1000), resto = n % 1000;
+      const partes = [];
+      if (millones) partes.push(millones === 1 ? 'un millón' : apocope(enPalabras(millones)) + ' millones');
+      if (miles) partes.push(miles === 1 ? 'mil' : apocope(menorMil(miles)) + ' mil');
+      if (resto) partes.push(menorMil(resto));
+      return partes.join(' ');
+    };
+    const centimosTot = Math.round((parseFloat(num) || 0) * 100);
+    const entero = Math.floor(centimosTot / 100);
+    const cent = centimosTot % 100;
+    const eurosTxt = `${apocope(enPalabras(entero))}${entero >= 1000000 && entero % 1000000 === 0 ? ' de' : ''} ${entero === 1 ? 'euro' : 'euros'}`;
+    if (!cent) return eurosTxt;
+    return `${eurosTxt} con ${apocope(enPalabras(cent))} ${cent === 1 ? 'céntimo' : 'céntimos'}`;
+  };
+
+  // Busca un proveedor por nombre o lo crea (para que los gastos queden bien agrupados)
+  const obtenerProveedorId = async (nombre, categoria = 'otros') => {
+    const existente = proveedores.find(p => (p.nombre || '').trim().toLowerCase() === nombre.toLowerCase());
+    if (existente) return existente.id;
+    try {
+      const { data, error } = await supabase.from('proveedores').insert({ nombre, categoria }).select();
+      if (error) throw error;
+      refetchProveedores();
+      return data?.[0]?.id || null;
+    } catch (e) {
+      console.warn('No se pudo crear el proveedor', nombre, e);
+      return null;
+    }
+  };
+
+  // Sube un archivo al bucket de facturas de gastos y devuelve su URL pública
+  const subirArchivoFacturasGastos = async (file, prefijo) => {
+    const ext = (file.name.split('.').pop() || 'pdf').toLowerCase();
+    const fn = `${prefijo}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error } = await supabase.storage.from('facturas-gastos').upload(fn, file);
+    if (error) {
+      if ((error.message || '').toLowerCase().includes('bucket')) alert('⚠️ Crea el bucket "facturas-gastos" en Supabase Storage');
+      else alert('❌ Error subiendo el archivo: ' + error.message);
+      return null;
+    }
+    return supabase.storage.from('facturas-gastos').getPublicUrl(fn).data.publicUrl;
+  };
+
+  // Borra los asientos contables de un gasto (referencia GAS-id)
+  const borrarAsientosDeGasto = async (gastoId) => {
+    if (!gastoId) return;
+    try {
+      const { data: asis } = await supabase.from('asientos_contables').select('id').eq('referencia', `GAS-${gastoId}`);
+      for (const a of asis || []) {
+        await supabase.from('asiento_lineas').delete().eq('asiento_id', a.id);
+        await supabase.from('asientos_contables').delete().eq('id', a.id);
+      }
+      if ((asis || []).length) { refetchAsientos(); refetchAsientoLineas(); }
+    } catch (e) {
+      console.warn('No se pudo borrar el asiento del gasto', gastoId, e);
+    }
+  };
+
+  // Rehace el asiento de un gasto (tras cambiar importe, fecha, forma de pago o categoría)
+  const rehacerAsientoGasto = async (gastoId, gastoData, nombreProveedor) => {
+    await borrarAsientosDeGasto(gastoId);
+    await crearAsientoDesdeGasto({ ...gastoData, id: gastoId }, { nombre: nombreProveedor }, true);
+  };
+
+  // Borra un gasto vinculado junto con su asiento
+  const borrarGastoVinculado = async (gastoId) => {
+    if (!gastoId) return;
+    await borrarAsientosDeGasto(gastoId);
+    await supabase.from('gastos').delete().eq('id', gastoId);
+  };
+
+  const itemsCompraValidos = (items) => (Array.isArray(items) ? items : [])
+    .filter(it => (it.descripcion || '').trim() || (parseFloat(it.precio) || 0) > 0)
+    .map(it => ({
+      descripcion: (it.descripcion || '').trim(),
+      referencia: (it.referencia || '').trim(),
+      unidades: parseFloat(it.unidades) || 1,
+      precio: Math.round((parseFloat(it.precio) || 0) * 100) / 100,
+    }));
+
+  const conceptoCompraParticular = (items) => {
+    const desc = items.map(i => i.descripcion).filter(Boolean).join(', ');
+    return `Compra a particular (Wallapop): ${desc.length > 80 ? desc.slice(0, 77) + '…' : (desc || 'artículos usados')}`;
+  };
+
+  // Guarda la compra y crea/actualiza su gasto vinculado
+  const guardarCompraParticular = async (form, idExistente = null) => {
+    const items = itemsCompraValidos(form.items);
+    const total = Math.round(items.reduce((s, it) => s + it.precio, 0) * 100) / 100;
+    if (items.length === 0 || total <= 0) { alert('Añade al menos un artículo con su precio.'); return null; }
+    const fecha = form.fecha || new Date().toISOString().slice(0, 10);
+    const existente = idExistente ? comprasParticulares.find(c => c.id === idExistente) : null;
+
+    const datos = {
+      fecha,
+      vendedor_nombre: (form.vendedor_nombre || '').trim() || null,
+      vendedor_dni: (form.vendedor_dni || '').trim().toUpperCase() || null,
+      vendedor_domicilio: (form.vendedor_domicilio || '').trim() || null,
+      vendedor_telefono: (form.vendedor_telefono || '').trim() || null,
+      vendedor_email: (form.vendedor_email || '').trim() || null,
+      wallapop_usuario: (form.wallapop_usuario || '').trim() || null,
+      wallapop_anuncio: (form.wallapop_anuncio || '').trim() || null,
+      items_json: items,
+      total,
+      forma_pago: form.forma_pago || 'banco',
+      pago_via_wallapop: !!form.pago_via_wallapop,
+      entrega: form.entrega || 'mano',
+      categoria_gasto: form.categoria_gasto || 'otros',
+      firmante_nombre: (form.firmante_nombre || '').trim() || null,
+      firmante_dni: (form.firmante_dni || '').trim().toUpperCase() || null,
+      notas: (form.notas || '').trim() || null,
+    };
+    // El ITP solo se recalcula mientras no se haya presentado
+    if (!existente || existente.itp_estado !== 'presentado') {
+      datos.itp_importe = Math.round(total * TIPO_ITP_MUEBLES) / 100;
+      datos.itp_plazo = sumarDiasHabiles(fecha, 30);
+    }
+
+    try {
+      let compraId = idExistente;
+      if (idExistente) {
+        const { error } = await supabase.from('compras_particulares').update({ ...datos, updated_at: new Date().toISOString() }).eq('id', idExistente);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase.from('compras_particulares').insert(datos).select();
+        if (error) throw error;
+        compraId = data?.[0]?.id || null;
+      }
+
+      // Gasto vinculado: IVA 0 % (un particular no repercute IVA), pagado
+      if (form.crear_gasto !== false) {
+        const gastoData = {
+          fecha,
+          categoria: datos.categoria_gasto,
+          concepto: conceptoCompraParticular(items),
+          importe: total,
+          iva_tipo: 'exento',
+          pagado: true,
+          forma_pago: datos.forma_pago,
+        };
+        const gastoPrevio = existente?.gasto_id ? gastos.find(g => g.id === existente.gasto_id) : null;
+        if (gastoPrevio) {
+          const cambiaAsiento = (parseFloat(gastoPrevio.importe) || 0) !== total
+            || String(gastoPrevio.fecha || '').slice(0, 10) !== fecha
+            || (gastoPrevio.forma_pago || 'banco') !== gastoData.forma_pago
+            || (gastoPrevio.categoria || 'otros') !== gastoData.categoria;
+          const { error } = await supabase.from('gastos').update(gastoData).eq('id', gastoPrevio.id);
+          if (error) throw error;
+          if (cambiaAsiento) await rehacerAsientoGasto(gastoPrevio.id, gastoData, PROVEEDOR_PARTICULARES);
+        } else if (compraId) {
+          const proveedor_id = await obtenerProveedorId(PROVEEDOR_PARTICULARES, 'equipamiento');
+          const { data: g, error: eg } = await supabase.from('gastos').insert({
+            ...gastoData,
+            proveedor_id,
+            factura_url: existente?.contrato_url || null,
+            justificante_pago_url: existente?.justificante_pago_url || null,
+          }).select();
+          if (eg) throw eg;
+          if (g?.[0]?.id) {
+            await supabase.from('compras_particulares').update({ gasto_id: g[0].id }).eq('id', compraId);
+            await registrarAuditoria('CREAR', 'gastos', g[0].id, null, gastoData, `Gasto creado desde la compra a particular #${compraId}`);
+            await crearAsientoDesdeGasto({ ...gastoData, id: g[0].id }, { nombre: PROVEEDOR_PARTICULARES }, true);
+          }
+        }
+        refetchGastos();
+      }
+      refetchComprasParticulares();
+      return compraId;
+    } catch (e) {
+      if (e.code === '42P01') alert('❌ Falta ejecutar el SQL V80 (tabla compras_particulares) en Supabase.');
+      else alert('❌ Error guardando la compra: ' + (e.message || e));
+      return null;
+    }
+  };
+
+  // Adjunta el contrato firmado o el justificante de pago (y lo copia al gasto vinculado)
+  const adjuntarDocumentoCompra = async (compra, tipo, file) => {
+    if (!file) return;
+    const url = await subirArchivoFacturasGastos(file, tipo === 'contrato' ? `contrato-particular-${compra.id}` : `pago-particular-${compra.id}`);
+    if (!url) return;
+    try {
+      const campoCompra = tipo === 'contrato' ? 'contrato_url' : 'justificante_pago_url';
+      const campoGasto = tipo === 'contrato' ? 'factura_url' : 'justificante_pago_url';
+      const { error } = await supabase.from('compras_particulares').update({ [campoCompra]: url }).eq('id', compra.id);
+      if (error) throw error;
+      if (compra.gasto_id) await supabase.from('gastos').update({ [campoGasto]: url }).eq('id', compra.gasto_id);
+      refetchComprasParticulares();
+      refetchGastos();
+    } catch (e) {
+      alert('❌ Error: ' + (e.message || e));
+    }
+  };
+
+  // Marca el modelo 600 como presentado y registra el ITP como gasto (cuenta 631)
+  const marcarItpPresentado = async (compra, form) => {
+    const importe = Math.round((parseFloat(form.importe) || 0) * 100) / 100;
+    try {
+      let itpGastoId = compra.itp_gasto_id;
+      const justificante = form.justificante_url || compra.itp_justificante_url || null;
+      const gastoData = {
+        fecha: form.fecha,
+        categoria: 'tributos',
+        concepto: `ITP modelo 600 – compra a particular del ${formatDate(compra.fecha)}${form.numero ? ` (nº ${form.numero})` : ''}`,
+        importe,
+        iva_tipo: 'exento',
+        pagado: true,
+        forma_pago: form.forma_pago || 'banco',
+        factura_url: justificante,
+      };
+      const itpPrevio = itpGastoId ? gastos.find(g => g.id === itpGastoId) : null;
+      if (itpPrevio) {
+        const cambiaAsiento = (parseFloat(itpPrevio.importe) || 0) !== importe
+          || String(itpPrevio.fecha || '').slice(0, 10) !== form.fecha
+          || (itpPrevio.forma_pago || 'banco') !== gastoData.forma_pago;
+        const { error } = await supabase.from('gastos').update(gastoData).eq('id', itpGastoId);
+        if (error) throw error;
+        if (cambiaAsiento) await rehacerAsientoGasto(itpGastoId, gastoData, PROVEEDOR_ITP);
+      } else if (importe > 0) {
+        const proveedor_id = await obtenerProveedorId(PROVEEDOR_ITP, 'servicios');
+        const { data, error } = await supabase.from('gastos').insert({ ...gastoData, proveedor_id }).select();
+        if (error) throw error;
+        itpGastoId = data?.[0]?.id || null;
+        if (itpGastoId) {
+          await registrarAuditoria('CREAR', 'gastos', itpGastoId, null, gastoData, `Gasto ITP (modelo 600) de la compra a particular #${compra.id}`);
+          await crearAsientoDesdeGasto({ ...gastoData, id: itpGastoId }, { nombre: PROVEEDOR_ITP }, true);
+        }
+      }
+      const { error: e2 } = await supabase.from('compras_particulares').update({
+        itp_estado: 'presentado',
+        itp_fecha_presentacion: form.fecha,
+        itp_numero_autoliquidacion: (form.numero || '').trim() || null,
+        itp_justificante_url: justificante,
+        itp_importe: importe,
+        itp_gasto_id: itpGastoId,
+      }).eq('id', compra.id);
+      if (e2) throw e2;
+      refetchComprasParticulares();
+      refetchGastos();
+      return true;
+    } catch (e) {
+      alert('❌ Error: ' + (e.message || e));
+      return false;
+    }
+  };
+
+  const volverItpAPendiente = async (compra) => {
+    if (!window.confirm('¿Volver a marcar el ITP como pendiente?\n\nSe borrará también el gasto del ITP que se creó al presentarlo.')) return false;
+    try {
+      if (compra.itp_gasto_id) await borrarGastoVinculado(compra.itp_gasto_id);
+      const { error } = await supabase.from('compras_particulares').update({
+        itp_estado: 'pendiente', itp_fecha_presentacion: null, itp_numero_autoliquidacion: null, itp_gasto_id: null,
+      }).eq('id', compra.id);
+      if (error) throw error;
+      refetchComprasParticulares();
+      refetchGastos();
+      return true;
+    } catch (e) {
+      alert('❌ Error: ' + (e.message || e));
+      return false;
+    }
+  };
+
+  const eliminarCompraParticular = async (compra) => {
+    if (!window.confirm(`¿Eliminar la compra del ${formatDate(compra.fecha)} (${formatCurrency(compra.total)})?`)) return;
+    const vinculados = [compra.gasto_id, compra.itp_gasto_id].filter(Boolean);
+    const borrarGastos = vinculados.length > 0 && window.confirm(`Esta compra tiene ${vinculados.length} gasto(s) vinculado(s) (la compra${compra.itp_gasto_id ? ' y el ITP' : ''}).\n\n¿Borrarlos también?\n\nAceptar = borrar los gastos · Cancelar = dejarlos`);
+    try {
+      const { error } = await supabase.from('compras_particulares').delete().eq('id', compra.id);
+      if (error) throw error;
+      if (borrarGastos) for (const id of vinculados) await borrarGastoVinculado(id);
+      refetchComprasParticulares();
+      refetchGastos();
+    } catch (e) {
+      alert('❌ Error: ' + (e.message || e));
+    }
+  };
+
+  // ---------- Contrato de compraventa (prerrellenado o en blanco) para imprimir ----------
+  const generarContratoCompraParticular = (compra = null, ventanaAbierta = null) => {
+    const c = compra || {};
+    const esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const hueco = (valor, ancho = 180) => valor
+      ? `<span class="fill">${esc(valor)}</span>`
+      : `<span class="blank" style="min-width:${ancho}px"></span>`;
+    const items = itemsCompraValidos(c.items_json);
+    const filasItems = [...items];
+    while (filasItems.length < 3) filasItems.push(null);
+    const total = items.reduce((s, it) => s + it.precio, 0);
+    const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    let lineaFecha;
+    if (c.fecha) {
+      const [y, m, d] = c.fecha.slice(0, 10).split('-').map(Number);
+      lineaFecha = `En ${hueco('', 170)}, a ${d} de ${meses[m - 1]} de ${y}`;
+    } else {
+      lineaFecha = `En ${hueco('', 170)}, a ${hueco('', 40)} de ${hueco('', 130)} de 20${hueco('', 40)}`;
+    }
+    const marca = (on) => on ? '&#9746;' : '&#9744;';
+    const fp = c.forma_pago || '';
+    const viaWallapop = !!c.pago_via_wallapop;
+    const socioCfg = { socio_nico: 'Nico', socio_peri: 'Peri', socio_guzman: 'Guzmán' };
+    const esSocio = fp.startsWith('socio_');
+    const hayDatosPago = !!compra && (viaWallapop || !!fp);
+    const tdItem = (it) => it
+      ? `<td>${esc(it.descripcion)}</td><td>${esc(it.referencia)}</td><td class="c">${esc(it.unidades)}</td><td class="r">${formatCurrency(it.precio)}</td>`
+      : '<td>&nbsp;</td><td></td><td></td><td></td>';
+
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<title>Contrato compraventa${c.vendedor_nombre ? ' · ' + esc(c.vendedor_nombre) : ''}</title>
+<style>
+@page { size: A4; margin: 10mm 13mm; }
+* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 9pt; color: #1a1a1a; line-height: 1.3; margin: 0; }
+p { margin: 4px 0; }
+.toolbar { position: fixed; top: 10px; right: 10px; } .toolbar button { background:#1D4F37; color:#fff; border:0; padding:9px 16px; border-radius:8px; font-weight:700; cursor:pointer; }
+@media print { .toolbar { display:none; } }
+.head { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2.5px solid #1D4F37; padding-bottom:5px; margin-bottom:8px; }
+.brand { font-size:16pt; font-weight:800; color:#1D4F37; } .brand span { color:#ED7E1F; }
+.ref { font-size:8pt; color:#666; text-align:right; }
+h1 { font-size:13.5pt; margin:4px 0 2px; }
+.lead { color:#444; margin:0 0 5px; }
+h2 { font-size:10pt; margin:7px 0 2px; color:#1D4F37; }
+table { width:100%; border-collapse:collapse; }
+td, th { border:1px solid #b5b5b5; padding:3px 6px; vertical-align:top; }
+th { background:#f1f1f1; font-size:8.5pt; text-align:left; }
+td.lbl { background:#fafafa; font-weight:600; font-size:8.6pt; }
+.partes { table-layout: fixed; } .partes td { height:21px; }
+.c { text-align:center; } .r { text-align:right; }
+.items td { height:20px; }
+.blank { display:inline-block; border-bottom:1px solid #333; height:1em; vertical-align:bottom; }
+.fill { font-weight:700; border-bottom:1px solid #999; padding:0 3px; }
+ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
+.opts span { margin-right:14px; white-space:nowrap; }
+.firmas td { height:22px; }
+.firmas td.alto { height:58px; }
+.firmas { page-break-inside: avoid; }
+.pie { margin-top:8px; font-size:7.5pt; color:#777; text-align:center; }
+</style></head>
+<body>
+<div class="toolbar"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+<div class="head">
+  <div class="brand">Root<span>Flow</span></div>
+  <div class="ref">${compra?.id ? `Compra n.º ${esc(compra.id)} · ` : ''}Documento privado de compraventa</div>
+</div>
+<h1>Contrato de compraventa de bien mueble usado</h1>
+<p class="lead">Documento privado de compraventa entre un vendedor particular y ROOTFLOW HYDROPONICS S.L. (arts. 1445 y siguientes del Código Civil). Se firma en el momento de la entrega y sirve como justificante del gasto y como recibo del pago.</p>
+<p>${lineaFecha}</p>
+
+<h2>1. Partes</h2>
+<table class="partes">
+  <tr><th style="width:24%"></th><th style="width:38%">Vendedor (particular)</th><th style="width:38%">Comprador</th></tr>
+  <tr><td class="lbl">Nombre y apellidos / razón social</td><td>${esc(c.vendedor_nombre)}</td><td>ROOTFLOW HYDROPONICS S.L.</td></tr>
+  <tr><td class="lbl">DNI / NIE / CIF</td><td>${esc(c.vendedor_dni)}</td><td>B27535137</td></tr>
+  <tr><td class="lbl">Domicilio</td><td>${esc(c.vendedor_domicilio)}</td><td>C. Nueva 16, P6 · 28231 Las Rozas de Madrid (Madrid)</td></tr>
+  <tr><td class="lbl">Teléfono / email</td><td>${esc([c.vendedor_telefono, c.vendedor_email].filter(Boolean).join(' · '))}</td><td>+34 638 161 990 · info@rootflow.es</td></tr>
+  <tr><td class="lbl">Usuario de Wallapop</td><td>${esc(c.wallapop_usuario)}</td><td></td></tr>
+  <tr><td class="lbl">Firma</td><td>En su propio nombre</td><td>D./D.ª ${hueco(c.firmante_nombre, 130)}, DNI ${hueco(c.firmante_dni, 80)}, como administrador o apoderado</td></tr>
+</table>
+
+<h2>2. Artículos que se venden</h2>
+<table class="items">
+  <tr><th style="width:46%">Descripción (artículo, marca y modelo)</th><th style="width:24%">N.º de serie o referencia</th><th style="width:12%" class="c">Unidades</th><th style="width:18%" class="r">Precio (€)</th></tr>
+  ${filasItems.map(it => `<tr>${tdItem(it)}</tr>`).join('')}
+  <tr><td colspan="3" class="r"><strong>Total</strong></td><td class="r"><strong>${items.length ? formatCurrency(total) : ''}</strong></td></tr>
+</table>
+<p>Referencia del anuncio en Wallapop: ${hueco(c.wallapop_anuncio, 220)}</p>
+
+<h2>3. Precio y pago</h2>
+<p>Precio total: ${items.length ? `<span class="fill">${formatCurrency(total)}</span> (<span class="fill">${esc(importeEnLetras(total))}</span>)` : `${hueco('', 90)} € (${hueco('', 300)} euros)`}. La venta no lleva IVA porque el vendedor no es empresario ni profesional.</p>
+<p class="opts">Forma de pago:
+  <span>${marca(hayDatosPago && !viaWallapop && (fp === 'banco' || fp === 'transferencia'))} Transferencia o Bizum desde Rootflow</span>
+  <span>${marca(hayDatosPago && !viaWallapop && fp === 'tarjeta_empresa')} Tarjeta de Rootflow</span>
+  <span>${marca(hayDatosPago && viaWallapop)} Pago a través de Wallapop</span>
+  <span>${marca(hayDatosPago && !viaWallapop && fp === 'caja')} Efectivo</span>
+  <span>${marca(hayDatosPago && !viaWallapop && esSocio)} Lo adelanta un socio: ${esSocio ? `<span class="fill">${esc(socioCfg[fp] || '')}</span>` : hueco('', 90)}</span>
+</p>
+<p>Con su firma, el vendedor declara haber recibido el precio completo. Este documento sirve de recibo.</p>
+
+<h2>4. Declaraciones del vendedor</h2>
+<ol>
+  <li>Vende como particular, sin ejercer actividad empresarial o profesional, por lo que no emite factura.</li>
+  <li>Es el único y legítimo propietario de los artículos, que están libres de cargas, embargos y reclamaciones de terceros.</li>
+  <li>Los artículos son usados y se entregan en el estado en que se encuentran, que el comprador ha revisado y acepta.</li>
+  <li>Los datos de este documento son ciertos.</li>
+</ol>
+
+<h2>5. Entrega</h2>
+<p class="opts"><span>${marca(!!compra && c.entrega !== 'envio')} Entrega en mano en la fecha de este documento</span><span>${marca(!!compra && c.entrega === 'envio')} Envío a través de Wallapop (fecha: ${hueco('', 90)})</span></p>
+<p>La propiedad pasa al comprador con la entrega.</p>
+
+<h2>6. Protección de datos</h2>
+<p>ROOTFLOW HYDROPONICS S.L. (CIF B27535137) tratará los datos del vendedor solo para documentar esta compra y cumplir sus obligaciones fiscales y contables, y los conservará durante los plazos legales. El vendedor puede pedir el acceso, la rectificación o la supresión de sus datos en info@rootflow.es.</p>
+
+<h2>7. Firmas</h2>
+<p>Ambas partes firman en señal de conformidad. El vendedor puede quedarse una copia o una foto de este documento.</p>
+<table class="firmas">
+  <tr><th style="width:50%">El vendedor</th><th>El comprador (por ROOTFLOW HYDROPONICS S.L.)</th></tr>
+  <tr><td class="alto">Firma:</td><td class="alto">Firma:</td></tr>
+  <tr><td>Nombre: ${esc(c.vendedor_nombre)}</td><td>Nombre: ${esc(c.firmante_nombre)}</td></tr>
+</table>
+<div class="pie">ROOTFLOW HYDROPONICS S.L. · CIF B27535137 · C. Nueva 16, P6 · 28231 Las Rozas de Madrid · info@rootflow.es</div>
+</body></html>`;
+
+    const w = ventanaAbierta || window.open('', '_blank');
+    if (!w) { alert('⚠️ Permite las ventanas emergentes para generar el contrato.'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+  // ==================== V80 (fin helpers) ====================
+
+
+  // ---------- Formulario de compra a particular ----------
+  const CompraParticularForm = ({ compra, onSave, onCancel }) => {
+    const esEdicion = !!compra?.id;
+    const firmanteGuardado = (() => { try { return JSON.parse(localStorage.getItem('rootflow_firmante_compras') || '{}'); } catch (e) { return {}; } })();
+    const [form, setForm] = useState(() => ({
+      fecha: compra?.fecha || new Date().toISOString().slice(0, 10),
+      vendedor_nombre: compra?.vendedor_nombre || '',
+      vendedor_dni: compra?.vendedor_dni || '',
+      vendedor_domicilio: compra?.vendedor_domicilio || '',
+      vendedor_telefono: compra?.vendedor_telefono || '',
+      vendedor_email: compra?.vendedor_email || '',
+      wallapop_usuario: compra?.wallapop_usuario || '',
+      wallapop_anuncio: compra?.wallapop_anuncio || '',
+      items: Array.isArray(compra?.items_json) && compra.items_json.length
+        ? compra.items_json.map(i => ({ ...i }))
+        : [{ descripcion: '', referencia: '', unidades: 1, precio: '' }],
+      forma_pago: compra?.forma_pago || 'banco',
+      pago_via_wallapop: !!compra?.pago_via_wallapop,
+      entrega: compra?.entrega || 'mano',
+      categoria_gasto: compra?.categoria_gasto || 'otros',
+      firmante_nombre: compra?.firmante_nombre ?? firmanteGuardado.nombre ?? '',
+      firmante_dni: compra?.firmante_dni ?? firmanteGuardado.dni ?? '',
+      notas: compra?.notas || '',
+      crear_gasto: true,
+    }));
+    const [guardando, setGuardando] = useState(false);
+    const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+    const setItem = (i, k, v) => setForm(f => ({ ...f, items: f.items.map((it, j) => (j === i ? { ...it, [k]: v } : it)) }));
+
+    const total = form.items.reduce((s, it) => s + (parseFloat(it.precio) || 0), 0);
+    const itpYaPresentado = compra?.itp_estado === 'presentado';
+    const itp = itpYaPresentado ? (parseFloat(compra.itp_importe) || 0) : Math.round(total * TIPO_ITP_MUEBLES) / 100;
+    const plazo = itpYaPresentado ? compra.itp_plazo : sumarDiasHabiles(form.fecha, 30);
+    const faltan600 = [
+      !form.vendedor_nombre.trim() && 'nombre',
+      !form.vendedor_dni.trim() && 'DNI/NIE',
+      !form.vendedor_domicilio.trim() && 'domicilio',
+    ].filter(Boolean);
+    const formasPagoCompra = FORMAS_PAGO.filter(f => ['banco', 'tarjeta_empresa', 'caja', 'socio_nico', 'socio_peri', 'socio_guzman'].includes(f.value));
+
+    const enviar = async (conContrato) => {
+      // La ventana se abre ANTES de guardar (si no, el navegador la bloquea como emergente)
+      const w = conContrato ? window.open('', '_blank') : null;
+      if (w) w.document.write('<p style="font-family:sans-serif;padding:24px;color:#555">Generando contrato…</p>');
+      setGuardando(true);
+      try { localStorage.setItem('rootflow_firmante_compras', JSON.stringify({ nombre: form.firmante_nombre, dni: form.firmante_dni })); } catch (e) { /* sin almacenamiento local */ }
+      const ok = await onSave(form, w);
+      setGuardando(false);
+      if (!ok && w) w.close();
+    };
+
+    const campo = 'w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm';
+
+    return (
+      <div className="space-y-4 max-h-[78vh] overflow-y-auto pr-1">
+        <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-xs text-sky-900">
+          Para compras a particulares (Wallapop, Milanuncios…): genera el contrato para que lo firme el vendedor, crea el gasto con IVA 0 % y controla el ITP del 4 % (modelo 600). Si todavía no tienes los datos del vendedor, guarda igual: el contrato sale con huecos para rellenar a mano.
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Input label="Fecha de la compra" type="date" value={form.fecha} onChange={e => set('fecha', e.target.value)} />
+          <div>
+            <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Categoría del gasto</label>
+            <select value={form.categoria_gasto} onChange={e => set('categoria_gasto', e.target.value)} className={campo + ' py-2.5'}>
+              {Object.entries(categoriasGasto).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Vendedor */}
+        <div className="border border-neutral-200 rounded-xl p-3 space-y-2">
+          <p className="text-sm font-bold text-neutral-800">👤 Vendedor (particular)</p>
+          <div className="grid grid-cols-2 gap-2">
+            <input className={campo} placeholder="Nombre y apellidos" value={form.vendedor_nombre} onChange={e => set('vendedor_nombre', e.target.value)} />
+            <input className={campo} placeholder="DNI / NIE" value={form.vendedor_dni} onChange={e => set('vendedor_dni', e.target.value)} />
+            <input className={campo + ' col-span-2'} placeholder="Domicilio (calle, número, CP y localidad)" value={form.vendedor_domicilio} onChange={e => set('vendedor_domicilio', e.target.value)} />
+            <input className={campo} placeholder="Teléfono" value={form.vendedor_telefono} onChange={e => set('vendedor_telefono', e.target.value)} />
+            <input className={campo} placeholder="Email (opcional)" value={form.vendedor_email} onChange={e => set('vendedor_email', e.target.value)} />
+            <input className={campo} placeholder="Usuario de Wallapop" value={form.wallapop_usuario} onChange={e => set('wallapop_usuario', e.target.value)} />
+            <input className={campo} placeholder="Enlace o referencia del anuncio" value={form.wallapop_anuncio} onChange={e => set('wallapop_anuncio', e.target.value)} />
+          </div>
+          {faltan600.length > 0 && (
+            <p className="text-[11px] text-amber-700">Para presentar el modelo 600 harán falta: {faltan600.join(', ')}. Puedes completarlos después.</p>
+          )}
+        </div>
+
+        {/* Artículos */}
+        <div className="border border-neutral-200 rounded-xl p-3 space-y-2">
+          <p className="text-sm font-bold text-neutral-800">📦 Artículos</p>
+          {form.items.map((it, i) => (
+            <div key={i} className="grid grid-cols-12 gap-2 items-center">
+              <input className={campo + ' col-span-5'} placeholder="Descripción (artículo, marca, modelo)" value={it.descripcion} onChange={e => setItem(i, 'descripcion', e.target.value)} />
+              <input className={campo + ' col-span-3'} placeholder="N.º serie / ref." value={it.referencia || ''} onChange={e => setItem(i, 'referencia', e.target.value)} />
+              <input className={campo + ' col-span-1 text-center px-1'} type="number" min="1" title="Unidades" value={it.unidades} onChange={e => setItem(i, 'unidades', e.target.value)} />
+              <input className={campo + ' col-span-2 text-right'} type="number" step="0.01" min="0" placeholder="Precio €" value={it.precio} onChange={e => setItem(i, 'precio', e.target.value)} />
+              <button type="button" disabled={form.items.length === 1} onClick={() => set('items', form.items.filter((_, j) => j !== i))} className="col-span-1 p-2 text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-30"><Trash2 size={15} /></button>
+            </div>
+          ))}
+          <button type="button" onClick={() => set('items', [...form.items, { descripcion: '', referencia: '', unidades: 1, precio: '' }])} className="text-xs font-semibold text-sky-700 hover:underline">+ Añadir artículo</button>
+          <p className="text-[11px] text-neutral-500">El precio es el importe de cada línea, sin la comisión ni el envío de Wallapop: esos los cobra Wallapop con su propia factura y se registran como gasto aparte.</p>
+        </div>
+
+        {/* Pago y entrega */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="border border-neutral-200 rounded-xl p-3 space-y-2">
+            <p className="text-sm font-bold text-neutral-800">💳 Pago</p>
+            <select value={form.forma_pago} onChange={e => set('forma_pago', e.target.value)} className={campo + ' py-2.5'}>
+              {formasPagoCompra.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={form.pago_via_wallapop} onChange={e => set('pago_via_wallapop', e.target.checked)} className="w-4 h-4" />
+              Pagado a través de Wallapop
+            </label>
+            {form.forma_pago === 'caja' && <p className="text-[11px] text-amber-700">Mejor evitar el efectivo: un Bizum o transferencia deja rastro del pago.</p>}
+          </div>
+          <div className="border border-neutral-200 rounded-xl p-3 space-y-2">
+            <p className="text-sm font-bold text-neutral-800">🚚 Entrega</p>
+            {[['mano', 'En mano (se firma al recoger)'], ['envio', 'Envío por Wallapop (se firma a distancia)']].map(([v, l]) => (
+              <label key={v} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" name="entrega-compra" checked={form.entrega === v} onChange={() => set('entrega', v)} className="w-4 h-4" />
+                {l}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Firmante Rootflow */}
+        <div className="border border-neutral-200 rounded-xl p-3 space-y-2">
+          <p className="text-sm font-bold text-neutral-800">✍️ Firma por Rootflow <span className="font-normal text-neutral-500">(se recuerda para la próxima vez)</span></p>
+          <div className="grid grid-cols-2 gap-2">
+            <input className={campo} placeholder="Nombre de quien firma" value={form.firmante_nombre} onChange={e => set('firmante_nombre', e.target.value)} />
+            <input className={campo} placeholder="DNI" value={form.firmante_dni} onChange={e => set('firmante_dni', e.target.value)} />
+          </div>
+        </div>
+
+        <textarea className={campo} rows={2} placeholder="Notas (opcional)" value={form.notas} onChange={e => set('notas', e.target.value)} />
+
+        {/* Resumen */}
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-xl bg-neutral-50 border p-2"><p className="text-[11px] text-neutral-500 uppercase font-bold">Total compra</p><p className="text-lg font-black">{formatCurrency(total)}</p><p className="text-[10px] text-neutral-400">sin IVA (particular)</p></div>
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-2"><p className="text-[11px] text-amber-700 uppercase font-bold">ITP 4 %</p><p className="text-lg font-black text-amber-800">{formatCurrency(itp)}</p><p className="text-[10px] text-amber-700">modelo 600</p></div>
+          <div className="rounded-xl bg-red-50 border border-red-200 p-2"><p className="text-[11px] text-red-700 uppercase font-bold">Plazo 600</p><p className="text-lg font-black text-red-800">{plazo ? formatDate(plazo) : '—'}</p><p className="text-[10px] text-red-700">30 días hábiles</p></div>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={form.crear_gasto} onChange={e => set('crear_gasto', e.target.checked)} className="w-4 h-4" />
+          {esEdicion ? 'Actualizar también el gasto vinculado' : 'Crear el gasto automáticamente (IVA 0 %, proveedor "Particulares (Wallapop)")'}
+        </label>
+
+        <div className="flex justify-end gap-2 pt-3 border-t flex-wrap">
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button variant="secondary" disabled={guardando} onClick={() => enviar(false)}>{guardando ? '⏳ Guardando…' : 'Guardar'}</Button>
+          <Button disabled={guardando} onClick={() => enviar(true)} className="bg-emerald-700 hover:bg-emerald-800"><Printer size={16} /> Guardar e imprimir contrato</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // ---------- Modelo 600: datos para rellenarlo y marcarlo como presentado ----------
+  const ItpCompraModal = ({ compra, onCerrar }) => {
+    const presentado = compra.itp_estado === 'presentado';
+    const [form, setForm] = useState({
+      fecha: compra.itp_fecha_presentacion || new Date().toISOString().slice(0, 10),
+      numero: compra.itp_numero_autoliquidacion || '',
+      importe: compra.itp_importe ?? Math.round((parseFloat(compra.total) || 0) * TIPO_ITP_MUEBLES) / 100,
+      forma_pago: 'banco',
+      justificante_url: compra.itp_justificante_url || '',
+    });
+    const [subiendo, setSubiendo] = useState(false);
+    const [guardando, setGuardando] = useState(false);
+    const [copiado, setCopiado] = useState('');
+    const dias = diasNaturalesHasta(compra.itp_plazo);
+    const faltan = [!compra.vendedor_nombre && 'nombre', !compra.vendedor_dni && 'DNI/NIE', !compra.vendedor_domicilio && 'domicilio'].filter(Boolean);
+
+    const copiar = async (clave, texto) => {
+      try { await navigator.clipboard.writeText(String(texto)); setCopiado(clave); setTimeout(() => setCopiado(''), 1500); } catch (e) { /* sin portapapeles */ }
+    };
+    const fila = (clave, etiqueta, valor) => (
+      <div key={clave} className="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-100 text-sm">
+        <span className="text-neutral-500 text-xs w-36 flex-shrink-0">{etiqueta}</span>
+        <span className={`flex-1 font-medium ${valor ? 'text-neutral-900' : 'text-red-600'}`}>{valor || 'Falta'}</span>
+        {valor && (
+          <button type="button" onClick={() => copiar(clave, valor)} className="p-1.5 text-neutral-400 hover:text-sky-700 hover:bg-sky-50 rounded" title="Copiar">
+            {copiado === clave ? <Check size={14} className="text-green-600" /> : <Copy size={14} />}
+          </button>
+        )}
+      </div>
+    );
+
+    return (
+      <div className="space-y-4 max-h-[78vh] overflow-y-auto pr-1">
+        <div className={`rounded-xl p-3 border-2 ${presentado ? 'bg-green-50 border-green-300' : dias !== null && dias < 0 ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-300'}`}>
+          {presentado ? (
+            <p className="text-sm font-bold text-green-800">✅ Presentado el {formatDate(compra.itp_fecha_presentacion)}{compra.itp_numero_autoliquidacion ? ` · n.º ${compra.itp_numero_autoliquidacion}` : ''} · {formatCurrency(compra.itp_importe)}</p>
+          ) : (
+            <p className="text-sm font-bold text-amber-900">
+              {dias !== null && dias < 0 ? `⚠️ Fuera de plazo desde el ${formatDate(compra.itp_plazo)}: preséntalo cuanto antes` : `Plazo hasta el ${formatDate(compra.itp_plazo)} (${dias} día${dias !== 1 ? 's' : ''})`}
+            </p>
+          )}
+          <p className="text-[11px] text-neutral-600 mt-0.5">30 días hábiles desde la compra. La fecha está calculada a la baja (no descuenta festivos móviles ni locales), así que el plazo real puede ser algún día más.</p>
+        </div>
+
+        <div className="border rounded-xl p-3">
+          <p className="text-sm font-bold text-neutral-800 mb-1">Datos para el modelo 600</p>
+          {fila('sp', 'Sujeto pasivo', 'ROOTFLOW HYDROPONICS S.L. · B27535137')}
+          {fila('tn', 'Transmitente', compra.vendedor_nombre)}
+          {fila('td', 'NIF transmitente', compra.vendedor_dni)}
+          {fila('tdom', 'Domicilio transmitente', compra.vendedor_domicilio)}
+          {fila('fd', 'Fecha de devengo', compra.fecha ? formatDate(compra.fecha) : '')}
+          {fila('doc', 'Documento', 'Documento privado')}
+          {fila('con', 'Concepto', 'Transmisión onerosa de bienes muebles')}
+          {fila('bi', 'Base imponible', (parseFloat(compra.total) || 0).toFixed(2).replace('.', ','))}
+          {fila('tipo', 'Tipo', '4 %')}
+          {fila('cuota', 'Cuota a ingresar', (parseFloat(compra.itp_importe) || 0).toFixed(2).replace('.', ','))}
+          {faltan.length > 0 && <p className="text-[11px] text-red-600 mt-2">Falta {faltan.join(', ')} del vendedor: edita la compra para añadirlo antes de presentar.</p>}
+        </div>
+
+        {!presentado && (
+          <ol className="text-xs text-neutral-700 space-y-1 list-decimal pl-5">
+            <li>Entra en la <a href={OVT_MADRID_URL} target="_blank" rel="noopener noreferrer" className="text-sky-700 underline">Oficina Virtual Tributaria</a> de la Comunidad de Madrid con el certificado digital de la empresa.</li>
+            <li>Crea un modelo 600 de transmisiones patrimoniales con los datos de arriba.</li>
+            <li>Adjunta el contrato firmado{compra.contrato_url ? <> (<a href={compra.contrato_url} target="_blank" rel="noopener noreferrer" className="text-sky-700 underline">descargar</a>)</> : <span className="text-red-600 font-semibold"> (aún no lo has subido)</span>}.</li>
+            <li>Paga con cargo en la cuenta de BBVA, tarjeta o Bizum, y descarga el justificante.</li>
+            <li>Márcalo aquí abajo como presentado: se crea el gasto del ITP (Tributos, 631).</li>
+          </ol>
+        )}
+
+        <div className="border rounded-xl p-3 space-y-2 bg-neutral-50">
+          <p className="text-sm font-bold text-neutral-800">{presentado ? 'Datos de la presentación' : 'Marcar como presentado'}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Input label="Fecha de presentación" type="date" value={form.fecha} onChange={e => setForm({ ...form, fecha: e.target.value })} />
+            <Input label="N.º de autoliquidación" value={form.numero} onChange={e => setForm({ ...form, numero: e.target.value })} placeholder="600…" />
+            <Input label="Importe pagado (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({ ...form, importe: e.target.value })} />
+            <div>
+              <label className="block text-sm font-semibold text-neutral-700 mb-1.5">Pagado con</label>
+              <select value={form.forma_pago} onChange={e => setForm({ ...form, forma_pago: e.target.value })} className="w-full px-3 py-2.5 rounded-xl border border-neutral-300 text-sm">
+                {FORMAS_PAGO.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs px-3 py-1.5 rounded-lg border border-neutral-300 bg-white font-semibold cursor-pointer hover:bg-neutral-100">
+              {subiendo ? '⏳ Subiendo…' : '📎 Subir justificante del 600'}
+              <input type="file" accept="application/pdf,image/*" className="hidden" disabled={subiendo} onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setSubiendo(true);
+                const url = await subirArchivoFacturasGastos(file, `itp600-compra-${compra.id}`);
+                setSubiendo(false);
+                if (url) setForm(f => ({ ...f, justificante_url: url }));
+              }} />
+            </label>
+            {form.justificante_url && <a href={form.justificante_url} target="_blank" rel="noopener noreferrer" className="text-xs text-green-700 font-semibold">✓ Justificante adjunto</a>}
+          </div>
+        </div>
+
+        <div className="flex justify-between gap-2 pt-3 border-t flex-wrap">
+          <div>
+            {presentado && (
+              <Button variant="secondary" onClick={async () => { if (await volverItpAPendiente(compra)) onCerrar(); }}>Volver a pendiente</Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={onCerrar}>Cerrar</Button>
+            <Button disabled={guardando || !form.fecha} onClick={async () => {
+              setGuardando(true);
+              const ok = await marcarItpPresentado(compra, form);
+              setGuardando(false);
+              if (ok) onCerrar();
+            }} className="bg-emerald-700 hover:bg-emerald-800">
+              {guardando ? '⏳ Guardando…' : presentado ? 'Guardar cambios' : '✅ Marcar como presentado'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ---------- Pestaña "Compras a particulares" dentro de Gastos ----------
+  const renderComprasParticulares = () => {
+    const lista = [...comprasParticulares].sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')) || (b.id - a.id));
+    const anio = String(new Date().getFullYear());
+    const delAnio = lista.filter(c => String(c.fecha || '').startsWith(anio));
+    const pendientesItp = lista
+      .filter(c => c.itp_estado !== 'presentado' && (parseFloat(c.itp_importe) || 0) > 0)
+      .sort((a, b) => String(a.itp_plazo || '').localeCompare(String(b.itp_plazo || '')));
+    const urgentes = pendientesItp.filter(c => { const d = diasNaturalesHasta(c.itp_plazo); return d !== null && d <= 7; });
+    const itpPagadoAnio = delAnio.filter(c => c.itp_estado === 'presentado').reduce((s, c) => s + (parseFloat(c.itp_importe) || 0), 0);
+    const sinContrato = lista.filter(c => !c.contrato_url).length;
+    const resumenItems = (c) => (Array.isArray(c.items_json) ? c.items_json : []).map(i => i.descripcion).filter(Boolean).join(', ') || 'Sin descripción';
+
+    return (
+      <div className="space-y-4">
+        <Card className="p-4 bg-sky-50 border-sky-200">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex-1 min-w-[240px]">
+              <h3 className="font-bold text-sky-900">🛒 Compras a particulares (Wallapop y similares)</h3>
+              <p className="text-xs text-sky-800 mt-1">Un particular no da factura: se justifica con un contrato firmado y el justificante del pago. La compra no lleva IVA, pero Rootflow paga un 4 % de ITP con el modelo 600 en los 30 días hábiles siguientes.</p>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <Button variant="secondary" size="sm" onClick={() => generarContratoCompraParticular(null)}><Printer size={14} /> Contrato en blanco</Button>
+              <Button size="sm" onClick={() => { setEditingItem(null); setShowModal('compraParticular'); }} className="bg-sky-600 hover:bg-sky-700"><Plus size={14} /> Nueva compra</Button>
+            </div>
+          </div>
+          <details className="mt-3 text-xs text-sky-900">
+            <summary className="cursor-pointer font-semibold">Cómo funciona (paso a paso)</summary>
+            <ol className="list-decimal pl-5 mt-2 space-y-1">
+              <li>Antes de pagar, pide al vendedor nombre, DNI y domicilio (van al contrato y al modelo 600). Si no quiere darlos, no compres a nombre de Rootflow.</li>
+              <li>Paga de forma trazable: Bizum o transferencia desde Rootflow, o el pago de Wallapop con la tarjeta de empresa.</li>
+              <li>Pulsa "Nueva compra" → "Guardar e imprimir contrato". Se crea el gasto solo.</li>
+              <li>Firmad el contrato al recoger. Si es por envío, mándale el PDF y que te lo devuelva firmado (vale una foto).</li>
+              <li>Sube el contrato firmado y el justificante del pago con los botones 📎 de la compra.</li>
+              <li>Antes de que venza el plazo, pulsa "Modelo 600": tienes los datos para copiar y, al marcarlo presentado, se crea el gasto del ITP.</li>
+            </ol>
+          </details>
+        </Card>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-3"><p className="text-[11px] text-neutral-500 uppercase font-bold">Compras {anio}</p><p className="text-xl font-black">{formatCurrency(delAnio.reduce((s, c) => s + (parseFloat(c.total) || 0), 0))}</p><p className="text-[11px] text-neutral-400">{delAnio.length} compra{delAnio.length !== 1 ? 's' : ''}</p></Card>
+          <Card className={`p-3 ${pendientesItp.length ? 'bg-amber-50 border-amber-300' : ''}`}><p className="text-[11px] text-amber-700 uppercase font-bold">ITP pendiente</p><p className="text-xl font-black text-amber-800">{formatCurrency(pendientesItp.reduce((s, c) => s + (parseFloat(c.itp_importe) || 0), 0))}</p><p className="text-[11px] text-neutral-500">{pendientesItp.length} modelo{pendientesItp.length !== 1 ? 's' : ''} 600</p></Card>
+          <Card className="p-3"><p className="text-[11px] text-neutral-500 uppercase font-bold">ITP pagado {anio}</p><p className="text-xl font-black text-green-700">{formatCurrency(itpPagadoAnio)}</p></Card>
+          <Card className={`p-3 ${sinContrato ? 'bg-red-50 border-red-200' : ''}`}><p className="text-[11px] text-neutral-500 uppercase font-bold">Sin contrato subido</p><p className={`text-xl font-black ${sinContrato ? 'text-red-600' : 'text-green-700'}`}>{sinContrato}</p></Card>
+        </div>
+
+        {urgentes.length > 0 && (
+          <Card className="p-3 bg-red-50 border-2 border-red-300">
+            <p className="text-sm font-bold text-red-800 flex items-center gap-2"><AlertTriangle size={16} /> Modelos 600 que vencen pronto</p>
+            <div className="mt-2 space-y-1">
+              {urgentes.map(c => {
+                const d = diasNaturalesHasta(c.itp_plazo);
+                return (
+                  <div key={c.id} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg border border-red-200 px-2 py-1.5">
+                    <span><strong>{c.vendedor_nombre || 'Particular'}</strong> · {formatCurrency(c.total)} · ITP {formatCurrency(c.itp_importe)}</span>
+                    <span className={`font-bold ${d < 0 ? 'text-red-700' : 'text-amber-700'}`}>{d < 0 ? `venció hace ${-d} día${d !== -1 ? 's' : ''}` : d === 0 ? 'vence hoy' : `vence en ${d} día${d !== 1 ? 's' : ''}`}</span>
+                    <button onClick={() => { setEditingItem(c); setShowModal('itpCompra'); }} className="px-2 py-1 rounded bg-red-600 text-white font-semibold hover:bg-red-700">Modelo 600</button>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+
+        {lista.length === 0 ? (
+          <Card className="p-8 text-center">
+            <p className="text-4xl mb-2">🛒</p>
+            <p className="font-semibold text-neutral-800">Todavía no hay compras a particulares</p>
+            <p className="text-sm text-neutral-500 mt-1">Cuando compréis algo de segunda mano, regístralo aquí para tener el contrato, el gasto y el ITP controlados.</p>
+            <Button className="mt-4 bg-sky-600 hover:bg-sky-700" onClick={() => { setEditingItem(null); setShowModal('compraParticular'); }}><Plus size={16} /> Nueva compra</Button>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {lista.map(c => {
+              const d = diasNaturalesHasta(c.itp_plazo);
+              const presentado = c.itp_estado === 'presentado';
+              const datos600Completos = c.vendedor_nombre && c.vendedor_dni && c.vendedor_domicilio;
+              return (
+                <Card key={c.id} className="p-3">
+                  <div className="flex items-start gap-3 flex-wrap">
+                    <div className="flex-1 min-w-[220px]">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-neutral-900">{c.vendedor_nombre || 'Vendedor sin nombre'}</span>
+                        {c.wallapop_usuario && <span className="text-xs text-neutral-500">@{c.wallapop_usuario.replace(/^@/, '')}</span>}
+                        <span className="text-xs text-neutral-400">· {formatDate(c.fecha)} · n.º {c.id}</span>
+                      </div>
+                      <p className="text-sm text-neutral-700 truncate">{resumenItems(c)}</p>
+                      <div className="flex gap-1.5 mt-1.5 flex-wrap text-[11px]">
+                        <span className={`px-2 py-0.5 rounded-full ${c.contrato_url ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.contrato_url ? '✓ Contrato firmado' : '✗ Falta contrato firmado'}</span>
+                        <span className={`px-2 py-0.5 rounded-full ${c.justificante_pago_url ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{c.justificante_pago_url ? '✓ Justificante de pago' : '✗ Falta justificante de pago'}</span>
+                        {!datos600Completos && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Faltan datos del vendedor</span>}
+                        {c.gasto_id ? <span className="px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600">Gasto registrado</span> : <span className="px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-500">Sin gasto vinculado</span>}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-black">{formatCurrency(c.total)}</p>
+                      {presentado ? (
+                        <p className="text-xs font-semibold text-green-700">ITP {formatCurrency(c.itp_importe)} · presentado</p>
+                      ) : (
+                        <p className={`text-xs font-semibold ${d !== null && d < 0 ? 'text-red-700' : d !== null && d <= 7 ? 'text-amber-700' : 'text-neutral-500'}`}>
+                          ITP {formatCurrency(c.itp_importe)} · {d === null ? 'sin plazo' : d < 0 ? `vencido (${formatDate(c.itp_plazo)})` : `hasta ${formatDate(c.itp_plazo)}`}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 mt-2 pt-2 border-t border-neutral-100 flex-wrap">
+                    <button onClick={() => generarContratoCompraParticular(c)} className="text-xs px-2.5 py-1.5 rounded-lg border border-neutral-300 hover:bg-neutral-50 font-semibold flex items-center gap-1"><Printer size={13} /> Contrato</button>
+                    <label className="text-xs px-2.5 py-1.5 rounded-lg border border-neutral-300 hover:bg-neutral-50 font-semibold cursor-pointer">
+                      📎 {c.contrato_url ? 'Cambiar contrato firmado' : 'Subir contrato firmado'}
+                      <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => adjuntarDocumentoCompra(c, 'contrato', e.target.files?.[0])} />
+                    </label>
+                    <label className="text-xs px-2.5 py-1.5 rounded-lg border border-neutral-300 hover:bg-neutral-50 font-semibold cursor-pointer">
+                      📎 {c.justificante_pago_url ? 'Cambiar justificante' : 'Subir justificante de pago'}
+                      <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => adjuntarDocumentoCompra(c, 'pago', e.target.files?.[0])} />
+                    </label>
+                    {c.contrato_url && <a href={c.contrato_url} target="_blank" rel="noopener noreferrer" className="text-xs px-2.5 py-1.5 rounded-lg text-sky-700 hover:bg-sky-50 font-semibold">Ver contrato</a>}
+                    <button onClick={() => { setEditingItem(c); setShowModal('itpCompra'); }} className={`text-xs px-2.5 py-1.5 rounded-lg font-semibold ${presentado ? 'border border-green-300 text-green-700 hover:bg-green-50' : 'bg-amber-500 text-white hover:bg-amber-600'}`}>🧾 Modelo 600</button>
+                    <div className="flex-1" />
+                    <button onClick={() => { setEditingItem(c); setShowModal('compraParticular'); }} className="p-1.5 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Editar"><Edit2 size={15} /></button>
+                    <button onClick={() => eliminarCompraParticular(c)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={15} /></button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+
   const renderGastos = () => {
     // Filtrar gastos por mes y luego por filtros de columna
     let gastosFiltradosPorMes = filtrarPorPeriodo(gastos, 'fecha', filtroGastosMes);
@@ -12282,6 +13179,15 @@ ${transacciones}
               const totalReemb = (reembolsosSociosData || []).reduce((s, r) => s + (r.importe || 0), 0);
               const pendiente = totalDeuda - totalReemb;
               return `💸 Deuda Socios${pendiente > 0 ? ` (${formatCurrency(pendiente)})` : ''}`;
+            })()}
+          </button>
+          <button 
+            onClick={() => setGastosTab('particulares')} 
+            className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${gastosTab === 'particulares' ? 'border-sky-500 text-sky-600' : 'border-transparent text-neutral-500 hover:text-neutral-700'}`}
+          >
+            {(() => {
+              const pendItp = comprasParticulares.filter(c => c.itp_estado !== 'presentado' && (parseFloat(c.itp_importe) || 0) > 0).length;
+              return `🛒 Compras a particulares${pendItp > 0 ? ` (${pendItp} ITP pend.)` : ''}`;
             })()}
           </button>
         </div>
@@ -12824,6 +13730,9 @@ ${transacciones}
             })()}
           </>
         )}
+
+        {/* ============ PESTAÑA COMPRAS A PARTICULARES V80 ============ */}
+        {gastosTab === 'particulares' && renderComprasParticulares()}
 
         {/* ============ PESTAÑA DEUDA SOCIOS V47 ============ */}
         {gastosTab === 'deuda_socios' && (
@@ -15572,8 +16481,6 @@ ${logoRootflow}^FS
               </div>
             )}
           </div>
-        )}
-
         )}
 
         {/* ============ PESTAÑA FASES PRODUCTIVAS V45 ============ */}
@@ -29775,6 +30682,37 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
         </Modal>
       )}
       
+      {/* Modal Compra a particular V80 */}
+      {showModal === 'compraParticular' && (
+        <Modal title={editingItem?.id ? `✏️ Compra a particular n.º ${editingItem.id}` : '🛒 Nueva compra a particular'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl">
+          <CompraParticularForm
+            compra={editingItem?.id ? editingItem : null}
+            onSave={async (form, w) => {
+              const id = await guardarCompraParticular(form, editingItem?.id || null);
+              if (!id) return false;
+              if (w) {
+                const items = itemsCompraValidos(form.items);
+                generarContratoCompraParticular({ ...form, id, items_json: items, total: items.reduce((s, i) => s + i.precio, 0) }, w);
+              }
+              setShowModal(null);
+              setEditingItem(null);
+              return true;
+            }}
+            onCancel={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+
+      {/* Modal Modelo 600 (ITP) V80 */}
+      {showModal === 'itpCompra' && editingItem && (
+        <Modal title="🧾 Modelo 600 · ITP de la compra" onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+          <ItpCompraModal
+            compra={comprasParticulares.find(c => c.id === editingItem.id) || editingItem}
+            onCerrar={() => { setShowModal(null); setEditingItem(null); }}
+          />
+        </Modal>
+      )}
+
       {/* Modal Corregir Factura V79 */}
       {showModal === 'corregirFactura' && editingItem && (
         <Modal title={`✏️ Corregir factura ${editingItem.id}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl">
