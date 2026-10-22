@@ -29,7 +29,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Ejecutar `supabase/sql/ROOTFLOW-SQL-V82-AREA-CLIENTE.sql`.
 - Desplegar la Edge Function: `supabase functions deploy portal-cliente --no-verify-jwt` (usa el secret `SLACK_WEBHOOK_URL` para avisar de solicitudes nuevas; si no está, el webhook de `notificaciones_config`).
 - El botón "Enviar al cliente" usa `send-email`: hasta cerrar el punto 3 solo funciona el plan B (abre el correo con el enlace ya escrito).
-- Web rootflow.es (repo `pdomecq/rootflow-web-garden`, se trabaja en otro chat de Claude Code): añadir el enlace "Área de clientes" y una ruta `/area-cliente` que redirija a `https://rootflow-erp.vercel.app/area-cliente` conservando `?t=…`. Cuando esté, cambiar `PORTAL_CLIENTE_URL` en `src/empresa.js` a `https://www.rootflow.es/area-cliente`.
+- Web rootflow.es: hecho. `www.rootflow.es/area-cliente` redirige al ERP conservando `?t=…` y los enlaces del ERP ya usan ese dominio. Solo funciona del todo cuando la V82 esté en `main` (producción).
 
 ## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 

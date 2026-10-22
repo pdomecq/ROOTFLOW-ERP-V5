@@ -18,5 +18,5 @@ export const EMPRESA = {
 export const LOGO_URL = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
 
 // V82: dirección pública del área de cliente. Los enlaces de los emails llevan ?t=<clientes.portal_token>.
-// Si la web rootflow.es pasa a tener su propia ruta /area-cliente (redirigiendo aquí), cambia esta URL.
-export const PORTAL_CLIENTE_URL = 'https://rootflow-erp.vercel.app/area-cliente';
+// rootflow.es/area-cliente redirige (con los parámetros) a rootflow-erp.vercel.app/area-cliente, que es donde vive la página.
+export const PORTAL_CLIENTE_URL = 'https://www.rootflow.es/area-cliente';
