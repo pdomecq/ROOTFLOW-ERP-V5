@@ -11,12 +11,13 @@ import {
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
   Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
-  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles
+  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles, Globe, ExternalLink, Inbox
 } from 'lucide-react';
 import { Copy } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
+import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -67,22 +68,7 @@ const useFormPersistence = (key, initialValue, enabled = true) => {
 };
 
 // ==================== DATOS DE EMPRESA ====================
-const EMPRESA = {
-  nombre: 'ROOTFLOW HYDROPONICS SL',
-  direccion: 'C. Nueva, 16, P6',
-  cp: '28231',
-  ciudad: 'Las Rozas de Madrid, Madrid',
-  telefono: '+34 638 161 990',
-  email: 'info@rootflow.es',
-  web: 'www.rootflow.es',
-  cif: 'B27535137',
-  iban: 'ES58 0182 4015 6002 0261 4010',
-  banco: 'BBVA',
-  swift: 'BBVAESMMXXX'
-};
-
-// ==================== ROOTFLOW LOGO OFICIAL ====================
-const LOGO_URL = 'https://www.rootflow.es/lovable-uploads/70262e87-198c-4788-b2e9-7b89bef45202.png';
+// V82: EMPRESA, LOGO_URL y PORTAL_CLIENTE_URL viven en src/empresa.js (los comparte el área de cliente)
 
 const RootFlowLogo = ({ size = 40, showERP = true }) => (
   <div className="relative">
@@ -187,7 +173,12 @@ const useRealtime = (table) => {
 
   const fetchData = async () => {
     try {
-      const { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      let { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      // V81: si la tabla no tiene created_at (42703), reintentar sin ordenar en vez de dejarla vacía
+      if (e && (e.code === '42703' || /created_at/.test(e.message || ''))) {
+        console.warn(`${table} no tiene created_at: se carga sin ordenar (ejecuta el SQL V81)`);
+        ({ data: d, error: e } = await supabase.from(table).select('*'));
+      }
       if (e) {
         console.warn(`Error cargando ${table}:`, e.message);
         setError(e);
@@ -1633,6 +1624,8 @@ const MainApp = () => {
   // V58 - Albaranes
   const { data: albaranesData, refetch: refetchAlbaranes } = useRealtime('albaranes');
   const { data: albaranPedidosData, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
+  // V82 - Solicitudes de ampliación enviadas desde el área de cliente
+  const { data: solicitudesClienteData, refetch: refetchSolicitudesCliente } = useRealtime('solicitudes_cliente');
   // V64 - Inventario de insumos
   const { data: insumosData, refetch: refetchInsumos } = useRealtime('insumos');
   const { data: insumoMovimientosData, refetch: refetchInsumoMovimientos } = useRealtime('insumo_movimientos');
@@ -1765,6 +1758,7 @@ const MainApp = () => {
   const configSlack = (configSlackData && configSlackData[0]) || null;
   // V58 - Albaranes
   const albaranes = albaranesData || [];
+  const solicitudesCliente = solicitudesClienteData || []; // V82
   const albaranPedidos = albaranPedidosData || [];
   // V64 - Insumos
   const insumos = insumosData || [];
@@ -3175,6 +3169,228 @@ const MainApp = () => {
       });
       return { success: false, error: e.message || String(e) };
     }
+  };
+
+
+  // ==================== V82 — ÁREA DE CLIENTE Y ENVÍO DE FACTURAS ====================
+  // Enlace privado por cliente: PORTAL_CLIENTE_URL?t=<clientes.portal_token>. Los datos los sirve la
+  // Edge Function portal-cliente (service role), nunca la clave anon.
+  const escHtml = (t) => String(t ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+  const urlAreaCliente = (token, facturaId = null) =>
+    `${PORTAL_CLIENTE_URL}?t=${encodeURIComponent(token)}${facturaId ? `&factura=${encodeURIComponent(facturaId)}` : ''}`;
+
+  const generarTokenPortal = () => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+
+  // Devuelve el token del cliente; si no tiene (o regenerar = true), crea uno nuevo y lo guarda.
+  const asegurarTokenPortal = async (cliente, regenerar = false) => {
+    if (!cliente) return null;
+    if (cliente.portal_token && !regenerar) return cliente.portal_token;
+    const token = generarTokenPortal();
+    const { error } = await supabase.from('clientes').update({ portal_token: token, portal_activo: true }).eq('id', cliente.id);
+    if (error) {
+      if (error.code === '42703') alert('⚠️ Falta la columna clientes.portal_token. Ejecuta el SQL V82 (ROOTFLOW-SQL-V82-AREA-CLIENTE.sql) en Supabase.');
+      else alert('❌ No se pudo crear el enlace del área de cliente: ' + error.message);
+      return null;
+    }
+    refetchClientes();
+    return token;
+  };
+
+  const pieEmailCliente = (url) => `
+    <div style="margin-top:24px;padding:16px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;font-size:14px;color:#333;">
+      <p style="margin:0 0 8px;"><strong>Tu área de cliente RootFlow</strong></p>
+      <p style="margin:0 0 12px;">Consulta tus facturas, tus pedidos con sus variedades y cantidades, tu histórico y, si lo necesitas, pide una ampliación de tu pedido fijo (la revisamos y te confirmamos según espacio y disponibilidad).</p>
+      <a href="${url}" style="display:inline-block;background:#F97316;color:#fff;text-decoration:none;font-weight:700;padding:10px 18px;border-radius:8px;">Entrar en mi área de cliente</a>
+      <p style="margin:10px 0 0;font-size:12px;color:#888;">Este enlace es personal: no lo compartas fuera de tu equipo.</p>
+    </div>
+    <p style="margin-top:24px;font-size:12px;color:#888;">${escHtml(EMPRESA.nombre)} · CIF ${escHtml(EMPRESA.cif)} · ${escHtml(EMPRESA.direccion)}, ${escHtml(EMPRESA.cp)} ${escHtml(EMPRESA.ciudad)} · ${escHtml(EMPRESA.telefono)} · ${escHtml(EMPRESA.email)}</p>`;
+
+  const envolverEmailCliente = (contenido) => `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
+      <div style="margin-bottom:20px;"><img src="${LOGO_URL}" alt="RootFlow" width="44" style="vertical-align:middle;"> <span style="font-size:22px;font-weight:800;vertical-align:middle;">Root<span style="color:#F97316;">Flow</span></span></div>
+      ${contenido}
+    </div></body></html>`;
+
+  const htmlEmailFactura = (factura, cliente, token) => {
+    const cli = cliente || {};
+    const usaSepa = cli.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
+    const fila = (l, v, extra = '') => `<tr><td style="padding:6px 0;color:#555;${extra}">${l}</td><td style="padding:6px 0;text-align:right;${extra}">${v}</td></tr>`;
+    return envolverEmailCliente(`
+      <p style="font-size:15px;">Hola ${escHtml(cli.contacto || cli.nombre || '')},</p>
+      <p style="font-size:15px;">Te enviamos la factura <strong>${escHtml(factura.id)}</strong> del ${formatDate(factura.fecha)}${factura.periodo_desde ? ` (entregas del ${formatDate(factura.periodo_desde)} al ${formatDate(factura.periodo_hasta)})` : ''}.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;border-top:1px solid #eee;">
+        ${fila('Base imponible', formatCurrency(factura.base_imponible))}
+        ${fila(`IVA (${factura.iva_porcentaje || IVA_VENTAS}%)`, formatCurrency(factura.iva))}
+        ${factura.recargo_equivalencia ? fila(`Recargo de equivalencia (${factura.re_porcentaje || RE_VENTAS}%)`, formatCurrency(factura.re_importe || 0)) : ''}
+        ${fila('<strong>Total</strong>', `<strong>${formatCurrency(factura.total)}</strong>`, 'border-top:2px solid #333;font-size:16px;')}
+        ${fila('Vencimiento', formatDate(factura.fecha_vencimiento))}
+      </table>
+      <p style="font-size:14px;">${usaSepa
+        ? `Se cobrará por domiciliación SEPA B2B el ${formatDate(factura.fecha_vencimiento)} en la cuenta del mandato firmado.`
+        : `Pago por transferencia a ${escHtml(EMPRESA.nombre)} (${escHtml(EMPRESA.banco)}) · IBAN <strong>${escHtml(EMPRESA.iban)}</strong> · Concepto: ${escHtml(factura.id)}.`}</p>
+      <p style="margin:20px 0;"><a href="${urlAreaCliente(token, factura.id)}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">Ver la factura y descargar el PDF</a></p>
+      <p style="font-size:14px;">Gracias por confiar en RootFlow 🌱</p>
+      ${pieEmailCliente(urlAreaCliente(token))}`);
+  };
+
+  // Envía la factura al email del cliente con el enlace a su área de cliente.
+  const enviarFacturaCliente = async (factura) => {
+    const cliente = clientes.find(c => c.id === factura.cliente_id);
+    if (!cliente) { alert('❌ No encuentro el cliente de esta factura.'); return; }
+    const para = window.prompt(
+      `Enviar la factura ${factura.id} (${formatCurrency(factura.total)}) a ${cliente.nombre}.\n\nEmail del cliente (varios separados por comas):`,
+      cliente.email || ''
+    );
+    if (para === null) return;
+    const destinatarios = para.split(/[,;\s]+/).map(x => x.trim()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+    if (!destinatarios.length) { alert('⚠️ Escribe al menos un email válido.'); return; }
+
+    const token = await asegurarTokenPortal(cliente);
+    if (!token) return;
+    const asunto = `Factura ${factura.id} · RootFlow Hydroponics`;
+    const res = await enviarEmail({ to: destinatarios, subject: asunto, html: htmlEmailFactura(factura, cliente, token) });
+
+    if (!res.success) {
+      const usarCorreo = window.confirm(`❌ No se pudo enviar el email automático:\n${res.error}\n\n¿Abrir tu programa de correo con el mensaje y el enlace ya escritos?`);
+      if (usarCorreo) {
+        const cuerpo = `Hola ${cliente.contacto || cliente.nombre},\n\nTe enviamos la factura ${factura.id} del ${formatDate(factura.fecha)} por ${formatCurrency(factura.total)} (vence el ${formatDate(factura.fecha_vencimiento)}).\n\nPuedes verla y descargar el PDF aquí:\n${urlAreaCliente(token, factura.id)}\n\nEn tu área de cliente también tienes tus pedidos, el histórico y puedes pedir una ampliación de tu pedido fijo:\n${urlAreaCliente(token)}\n\nGracias,\nRootFlow Hydroponics · ${EMPRESA.telefono}`;
+        window.open(`mailto:${destinatarios.join(',')}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`, '_blank');
+      }
+      return;
+    }
+
+    const { error } = await supabase.from('facturas').update({ enviada_at: new Date().toISOString(), enviada_a: destinatarios.join(', ') }).eq('id', factura.id);
+    if (error && error.code === '42703') alert('⚠️ Email enviado, pero no se ha podido marcar la factura como enviada. Ejecuta el SQL V82.');
+    else if (error) alert('⚠️ Email enviado, pero no se ha podido marcar la factura como enviada: ' + error.message);
+    refetchFacturas();
+    alert(`✅ Factura ${factura.id} enviada a ${destinatarios.join(', ')}`);
+  };
+
+  // Envía al cliente solo el enlace a su área de cliente.
+  const enviarEnlaceAreaCliente = async (cliente) => {
+    const para = window.prompt(`Enviar a ${cliente.nombre} el enlace a su área de cliente.\n\nEmail:`, cliente.email || '');
+    if (para === null) return;
+    const destinatarios = para.split(/[,;\s]+/).map(x => x.trim()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+    if (!destinatarios.length) { alert('⚠️ Escribe al menos un email válido.'); return; }
+    const token = await asegurarTokenPortal(cliente);
+    if (!token) return;
+    const res = await enviarEmail({
+      to: destinatarios,
+      subject: 'Tu área de cliente RootFlow',
+      html: envolverEmailCliente(`<p style="font-size:15px;">Hola ${escHtml(cliente.contacto || cliente.nombre)},</p><p style="font-size:15px;">Ya tienes acceso a tu área de cliente de RootFlow.</p>${pieEmailCliente(urlAreaCliente(token))}`),
+    });
+    if (res.success) alert(`✅ Enlace enviado a ${destinatarios.join(', ')}`);
+    else alert(`❌ No se pudo enviar el email: ${res.error}\n\nCopia el enlace desde el botón "Copiar enlace" y envíalo tú.`);
+  };
+
+  // Aprobar (aplica las cantidades al pedido recurrente) o rechazar una solicitud del área de cliente.
+  const responderSolicitudCliente = async (sol, aprobar) => {
+    const cliente = clientes.find(c => c.id === sol.cliente_id);
+    const items = Array.isArray(sol.items_json) ? sol.items_json : [];
+    const textoDefecto = aprobar
+      ? `¡Hecho! Hemos actualizado tu pedido fijo${sol.fecha_desde ? ` a partir del ${formatDate(sol.fecha_desde)}` : ''}.`
+      : 'Ahora mismo no tenemos espacio o disponibilidad para este cambio. Te avisamos en cuanto podamos.';
+    const respuesta = window.prompt(`${aprobar ? 'APROBAR' : 'RECHAZAR'} la solicitud de ${cliente?.nombre || 'cliente'}.\n\nRespuesta que verá el cliente:`, textoDefecto);
+    if (respuesta === null) return;
+
+    if (aprobar && sol.pedido_recurrente_id && items.length) {
+      for (const it of items) {
+        const existente = pedidosRecurrentesItems.find(i => i.pedido_recurrente_id === sol.pedido_recurrente_id && i.producto_id === it.producto_id);
+        const cantidad = parseInt(it.cantidad_solicitada) || 0;
+        let error = null;
+        if (existente && cantidad <= 0) ({ error } = await supabase.from('pedidos_recurrentes_items').delete().eq('id', existente.id));
+        else if (existente) ({ error } = await supabase.from('pedidos_recurrentes_items').update({ cantidad }).eq('id', existente.id));
+        else if (cantidad > 0) ({ error } = await supabase.from('pedidos_recurrentes_items').insert({ pedido_recurrente_id: sol.pedido_recurrente_id, producto_id: it.producto_id, cantidad }));
+        if (error) { alert(`❌ Error al actualizar ${it.producto_nombre} en el pedido recurrente: ${error.message}\n\nLa solicitud sigue pendiente.`); refetchPedidosRecurrentesItems(); return; }
+      }
+      refetchPedidosRecurrentesItems();
+    } else if (aprobar && !sol.pedido_recurrente_id) {
+      alert('ℹ️ Esta solicitud es de un pedido fijo nuevo: créalo en "Nuevo Recurrente" con estos productos. La marco como aprobada.');
+    }
+
+    const { error } = await supabase.from('solicitudes_cliente').update({
+      estado: aprobar ? 'aprobada' : 'rechazada',
+      respuesta: respuesta.trim() || null,
+      respondida_at: new Date().toISOString(),
+      respondida_por: user?.email || null,
+      updated_at: new Date().toISOString(),
+    }).eq('id', sol.id);
+    if (error) { alert('❌ No se pudo guardar la respuesta: ' + error.message); return; }
+    refetchSolicitudesCliente();
+
+    if (cliente?.email && window.confirm(`¿Avisar por email a ${cliente.nombre} (${cliente.email})?`)) {
+      const token = await asegurarTokenPortal(cliente);
+      if (!token) return;
+      const lista = items.map(i => `<li>${escHtml(i.producto_nombre)}: ${i.cantidad_actual} → <strong>${i.cantidad_solicitada}</strong></li>`).join('');
+      const res = await enviarEmail({
+        to: [cliente.email],
+        subject: aprobar ? 'Ampliación de tu pedido fijo aprobada · RootFlow' : 'Sobre tu solicitud de ampliación · RootFlow',
+        html: envolverEmailCliente(`<p style="font-size:15px;">Hola ${escHtml(cliente.contacto || cliente.nombre)},</p><p style="font-size:15px;">${escHtml(respuesta)}</p>${lista ? `<ul style="font-size:14px;">${lista}</ul>` : ''}${pieEmailCliente(urlAreaCliente(token))}`),
+      });
+      if (!res.success) alert('⚠️ Respuesta guardada (el cliente la ve en su área), pero el email no salió: ' + res.error);
+    }
+  };
+
+  // V82: ventana "Área de cliente" de un cliente (enlace privado, envío y acceso)
+  const AreaClienteForm = ({ clienteId, onCerrar }) => {
+    const cliente = clientes.find(c => c.id === clienteId);
+    const [copiado, setCopiado] = useState(false);
+    const [trabajando, setTrabajando] = useState(false);
+    if (!cliente) return null;
+    const url = cliente.portal_token ? urlAreaCliente(cliente.portal_token) : '';
+    const pendientes = solicitudesCliente.filter(s => s.cliente_id === cliente.id && s.estado === 'pendiente').length;
+
+    const crear = async (regenerar = false) => {
+      if (regenerar && !window.confirm('El enlace actual dejará de funcionar y tendrás que enviar el nuevo al cliente. ¿Seguir?')) return;
+      setTrabajando(true);
+      await asegurarTokenPortal(cliente, regenerar);
+      setTrabajando(false);
+    };
+    const copiar = async () => {
+      try { await navigator.clipboard.writeText(url); setCopiado(true); setTimeout(() => setCopiado(false), 2000); }
+      catch { window.prompt('Copia el enlace:', url); }
+    };
+    const cambiarAcceso = async () => {
+      const activo = cliente.portal_activo === false;
+      const { error } = await supabase.from('clientes').update({ portal_activo: activo }).eq('id', cliente.id);
+      if (error) { alert('❌ ' + error.message); return; }
+      refetchClientes();
+    };
+
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-neutral-600">
+          Con este enlace {cliente.nombre} ve sus facturas (y las descarga en PDF), sus pedidos con variedades y cantidades, el histórico,
+          y puede pedir una ampliación de su pedido fijo. Las solicitudes llegan a <strong>Pedidos → Recurrentes</strong> y no se aplican hasta que las apruebes.
+        </p>
+        {!cliente.portal_token ? (
+          <Button onClick={() => crear(false)} disabled={trabajando}><Globe size={16} /> Crear enlace del área de cliente</Button>
+        ) : (
+          <>
+            <div className="flex gap-2">
+              <input readOnly value={url} onFocus={e => e.target.select()} className="flex-1 min-w-0 px-3 py-2 rounded-xl border bg-neutral-50 text-sm font-mono" />
+              <Button variant="secondary" onClick={copiar}>{copiado ? <Check size={16} /> : <Copy size={16} />}{copiado ? 'Copiado' : 'Copiar'}</Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => enviarEnlaceAreaCliente(cliente)}><Send size={16} /> Enviar enlace por email</Button>
+              <Button variant="secondary" onClick={() => window.open(url, '_blank')}><ExternalLink size={16} /> Abrir como el cliente</Button>
+              <Button variant="secondary" onClick={() => crear(true)} disabled={trabajando}><RefreshCw size={16} /> Cambiar enlace</Button>
+              <Button variant="secondary" onClick={cambiarAcceso} className={cliente.portal_activo === false ? 'text-emerald-700' : 'text-red-600'}>
+                {cliente.portal_activo === false ? <><CheckCircle size={16} /> Reactivar acceso</> : <><XCircle size={16} /> Quitar acceso</>}
+              </Button>
+            </div>
+            {cliente.portal_activo === false && <p className="text-sm text-red-600">⛔ Acceso desactivado: el enlace muestra "no válido".</p>}
+            {pendientes > 0 && <p className="text-sm text-amber-700">📩 Tiene {pendientes} solicitud{pendientes === 1 ? '' : 'es'} pendiente{pendientes === 1 ? '' : 's'} en Pedidos → Recurrentes.</p>}
+          </>
+        )}
+        <div className="flex justify-end"><Button variant="secondary" onClick={onCerrar}>Cerrar</Button></div>
+      </div>
+    );
   };
 
   // Obtener emails de socios activos con notificaciones
@@ -10008,6 +10224,7 @@ ${pedidoLinea ? `^FO260,258
               <div className="flex items-center justify-between pt-3 border-t">
                 <Badge variant="orange">{cliente.descuento}% dto</Badge>
                 <div className="flex gap-1">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('areaCliente'); }} className={`p-2 rounded-lg ${cliente.portal_token ? 'text-emerald-600 hover:bg-emerald-50' : 'text-neutral-400 hover:text-orange-600 hover:bg-orange-50'}`} title="Área de cliente (enlace)"><Globe size={16} /></button>{/* V82 */}
                   <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
                   <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
                 </div>
@@ -10042,6 +10259,7 @@ ${pedidoLinea ? `^FO260,258
                   </div>
                 </div>
                 <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => { setEditingItem(cliente); setShowModal('areaCliente'); }} className={`p-2 rounded-lg ${cliente.portal_token ? 'text-emerald-600 hover:bg-emerald-50' : 'text-neutral-400 hover:text-orange-600 hover:bg-orange-50'}`} title="Área de cliente (enlace)"><Globe size={18} /></button>{/* V82 */}
                   <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={18} /></button>
                   <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
                 </div>
@@ -10106,6 +10324,7 @@ ${pedidoLinea ? `^FO260,258
                   <td className="px-5 py-4 font-bold text-orange-600">{cliente.descuento}%</td>
                   <td className="px-5 py-4">
                     <div className="flex justify-end gap-1">
+                      <button onClick={() => { setEditingItem(cliente); setShowModal('areaCliente'); }} className={`p-2 rounded-lg ${cliente.portal_token ? 'text-emerald-600 hover:bg-emerald-50' : 'text-neutral-400 hover:text-orange-600 hover:bg-orange-50'}`} title="Área de cliente (enlace)"><Globe size={16} /></button>{/* V82 */}
                       <button onClick={() => { setEditingItem(cliente); setShowModal('cliente'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
                       <button onClick={() => handleDelete('clientes', cliente.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
                     </div>
@@ -10500,6 +10719,9 @@ ${pedidoLinea ? `^FO260,258
             className={`px-4 py-2 rounded-xl font-semibold transition-colors flex items-center gap-2 ${pedidosTab === 'recurrentes' ? 'bg-orange-500 text-white' : darkMode ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}
           >
             <Repeat size={18} />Recurrentes
+            {solicitudesCliente.some(s => s.estado === 'pendiente') && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-red-500 text-white" title="Solicitudes de clientes pendientes">📩 {solicitudesCliente.filter(s => s.estado === 'pendiente').length}</span>
+            )}{/* V82 */}
             {pedidosRecurrentes.filter(p => p.activo).length > 0 && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${pedidosTab === 'recurrentes' ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>
                 {pedidosRecurrentes.filter(p => p.activo).length}
@@ -10617,6 +10839,40 @@ ${pedidoLinea ? `^FO260,258
         ) : (
           /* Vista de Pedidos Recurrentes */
           <div className="space-y-4">
+            {/* V82: solicitudes de ampliación enviadas desde el área de cliente */}
+            {solicitudesCliente.filter(s => s.estado === 'pendiente').length > 0 && (
+              <Card className={`p-4 border-2 border-amber-300 ${darkMode ? 'bg-neutral-800' : 'bg-amber-50'}`}>
+                <h3 className={`font-bold mb-3 flex items-center gap-2 ${darkMode ? 'text-white' : 'text-neutral-900'}`}><Inbox size={18} className="text-amber-600" />Solicitudes de clientes pendientes</h3>
+                <div className="space-y-3">
+                  {solicitudesCliente.filter(s => s.estado === 'pendiente').map(sol => {
+                    const cli = clientes.find(c => c.id === sol.cliente_id);
+                    const rec = pedidosRecurrentes.find(r => r.id === sol.pedido_recurrente_id);
+                    const its = Array.isArray(sol.items_json) ? sol.items_json : [];
+                    return (
+                      <div key={sol.id} className={`p-3 rounded-xl border ${darkMode ? 'bg-neutral-700 border-neutral-600 text-neutral-100' : 'bg-white border-amber-200'}`}>
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="font-bold">{cli?.nombre || 'Cliente'} · {rec ? `ampliar "${rec.nombre}"` : 'quiere un pedido fijo nuevo'}</p>
+                            <p className="text-xs text-neutral-500">Recibida {formatDate(sol.created_at)}{sol.contacto_nombre ? ` · la pide ${sol.contacto_nombre}` : ''}{sol.fecha_desde ? ` · desde ${formatDate(sol.fecha_desde)}` : ''}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => responderSolicitudCliente(sol, true)}><Check size={14} />Aprobar{rec && its.length ? ' y aplicar' : ''}</Button>
+                            <Button size="sm" variant="secondary" onClick={() => responderSolicitudCliente(sol, false)}><X size={14} />Rechazar</Button>
+                          </div>
+                        </div>
+                        {its.length > 0 && (
+                          <ul className="mt-2 text-sm">
+                            {its.map((i, k) => <li key={k}>• {i.producto_nombre}: {i.cantidad_actual} → <strong className={i.cantidad_solicitada > i.cantidad_actual ? 'text-emerald-600' : 'text-red-600'}>{i.cantidad_solicitada}</strong></li>)}
+                          </ul>
+                        )}
+                        {sol.mensaje && <p className="mt-1 text-sm italic text-neutral-500">"{sol.mensaje}"</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-neutral-500 mt-3">Aprobar cambia las cantidades del pedido recurrente. Antes, comprueba espacio en racks y disponibilidad.</p>
+              </Card>
+            )}
             {pedidosRecurrentes.length === 0 ? (
               <Card className={`p-8 text-center ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
                 <Repeat size={48} className="mx-auto text-neutral-300 mb-4" />
@@ -11353,19 +11609,9 @@ ${pedidoLinea ? `^FO260,258
                 <Calculator size={16} /> Recalcular (tarifas)
               </Button>
             )}
-            <Button variant="secondary" onClick={() => {
-              const itemsTexto = items.map(item => {
-                const prod = productos.find(p => p.id === item.producto_id);
-                return `- ${prod?.nombre || 'Producto'} x${item.cantidad}: ${formatCurrency(item.subtotal)}`;
-              }).join('%0A');
-              
-              const reTexto = factura.recargo_equivalencia ? `%0ARecargo Equiv. (${factura.re_porcentaje || 0.5}%): ${formatCurrency(factura.re_importe || 0)}` : '';
-              const asunto = `Factura ${factura.id} - RootFlow Hydroponics`;
-              const cuerpo = `Estimado/a ${cliente?.nombre},%0A%0AAdjunto encontrará la factura ${factura.id} correspondiente a su pedido.%0A%0ARESUMEN:%0A${itemsTexto}%0A%0ASubtotal: ${formatCurrency(factura.subtotal)}%0AIVA (${factura.iva_porcentaje || 4}%): ${formatCurrency(factura.iva)}${reTexto}%0ATOTAL: ${formatCurrency(factura.total)}%0A%0AFecha vencimiento: ${formatDate(factura.fecha_vencimiento)}%0A%0ADatos de pago:%0ATitular: ${EMPRESA.nombre}%0ABanco: ${EMPRESA.banco}%0AIBAN: ${EMPRESA.iban}%0AConcepto: ${factura.id}%0A%0AGracias por su confianza.%0A%0AAtentamente,%0ARootFlow Hydroponics SL%0A${EMPRESA.telefono}`;
-              
-              window.open(`mailto:${cliente?.email || ''}?subject=${asunto}&body=${cuerpo}`, '_blank');
-            }}>
-              <Mail size={18} /> Enviar Email
+            {/* V82: envío directo al cliente (email con resumen + enlace a su área de cliente) en lugar del mailto */}
+            <Button variant="secondary" onClick={() => enviarFacturaCliente(factura)} title={factura.enviada_at ? `Enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''}` : 'Enviar por email al cliente'}>
+              <Send size={18} /> {factura.enviada_at ? 'Reenviar al cliente' : 'Enviar al cliente'}
             </Button>
             <Button onClick={handlePrint}><Printer size={18} /> Imprimir / PDF</Button>
           </div>
@@ -12040,7 +12286,7 @@ ${transacciones}
                         className="w-4 h-4 rounded"
                       />
                     </td>
-                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p></td>
+                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}</td>
                     <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
                     <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
                     <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
@@ -12048,6 +12294,8 @@ ${transacciones}
                     <td className="px-5 py-4">
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
+                        {/* V82: enviar la factura al cliente con un clic */}
+                        <button onClick={() => enviarFacturaCliente(factura)} className={`p-2 rounded-lg ${factura.enviada_at ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={factura.enviada_at ? `Reenviar (enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''})` : 'Enviar por email al cliente'}><Send size={16} /></button>
                         {factura.tipo === 'agrupada' && (
                           <>
                             <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
@@ -30710,6 +30958,13 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             compra={comprasParticulares.find(c => c.id === editingItem.id) || editingItem}
             onCerrar={() => { setShowModal(null); setEditingItem(null); }}
           />
+        </Modal>
+      )}
+
+      {/* Modal Área de cliente V82 */}
+      {showModal === 'areaCliente' && editingItem && (
+        <Modal title={`🌐 Área de cliente · ${editingItem.nombre}`} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
+          <AreaClienteForm clienteId={editingItem.id} onCerrar={() => { setShowModal(null); setEditingItem(null); }} />
         </Modal>
       )}
 

@@ -18,16 +18,18 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Pasos: desplegar la función (`supabase functions deploy siembra-diaria --no-verify-jwt`), revisar los secrets `RESEND_API_KEY` y `SLACK_WEBHOOK_URL`, ejecutar `supabase/sql/historico/ROOTFLOW-SQL-V71-SIEMBRA-DIARIA.sql` (ya lleva el project ref puesto) y probar con `?force=1`.
 - El email depende además del punto 3.
 
-## 3. 🟠 Los emails no han salido nunca
+## 3. 🟠 Los emails no han salido nunca (ahora bloquea también el envío de facturas V82)
 
 - `email_log`: 14 emails, todos con error (el último en abril) y ninguno enviado. Los 153 "enviado" del log son mensajes de Slack, que sí funcionan.
 - La app llama a la Edge Function `send-email`, pero en Supabase no hay ninguna con ese nombre. Las desplegadas son `send-slack` (correcta), `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (parecen intentos con nombres erróneos).
 - Arreglo: desplegar `supabase/functions/send-email` con ese nombre exacto, comprobar el secret de Resend y el dominio remitente, y borrar las funciones duplicadas.
 
-## 4. 🟠 Seis tablas cargan siempre vacías en la app
+## 4. 🟠 Área de cliente (V82): activarla
 
-- `useRealtime` ordena por `created_at`, y estas tablas no tienen esa columna, así que la consulta falla y la app recibe `[]`: `condiciones_ambientales`, `historico_precios`, `muestra_items`, `notificaciones_config`, `pedidos_recurrentes_items`, `presupuesto_items`. Ejemplos: los pedidos recurrentes quedarían sin productos, los presupuestos sin líneas y la configuración de notificaciones nunca se lee de la base de datos.
-- Arreglo rápido (buen primer cambio con Claude Code): SQL con `ALTER TABLE … ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();` para las seis tablas, y/o que `useRealtime` reintente sin ordenar si la columna no existe.
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V82-AREA-CLIENTE.sql`.
+- Desplegar la Edge Function: `supabase functions deploy portal-cliente --no-verify-jwt` (usa el secret `SLACK_WEBHOOK_URL` para avisar de solicitudes nuevas; si no está, el webhook de `notificaciones_config`).
+- El botón "Enviar al cliente" usa `send-email`: hasta cerrar el punto 3 solo funciona el plan B (abre el correo con el enlace ya escrito).
+- Web rootflow.es: hecho. `www.rootflow.es/area-cliente` redirige al ERP conservando `?t=…` y los enlaces del ERP ya usan ese dominio. Solo funciona del todo cuando la V82 esté en `main` (producción).
 
 ## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
