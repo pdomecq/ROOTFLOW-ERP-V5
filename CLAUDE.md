@@ -28,18 +28,20 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V81**; la siguiente es **V82**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V82: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V82-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V82**; la siguiente es **V83**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V83: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V83-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V82 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V83 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V82: <resumen corto>`.
+- Mensaje de commit: `V83: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
-- Arriba (fuera de componentes): constantes globales `EMPRESA`, `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)`.
+- `src/empresa.js` (V82): `EMPRESA`, `LOGO_URL` y `PORTAL_CLIENTE_URL`, importados por `App.jsx` y por `src/AreaCliente.jsx`.
+- `src/AreaCliente.jsx` (V82): área de cliente pública en `/area-cliente?t=<clientes.portal_token>` (la elige `src/main.jsx`; `vercel.json` reescribe la ruta). Solo habla con la Edge Function `portal-cliente`, que filtra por el token con la service role: no le des acceso a tablas con la clave anon.
+- Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)`.
 - `AuthProvider` + `LoginPage` (Supabase Auth, dominio permitido `rootflow.es`).
 - `MainApp` (línea ~713) contiene **todo lo demás**: estados, datos, helpers, formularios y secciones. Navegación por `activeSection` (`dashboard`, `pedidos`, `albaranes`, `facturacion`, `gastos`, `contabilidad`, `produccion`, `planificacion`, `calendario`, `clientes`, `tarifas`, `leads`, `desarrollo`, …). Cada sección se pinta con una función `renderXxx()` y algunas tienen pestañas con su propio estado (p. ej. `gastosTab`).
 - Datos: `const { data: xData, refetch: refetchX } = useRealtime('tabla');` junto a los demás hooks (zona ~línea 1560) y después `const x = xData || [];`.
@@ -60,7 +62,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - **IDs de documentos** (albaranes, facturas, presupuestos, lotes, asientos): usa `generarIdSecuencial(tabla, prefijo, padding, campo)` y `insertarConIdUnico(tabla, datos, prefijo, padding)`. Nunca `COUNT + 1` (provocó duplicados de `albaranes_pkey`).
 - Comprueba siempre `error` en cada llamada a Supabase y enséñalo con `alert('❌ …' + error.message)`; no des por guardado lo que no se ha guardado.
 - Archivos: bucket `facturas-gastos` (URL pública con `getPublicUrl`).
-- Edge Functions del repo: `send-email`, `send-slack` (`supabase/functions/`). Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
+- Edge Functions del repo: `send-email`, `send-slack`, `siembra-diaria`, `portal-cliente` (`supabase/functions/`). Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
 
 ## Reglas de negocio y fiscales
 

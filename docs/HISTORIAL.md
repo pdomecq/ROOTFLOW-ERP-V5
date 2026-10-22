@@ -7,6 +7,7 @@ Los SQL de cada versión están en `supabase/sql/historico/`. "Ejecutado" = comp
 
 | Versión | Cambio | SQL |
 |---|---|---|
+| V82 | **Área de cliente** para los restaurantes en `/area-cliente?t=<token>` (`src/AreaCliente.jsx`): facturas con vista e impresión/PDF, pedidos con variedades y cantidades, histórico de 6 meses y solicitud de ampliación del pedido fijo (no se aplica sola: se aprueba o rechaza en Pedidos → Recurrentes, que aplica las cantidades al aprobar). Los datos los sirve la Edge Function `portal-cliente` filtrando por el token (service role, sin usar la clave anon). En el ERP: botón ✉️ **Enviar al cliente** en cada factura (email con resumen, pago y enlaces; si falla, ofrece el mailto con el enlace) y marca "Enviada"; botón 🌐 en Clientes para crear, copiar, enviar, cambiar o quitar el enlace. `EMPRESA`/`LOGO_URL` pasan a `src/empresa.js`; `vercel.json` para la ruta. | V82-AREA-CLIENTE (**pendiente de ejecutar**) |
 | V81 | Seis tablas cargaban siempre vacías porque `useRealtime` ordena por `created_at` y no tenían esa columna (`condiciones_ambientales`, `historico_precios`, `muestra_items`, `notificaciones_config`, `pedidos_recurrentes_items`, `presupuesto_items`): se añade la columna y `useRealtime` reintenta sin ordenar si `created_at` no existe (error 42703). `package-lock.json` en `.gitignore`. | V81-CREATED-AT (**pendiente de ejecutar**) |
 
 ## V71 – V80 (septiembre–octubre 2026)
