@@ -3,6 +3,12 @@
 Hasta la V80 los cambios se hacían en el chat de Claude y se subían a mano a GitHub. Desde la V81 se hacen con Claude Code directamente sobre este repositorio.
 Los SQL de cada versión están en `supabase/sql/historico/`. "Ejecutado" = comprobado en la base de datos el 22-oct-2026.
 
+## V81 en adelante (con Claude Code)
+
+| Versión | Cambio | SQL |
+|---|---|---|
+| V81 | Seis tablas cargaban siempre vacías porque `useRealtime` ordena por `created_at` y no tenían esa columna (`condiciones_ambientales`, `historico_precios`, `muestra_items`, `notificaciones_config`, `pedidos_recurrentes_items`, `presupuesto_items`): se añade la columna y `useRealtime` reintenta sin ordenar si `created_at` no existe (error 42703). `package-lock.json` en `.gitignore`. | V81-CREATED-AT (**pendiente de ejecutar**) |
+
 ## V71 – V80 (septiembre–octubre 2026)
 
 | Versión | Cambio | SQL |

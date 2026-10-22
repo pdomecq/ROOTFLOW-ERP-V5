@@ -24,12 +24,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - La app llama a la Edge Function `send-email`, pero en Supabase no hay ninguna con ese nombre. Las desplegadas son `send-slack` (correcta), `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (parecen intentos con nombres erróneos).
 - Arreglo: desplegar `supabase/functions/send-email` con ese nombre exacto, comprobar el secret de Resend y el dominio remitente, y borrar las funciones duplicadas.
 
-## 4. 🟠 Seis tablas cargan siempre vacías en la app
-
-- `useRealtime` ordena por `created_at`, y estas tablas no tienen esa columna, así que la consulta falla y la app recibe `[]`: `condiciones_ambientales`, `historico_precios`, `muestra_items`, `notificaciones_config`, `pedidos_recurrentes_items`, `presupuesto_items`. Ejemplos: los pedidos recurrentes quedarían sin productos, los presupuestos sin líneas y la configuración de notificaciones nunca se lee de la base de datos.
-- Arreglo rápido (buen primer cambio con Claude Code): SQL con `ALTER TABLE … ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();` para las seis tablas, y/o que `useRealtime` reintente sin ordenar si la columna no existe.
-
-## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
+## 4. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
 "Dependiendo de dónde pulse las genera de una forma u otra y es un caos; algunas salen sin el detalle de importes."
 - Hoy hay al menos tres caminos distintos:
@@ -38,11 +33,11 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
   - El email (mailto): un texto distinto.
 - Objetivo: una única función que genere el HTML de la factura a partir de `calcularImportesAlbaran` (líneas, descuento, portes, base, IVA 4 %, RE, total, vencimiento, IBAN de `EMPRESA`). Que la usen la vista previa, la impresión o PDF, la factura agrupada y el email, y que el resultado salga igual pulses donde pulses.
 
-## 6. 🟡 Límite de 1.000 filas por tabla
+## 5. 🟡 Límite de 1.000 filas por tabla
 
 `useRealtime` hace `select('*')` sin paginar, y Supabase devuelve como máximo 1.000 filas por consulta (límite por defecto). `asiento_lineas` va por 490 filas, `movimientos_stock` por 270 y `email_log` por 187. Cuando alguna pase de 1.000, la app mostrará datos incompletos sin avisar: balances e informes contables saldrán mal. Arreglo: paginar con `.range()` dentro de `fetchData`.
 
-## 7. Ideas aparcadas (no pedidas todavía)
+## 6. Ideas aparcadas (no pedidas todavía)
 
 - Remesas SEPA en formato pain.008 para el banco.
 - Flujo de prepago para clientes nuevos.

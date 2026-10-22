@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V80**; la siguiente es **V81**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V81: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V81-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V81**; la siguiente es **V82**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V82: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V82-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
-  - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga vacía) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V81 OK — …' AS resultado;`.
+  - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V82 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V81: <resumen corto>`.
+- Mensaje de commit: `V82: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 

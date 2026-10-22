@@ -187,7 +187,12 @@ const useRealtime = (table) => {
 
   const fetchData = async () => {
     try {
-      const { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      let { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      // V81: si la tabla no tiene created_at (42703), reintentar sin ordenar en vez de dejarla vacía
+      if (e && (e.code === '42703' || /created_at/.test(e.message || ''))) {
+        console.warn(`${table} no tiene created_at: se carga sin ordenar (ejecuta el SQL V81)`);
+        ({ data: d, error: e } = await supabase.from(table).select('*'));
+      }
       if (e) {
         console.warn(`Error cargando ${table}:`, e.message);
         setError(e);
