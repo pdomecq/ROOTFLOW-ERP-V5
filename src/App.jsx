@@ -710,6 +710,8 @@ const MainApp = () => {
   const [editingItem, setEditingItem] = useState(null);
   const [filterEstado, setFilterEstado] = useState('todos');
   const [selectedFactura, setSelectedFactura] = useState(null);
+  const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
+  const [envioCargando, setEnvioCargando] = useState(false); // V83
   
   // Modo oscuro
   const [darkMode, setDarkMode] = useState(() => {
@@ -1624,6 +1626,8 @@ const MainApp = () => {
   // V58 - Albaranes
   const { data: albaranesData, refetch: refetchAlbaranes } = useRealtime('albaranes');
   const { data: albaranPedidosData, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
+  // V83 - Ajustes del sistema (envío automático de facturas)
+  const { data: ajustesSistemaData, refetch: refetchAjustesSistema } = useRealtime('ajustes_sistema');
   // V82 - Solicitudes de ampliación enviadas desde el área de cliente
   const { data: solicitudesClienteData, refetch: refetchSolicitudesCliente } = useRealtime('solicitudes_cliente');
   // V64 - Inventario de insumos
@@ -1759,6 +1763,7 @@ const MainApp = () => {
   // V58 - Albaranes
   const albaranes = albaranesData || [];
   const solicitudesCliente = solicitudesClienteData || []; // V82
+  const ajustesSistema = ajustesSistemaData || []; // V83
   const albaranPedidos = albaranPedidosData || [];
   // V64 - Insumos
   const insumos = insumosData || [];
@@ -3216,60 +3221,126 @@ const MainApp = () => {
       ${contenido}
     </div></body></html>`;
 
-  const htmlEmailFactura = (factura, cliente, token) => {
-    const cli = cliente || {};
-    const usaSepa = cli.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
-    const fila = (l, v, extra = '') => `<tr><td style="padding:6px 0;color:#555;${extra}">${l}</td><td style="padding:6px 0;text-align:right;${extra}">${v}</td></tr>`;
-    return envolverEmailCliente(`
-      <p style="font-size:15px;">Hola ${escHtml(cli.contacto || cli.nombre || '')},</p>
-      <p style="font-size:15px;">Te enviamos la factura <strong>${escHtml(factura.id)}</strong> del ${formatDate(factura.fecha)}${factura.periodo_desde ? ` (entregas del ${formatDate(factura.periodo_desde)} al ${formatDate(factura.periodo_hasta)})` : ''}.</p>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;border-top:1px solid #eee;">
-        ${fila('Base imponible', formatCurrency(factura.base_imponible))}
-        ${fila(`IVA (${factura.iva_porcentaje || IVA_VENTAS}%)`, formatCurrency(factura.iva))}
-        ${factura.recargo_equivalencia ? fila(`Recargo de equivalencia (${factura.re_porcentaje || RE_VENTAS}%)`, formatCurrency(factura.re_importe || 0)) : ''}
-        ${fila('<strong>Total</strong>', `<strong>${formatCurrency(factura.total)}</strong>`, 'border-top:2px solid #333;font-size:16px;')}
-        ${fila('Vencimiento', formatDate(factura.fecha_vencimiento))}
-      </table>
-      <p style="font-size:14px;">${usaSepa
-        ? `Se cobrará por domiciliación SEPA B2B el ${formatDate(factura.fecha_vencimiento)} en la cuenta del mandato firmado.`
-        : `Pago por transferencia a ${escHtml(EMPRESA.nombre)} (${escHtml(EMPRESA.banco)}) · IBAN <strong>${escHtml(EMPRESA.iban)}</strong> · Concepto: ${escHtml(factura.id)}.`}</p>
-      <p style="margin:20px 0;"><a href="${urlAreaCliente(token, factura.id)}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">Ver la factura y descargar el PDF</a></p>
-      <p style="font-size:14px;">Gracias por confiar en RootFlow 🌱</p>
-      ${pieEmailCliente(urlAreaCliente(token))}`);
+  // V83: el email de factura (con el PDF adjunto) lo monta y lo envía la Edge Function portal-cliente,
+  // igual que el envío automático, para que el cliente reciba siempre lo mismo.
+  const invocarPortal = async (body) => {
+    const { data, error } = await supabase.functions.invoke('portal-cliente', { body });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      return { error: msg };
+    }
+    if (data?.error) return { ...data, error: data.error };
+    return data || {};
   };
 
-  // Envía la factura al email del cliente con el enlace a su área de cliente.
+  const emailsFacturacion = (cliente) => (cliente?.email_facturacion || cliente?.email || '').trim();
+
+  // Envía ya una factura al cliente (botón ✉️). Si falla, ofrece el mailto con el enlace.
   const enviarFacturaCliente = async (factura) => {
     const cliente = clientes.find(c => c.id === factura.cliente_id);
     if (!cliente) { alert('❌ No encuentro el cliente de esta factura.'); return; }
     const para = window.prompt(
-      `Enviar la factura ${factura.id} (${formatCurrency(factura.total)}) a ${cliente.nombre}.\n\nEmail del cliente (varios separados por comas):`,
-      cliente.email || ''
+      `Enviar la factura ${factura.id} (${formatCurrency(factura.total)}) a ${cliente.nombre}, con el PDF adjunto y el enlace a su área de cliente.\n\nEmail (varios separados por comas):`,
+      emailsFacturacion(cliente)
     );
     if (para === null) return;
     const destinatarios = para.split(/[,;\s]+/).map(x => x.trim()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
     if (!destinatarios.length) { alert('⚠️ Escribe al menos un email válido.'); return; }
 
+    const res = await invocarPortal({ accion: 'admin_enviar_factura', factura_id: factura.id, para: destinatarios });
+    refetchFacturas();
+    if (res.ok) { alert(`✅ Factura ${factura.id} enviada a ${destinatarios.join(', ')} con el PDF adjunto.`); return; }
+
+    const usarCorreo = window.confirm(`❌ No se pudo enviar el email:\n${res.error}\n\n¿Abrir tu programa de correo con el mensaje y el enlace ya escritos? (sin PDF: el cliente lo descarga desde su área)`);
+    if (!usarCorreo) return;
     const token = await asegurarTokenPortal(cliente);
     if (!token) return;
     const asunto = `Factura ${factura.id} · RootFlow Hydroponics`;
-    const res = await enviarEmail({ to: destinatarios, subject: asunto, html: htmlEmailFactura(factura, cliente, token) });
+    const cuerpo = `Hola ${cliente.contacto || cliente.nombre},\n\nTe enviamos la factura ${factura.id} del ${formatDate(factura.fecha)} por ${formatCurrency(factura.total)} (vence el ${formatDate(factura.fecha_vencimiento)}).\n\nPuedes verla y descargar el PDF aquí:\n${urlAreaCliente(token, factura.id)}\n\nEn tu área de cliente también tienes tus facturas anteriores, los albaranes, tus pedidos y el histórico, y puedes pedir una ampliación de tu pedido fijo:\n${urlAreaCliente(token)}\n\nGracias,\nRootFlow Hydroponics · ${EMPRESA.telefono}`;
+    window.open(`mailto:${destinatarios.join(',')}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`, '_blank');
+  };
 
-    if (!res.success) {
-      const usarCorreo = window.confirm(`❌ No se pudo enviar el email automático:\n${res.error}\n\n¿Abrir tu programa de correo con el mensaje y el enlace ya escritos?`);
-      if (usarCorreo) {
-        const cuerpo = `Hola ${cliente.contacto || cliente.nombre},\n\nTe enviamos la factura ${factura.id} del ${formatDate(factura.fecha)} por ${formatCurrency(factura.total)} (vence el ${formatDate(factura.fecha_vencimiento)}).\n\nPuedes verla y descargar el PDF aquí:\n${urlAreaCliente(token, factura.id)}\n\nEn tu área de cliente también tienes tus pedidos, el histórico y puedes pedir una ampliación de tu pedido fijo:\n${urlAreaCliente(token)}\n\nGracias,\nRootFlow Hydroponics · ${EMPRESA.telefono}`;
-        window.open(`mailto:${destinatarios.join(',')}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`, '_blank');
-      }
+  // V83: descarga el PDF (el mismo que recibe el cliente) de una factura o un albarán
+  const descargarPdfDocumento = async (tipo, id) => {
+    const res = await invocarPortal({ accion: 'admin_pdf', tipo, id });
+    if (res.error || !res.base64) { alert('❌ No se pudo generar el PDF: ' + (res.error || 'respuesta vacía') + '\n\n¿Está desplegada la última versión de la función portal-cliente?'); return; }
+    const bytes = Uint8Array.from(atob(res.base64), ch => ch.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = res.filename || `${tipo}-${id}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
+  // V83: ajustes del envío automático (tabla ajustes_sistema, claves facturas_envio_*)
+  const ajusteSistema = (clave, defecto = '') => ajustesSistema.find(a => a.clave === clave)?.valor ?? defecto;
+  const envioFacturasActivo = ajusteSistema('facturas_envio_auto') === 'true';
+
+  const guardarAjusteSistema = async (clave, valor) => {
+    const fila = ajustesSistema.find(a => a.clave === clave);
+    const { error } = fila
+      ? await supabase.from('ajustes_sistema').update({ valor, updated_at: new Date().toISOString() }).eq('id', fila.id)
+      : await supabase.from('ajustes_sistema').insert({ clave, valor, tipo: 'text', descripcion: 'V83: envío automático de facturas' });
+    if (error) { alert('❌ No se pudo guardar el ajuste: ' + error.message); return false; }
+    refetchAjustesSistema();
+    return true;
+  };
+
+  const cargarEstadoEnvios = async () => {
+    setEnvioCargando(true);
+    const res = await invocarPortal({ accion: 'admin_estado_envios' });
+    setEnvioEstado(res);
+    setEnvioCargando(false);
+    return res;
+  };
+
+  const cambiarEnvioAutomatico = async () => {
+    if (envioFacturasActivo) {
+      if (!window.confirm('¿Apagar el envío automático de facturas? Podrás seguir enviándolas a mano con el botón ✉️.')) return;
+      await guardarAjusteSistema('facturas_envio_auto', 'false');
       return;
     }
-
-    const { error } = await supabase.from('facturas').update({ enviada_at: new Date().toISOString(), enviada_a: destinatarios.join(', ') }).eq('id', factura.id);
-    if (error && error.code === '42703') alert('⚠️ Email enviado, pero no se ha podido marcar la factura como enviada. Ejecuta el SQL V82.');
-    else if (error) alert('⚠️ Email enviado, pero no se ha podido marcar la factura como enviada: ' + error.message);
-    refetchFacturas();
-    alert(`✅ Factura ${factura.id} enviada a ${destinatarios.join(', ')}`);
+    const est = await cargarEstadoEnvios();
+    if (est?.error) { alert('❌ ' + est.error + '\n\nComprueba que está desplegada la última versión de portal-cliente y ejecutado el SQL V83.'); return; }
+    if (!est?.resend_configurado && !window.confirm('⚠️ Falta el secret RESEND_API_KEY en Supabase: hasta que lo pongas, los envíos fallarán. ¿Activarlo igualmente?')) return;
+    const hoy = new Date().toISOString().split('T')[0];
+    const anteriores = (est?.facturas || []).filter(f => f.fecha < hoy && !/desactivado|no tiene email/.test(f.motivo || ''));
+    let desde = hoy;
+    if (anteriores.length > 0) {
+      const incluir = window.confirm(`Hay ${anteriores.length} factura(s) de antes de hoy, pendientes de cobro, que nunca se han enviado:\n\n${anteriores.slice(0, 12).map(f => `• ${f.id} · ${f.cliente} · ${formatCurrency(f.total)}`).join('\n')}${anteriores.length > 12 ? '\n…' : ''}\n\n¿Enviarlas también?\n\nAceptar = sí, entran en el envío automático\nCancelar = no, solo las facturas a partir de hoy`);
+      if (incluir) desde = '';
+    }
+    if (!window.confirm(`Las facturas se enviarán solas por email, con el PDF y el enlace al área de cliente:\n\n• Clientes "por pedido": cuando el pedido pase a entregado.\n• Clientes semanal / quincenal / mensual: en cuanto generes su factura agrupada.\n\nRevisión a las 9:15 y a las 16:15, y cada 30 min mientras el ERP esté abierto.\n\n¿Activar?`)) return;
+    if (!(await guardarAjusteSistema('facturas_envio_desde', desde))) return;
+    if (!(await guardarAjusteSistema('facturas_envio_auto', 'true'))) return;
+    cargarEstadoEnvios();
   };
+
+  const enviarFacturasPendientesAhora = async () => {
+    const est = await cargarEstadoEnvios();
+    if (est?.error) { alert('❌ ' + est.error); return; }
+    const listas = (est.facturas || []).filter(f => f.se_enviara);
+    if (!listas.length) { alert('No hay ninguna factura lista para enviar ahora.'); return; }
+    if (!window.confirm(`Enviar ahora ${listas.length} factura(s):\n\n${listas.map(f => `• ${f.id} → ${f.cliente} (${f.para.join(', ')})`).join('\n')}`)) return;
+    setEnvioCargando(true);
+    const res = await invocarPortal({ accion: 'admin_enviar_pendientes' });
+    setEnvioCargando(false);
+    refetchFacturas();
+    cargarEstadoEnvios();
+    if (res.error) { alert('❌ ' + res.error); return; }
+    alert(`✅ Enviadas: ${res.enviadas?.length || 0}${res.errores?.length ? `\n❌ Con error: ${res.errores.length}\n\n${res.errores.map(e => `• ${e.id} (${e.cliente}): ${e.error}`).join('\n')}` : ''}`);
+  };
+
+  // V83: mientras el ERP está abierto y el envío automático activado, lanza la ronda de envíos al entrar
+  // y cada 30 minutos (además de la programación diaria de Supabase). La función no duplica envíos.
+  useEffect(() => {
+    if (!envioFacturasActivo) return;
+    const ronda = () => invocarPortal({ accion: 'cron_enviar_facturas' }).then(r => { if (r?.enviadas > 0) refetchFacturas(); });
+    const t0 = setTimeout(ronda, 15000);
+    const t = setInterval(ronda, 30 * 60 * 1000);
+    return () => { clearTimeout(t0); clearInterval(t); };
+  }, [envioFacturasActivo]);
 
   // Envía al cliente solo el enlace a su área de cliente.
   const enviarEnlaceAreaCliente = async (cliente) => {
@@ -3514,6 +3585,20 @@ const MainApp = () => {
           }
           if (!result.error) {
             alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
+          }
+        }
+        // V83: fallback si faltan las columnas de envío de facturas en clientes
+        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.email_facturacion !== undefined || form.envio_facturas_auto !== undefined)) {
+          const { email_facturacion, envio_facturas_auto, ...sinEnvio } = form;
+          form = sinEnvio;
+          if (id) {
+            result = await supabase.from(table).update(sinEnvio).eq('id', id);
+          } else {
+            result = await supabase.from(table).insert(sinEnvio).select();
+            if (result.data && result.data[0]) newRecordId = result.data[0].id;
+          }
+          if (!result.error) {
+            alert('⚠️ Cliente guardado, pero el email de facturación y el envío automático no se han registrado.\n\nEjecuta el SQL V83 en Supabase.');
           }
         }
         // V76/V79: fallback si faltan las columnas de portes o de descuentos por fechas en clientes
@@ -5213,6 +5298,24 @@ ${pedidoLinea ? `^FO260,258
             </div>
           </div>
           
+          {/* V83: envío automático de facturas por email */}
+          <div className="mt-3 pt-3 border-t border-blue-200">
+            <p className="text-xs font-bold text-blue-900 mb-1">📧 Envío de facturas por email</p>
+            <p className="text-[10px] text-blue-700 mb-2">
+              Cada factura se le manda sola con el PDF y el enlace a su área de cliente: si factura por pedido, al entregarse el pedido; si es semanal, quincenal o mensual, al generar la factura agrupada (con el envío automático encendido en Facturación).
+            </p>
+            <Input
+              label="Email de facturación (opcional; varios separados por comas)"
+              value={form.email_facturacion || ''}
+              onChange={e => setForm({...form, email_facturacion: e.target.value})}
+              placeholder={form.email ? `Si lo dejas vacío: ${form.email}` : 'administracion@cliente.es'}
+            />
+            <label className="flex items-center gap-2 mt-2 text-xs text-blue-900 cursor-pointer">
+              <input type="checkbox" checked={form.envio_facturas_auto !== false} onChange={e => setForm({...form, envio_facturas_auto: e.target.checked})} className="w-4 h-4 rounded" />
+              Enviarle las facturas automáticamente
+            </label>
+          </div>
+
           {/* V76: Portes / coste de envío por entrega */}
           <div className="mt-3 pt-3 border-t border-blue-200">
             <p className="text-xs font-bold text-blue-900 mb-1">🚚 Portes (coste de envío por entrega)</p>
@@ -11613,6 +11716,7 @@ ${pedidoLinea ? `^FO260,258
             <Button variant="secondary" onClick={() => enviarFacturaCliente(factura)} title={factura.enviada_at ? `Enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''}` : 'Enviar por email al cliente'}>
               <Send size={18} /> {factura.enviada_at ? 'Reenviar al cliente' : 'Enviar al cliente'}
             </Button>
+            <Button variant="secondary" onClick={() => descargarPdfDocumento('factura', factura.id)} title="El mismo PDF que recibe el cliente por email"><FileDown size={18} /> PDF del cliente</Button>{/* V83 */}
             <Button onClick={handlePrint}><Printer size={18} /> Imprimir / PDF</Button>
           </div>
         </div>
@@ -11888,6 +11992,89 @@ ${transacciones}
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
           <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
         </div>
+
+        {/* ============ V83: ENVÍO AUTOMÁTICO DE FACTURAS ============ */}
+        {(() => {
+          let ultima = null;
+          try { ultima = JSON.parse(ajusteSistema('facturas_envio_ultima', 'null')); } catch { ultima = null; }
+          const desde = ajusteSistema('facturas_envio_desde');
+          const gruposPorFacturar = calcularGruposFacturables().length;
+          const lista = envioEstado && !envioEstado.error ? envioEstado.facturas || [] : null;
+          return (
+            <Card className={`p-4 border-2 ${envioFacturasActivo ? 'border-emerald-300 bg-emerald-50/40' : 'border-neutral-200'}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <Mail size={18} className={envioFacturasActivo ? 'text-emerald-600' : 'text-neutral-400'} />
+                    Envío automático de facturas
+                    <Badge className={envioFacturasActivo ? 'bg-emerald-100 text-emerald-700' : 'bg-neutral-100 text-neutral-600'}>{envioFacturasActivo ? 'Activado' : 'Apagado'}</Badge>
+                  </h3>
+                  <p className="text-xs text-neutral-500 mt-1">
+                    Email con el PDF y el enlace al área de cliente. Por pedido: al entregarse el pedido. Semanal, quincenal o mensual: al generar la factura agrupada.
+                    {envioFacturasActivo && (desde ? ` Solo facturas desde el ${formatDate(desde)}.` : ' Incluye las pendientes anteriores.')}
+                  </p>
+                  {ultima?.fecha && (
+                    <p className="text-xs text-neutral-500 mt-1">
+                      Última ronda: {new Date(ultima.fecha).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · {ultima.enviadas || 0} enviada(s)
+                      {ultima.errores?.length > 0 && <span className="text-red-600"> · {ultima.errores.length} con error</span>}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" disabled={envioCargando} onClick={cargarEstadoEnvios}><Eye size={14} />{envioCargando ? 'Cargando…' : 'Qué se enviará'}</Button>
+                  <Button size="sm" variant="secondary" disabled={envioCargando} onClick={enviarFacturasPendientesAhora}><Send size={14} />Enviar ahora</Button>
+                  <Button size="sm" onClick={cambiarEnvioAutomatico} className={envioFacturasActivo ? 'bg-neutral-600 hover:bg-neutral-700' : 'bg-emerald-600 hover:bg-emerald-700'}>
+                    {envioFacturasActivo ? 'Apagar' : 'Activar'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-neutral-600">Copia oculta de cada envío a:</span>
+                <input
+                  key={ajusteSistema('facturas_envio_copia')}
+                  defaultValue={ajusteSistema('facturas_envio_copia')}
+                  onBlur={e => { if (e.target.value.trim() !== ajusteSistema('facturas_envio_copia')) guardarAjusteSistema('facturas_envio_copia', e.target.value.trim()); }}
+                  placeholder={EMPRESA.email}
+                  className="px-2 py-1 rounded-lg border text-xs w-64"
+                />
+              </div>
+
+              {gruposPorFacturar > 0 && (
+                <div className="mt-3 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex flex-wrap items-center justify-between gap-2">
+                  <span>🧾 {gruposPorFacturar} cliente(s) con facturación agrupada tienen albaranes entregados sin facturar. Genera sus facturas{envioFacturasActivo ? ' y se enviarán solas' : ''}.</span>
+                  <Button size="sm" onClick={() => setShowModal('facturasAgrupadas')} className="bg-green-600 hover:bg-green-700">Generar</Button>
+                </div>
+              )}
+
+              {envioEstado?.error && <p className="mt-3 text-xs text-red-600">❌ {envioEstado.error} — ¿está desplegada la última versión de portal-cliente y ejecutado el SQL V83?</p>}
+              {envioEstado && !envioEstado.error && !envioEstado.resend_configurado && <p className="mt-3 text-xs text-red-600">⚠️ Falta el secret RESEND_API_KEY en Supabase (Edge Functions → Secrets): sin él no sale ningún email.</p>}
+              {lista && (
+                lista.length === 0 ? <p className="mt-3 text-xs text-neutral-500">No hay facturas pendientes sin enviar.</p> : (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead><tr className="text-neutral-500 text-left"><th className="py-1 pr-2">Factura</th><th className="py-1 pr-2">Cliente</th><th className="py-1 pr-2">Para</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Estado</th></tr></thead>
+                      <tbody>
+                        {lista.map(f => (
+                          <tr key={f.id} className="border-t border-neutral-100">
+                            <td className="py-1.5 pr-2 font-semibold">{f.id}</td>
+                            <td className="py-1.5 pr-2">{f.cliente} <span className="text-neutral-400">· {(f.periodicidad || 'por_pedido').replace('_', ' ')}</span></td>
+                            <td className="py-1.5 pr-2 text-neutral-500">{f.para.join(', ') || '—'}</td>
+                            <td className="py-1.5 pr-2 text-right">{formatCurrency(f.total)}</td>
+                            <td className="py-1.5">
+                              {f.se_enviara ? <span className="text-emerald-700 font-semibold">✅ {envioFacturasActivo ? 'Se enviará en la próxima ronda' : 'Lista (envío automático apagado)'}</span> : <span className="text-neutral-500">⏳ {f.motivo}</span>}
+                              {f.error && <span className="block text-red-600">Último error: {f.error}</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+            </Card>
+          );
+        })()}
 
         {/* ============ SECCIÓN SEPA B2B ============ */}
         {(() => {
@@ -12286,7 +12473,7 @@ ${transacciones}
                         className="w-4 h-4 rounded"
                       />
                     </td>
-                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}</td>
+                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}{!factura.enviada_at && factura.envio_error && <p className="text-xs text-red-600" title={factura.envio_error}>❌ Envío fallido{factura.envio_intentos ? ` (${factura.envio_intentos})` : ''}</p>}{/* V83 */}</td>
                     <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
                     <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
                     <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
@@ -23325,7 +23512,9 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
                       }
                       refetchFacturas();
                       refetchAlbaranes();
-                      alert(`✅ ${generadas.length} factura(s) generada(s):\n\n${generadas.join('\n')}\n\nLos albaranes han pasado a estado "facturado".`);
+                      // V83: con el envío automático activado, se mandan ya al cliente
+                      if (envioFacturasActivo) invocarPortal({ accion: 'cron_enviar_facturas' }).then(() => refetchFacturas());
+                      alert(`✅ ${generadas.length} factura(s) generada(s):\n\n${generadas.join('\n')}\n\nLos albaranes han pasado a estado "facturado".${envioFacturasActivo ? '\n\n📧 Se están enviando por email a los clientes.' : ''}`);
                       onCerrar();
                     } catch (e) {
                       alert('❌ Error: ' + (e.message || String(e)) + (generadas.length > 0 ? `\n\nYa se generaron: ${generadas.join(', ')}` : ''));

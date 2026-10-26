@@ -18,18 +18,19 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Pasos: desplegar la función (`supabase functions deploy siembra-diaria --no-verify-jwt`), revisar los secrets `RESEND_API_KEY` y `SLACK_WEBHOOK_URL`, ejecutar `supabase/sql/historico/ROOTFLOW-SQL-V71-SIEMBRA-DIARIA.sql` (ya lleva el project ref puesto) y probar con `?force=1`.
 - El email depende además del punto 3.
 
-## 3. 🟠 Los emails no han salido nunca (ahora bloquea también el envío de facturas V82)
+## 3. 🟠 Emails: falta el secret de Resend
 
-- `email_log`: 14 emails, todos con error (el último en abril) y ninguno enviado. Los 153 "enviado" del log son mensajes de Slack, que sí funcionan.
-- La app llama a la Edge Function `send-email`, pero en Supabase no hay ninguna con ese nombre. Las desplegadas son `send-slack` (correcta), `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (parecen intentos con nombres erróneos).
-- Arreglo: desplegar `supabase/functions/send-email` con ese nombre exacto, comprobar el secret de Resend y el dominio remitente, y borrar las funciones duplicadas.
+- Las facturas (V83) ya no usan `send-email`: las envía la función `portal-cliente` directamente con Resend. Necesita el secret `RESEND_API_KEY` en Supabase → Edge Functions → Secrets y el dominio `rootflow.es` verificado en Resend (remitente `info@rootflow.es`, o el que se ponga en el secret `FROM_EMAIL`).
+- El resto de emails del ERP (alertas, enlace del área de cliente, respuestas a solicitudes) sigue llamando a `send-email`, que no está desplegada. Las desplegadas son `send-slack` (correcta), `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (intentos con nombres erróneos). Arreglo: desplegar `supabase/functions/send-email` con ese nombre exacto y borrar las duplicadas.
+- Histórico: `email_log` tenía 14 emails, todos con error (el último en abril).
 
-## 4. 🟠 Área de cliente (V82): activarla
+## 4. 🟠 Envío automático de facturas (V83): activarlo
 
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V82-AREA-CLIENTE.sql`.
-- Desplegar la Edge Function: `supabase functions deploy portal-cliente --no-verify-jwt` (usa el secret `SLACK_WEBHOOK_URL` para avisar de solicitudes nuevas; si no está, el webhook de `notificaciones_config`).
-- El botón "Enviar al cliente" usa `send-email`: hasta cerrar el punto 3 solo funciona el plan B (abre el correo con el enlace ya escrito).
-- Web rootflow.es: hecho. `www.rootflow.es/area-cliente` redirige al ERP conservando `?t=…` y los enlaces del ERP ya usan ese dominio. Solo funciona del todo cuando la V82 esté en `main` (producción).
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V83-ENVIO-FACTURAS.sql` (columnas, ajustes y programación pg_cron a las 9:15 y 16:15).
+- Desplegar la nueva versión de `portal-cliente` (sigue con "Verify JWT" desactivado) y poner el secret `RESEND_API_KEY` (punto 3).
+- Probar con el botón ✉️ en una factura enviándola a un email propio y con "PDF del cliente"; después, ERP → Facturación → "Qué se enviará" → Activar.
+- La factura agrupada (semanal, quincenal o mensual) se sigue generando con un clic (Facturación → Facturas agrupadas); al generarla se envía sola. Si se quiere que también se genere sola al cerrar el periodo, es un cambio aparte.
+- Los datos de la empresa están copiados en `supabase/functions/portal-cliente/index.ts` (no puede importar `src/empresa.js`): si cambian, actualizar los dos.
 
 ## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
