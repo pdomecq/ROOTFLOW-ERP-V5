@@ -18,21 +18,16 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Pasos: desplegar la función (`supabase functions deploy siembra-diaria --no-verify-jwt`), revisar los secrets `RESEND_API_KEY` y `SLACK_WEBHOOK_URL`, ejecutar `supabase/sql/historico/ROOTFLOW-SQL-V71-SIEMBRA-DIARIA.sql` (ya lleva el project ref puesto) y probar con `?force=1`.
 - El email depende además del punto 3.
 
-## 3. 🟠 Emails: falta el secret de Resend
+## 3. 🟠 Emails: falta solo la clave de Resend
 
-- Las facturas (V83) ya no usan `send-email`: las envía la función `portal-cliente` directamente con Resend. Necesita el secret `RESEND_API_KEY` en Supabase → Edge Functions → Secrets y el dominio `rootflow.es` verificado en Resend (remitente `info@rootflow.es`, o el que se ponga en el secret `FROM_EMAIL`).
-- El resto de emails del ERP (alertas, enlace del área de cliente, respuestas a solicitudes) sigue llamando a `send-email`, que no está desplegada. Las desplegadas son `send-slack` (correcta), `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (intentos con nombres erróneos). Arreglo: desplegar `supabase/functions/send-email` con ese nombre exacto y borrar las duplicadas.
-- Histórico: `email_log` tenía 14 emails, todos con error (el último en abril).
-
-## 4. 🟠 Envío automático de facturas (V83): activarlo
-
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V83-ENVIO-FACTURAS.sql` (columnas, ajustes y programación pg_cron a las 9:15 y 16:15).
-- Desplegar la nueva versión de `portal-cliente` (sigue con "Verify JWT" desactivado) y poner el secret `RESEND_API_KEY` (punto 3).
-- Probar con el botón ✉️ en una factura enviándola a un email propio y con "PDF del cliente"; después, ERP → Facturación → "Qué se enviará" → Activar.
-- La factura agrupada (semanal, quincenal o mensual) se sigue generando con un clic (Facturación → Facturas agrupadas); al generarla se envía sola. Si se quiere que también se genere sola al cerrar el periodo, es un cambio aparte.
+- Hecho (26-oct): `send-email` desplegada con su nombre correcto; `portal-cliente` V83 desplegada; SQL V83 ejecutado (columnas, ajustes y pg_cron 9:15/16:15). El DNS de rootflow.es (IONOS) ya tiene los registros de Resend (`resend._domainkey`, `send` SPF y MX, región eu-west-1).
+- Falta: el secret `RESEND_API_KEY` en Supabase → Edge Functions → Secrets (una clave de la cuenta de Resend que tiene el dominio rootflow.es). Comprobar en Resend → Domains que rootflow.es sale "Verified".
+- Después: probar con ✉️ a un email propio, revisar "PDF del cliente" y activar en ERP → Facturación (el interruptor está apagado).
+- Limpieza opcional: borrar las funciones de prueba `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (no las usa nada).
+- La factura agrupada (semanal, quincenal o mensual) se genera con un clic y al generarla se envía sola. Generarla también sola al cerrar el periodo sería un cambio aparte.
 - Los datos de la empresa están copiados en `supabase/functions/portal-cliente/index.ts` (no puede importar `src/empresa.js`): si cambian, actualizar los dos.
 
-## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
+## 4. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
 "Dependiendo de dónde pulse las genera de una forma u otra y es un caos; algunas salen sin el detalle de importes."
 - Hoy hay al menos tres caminos distintos:
@@ -41,11 +36,11 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
   - El email (mailto): un texto distinto.
 - Objetivo: una única función que genere el HTML de la factura a partir de `calcularImportesAlbaran` (líneas, descuento, portes, base, IVA 4 %, RE, total, vencimiento, IBAN de `EMPRESA`). Que la usen la vista previa, la impresión o PDF, la factura agrupada y el email, y que el resultado salga igual pulses donde pulses.
 
-## 6. 🟡 Límite de 1.000 filas por tabla
+## 5. 🟡 Límite de 1.000 filas por tabla
 
 `useRealtime` hace `select('*')` sin paginar, y Supabase devuelve como máximo 1.000 filas por consulta (límite por defecto). `asiento_lineas` va por 490 filas, `movimientos_stock` por 270 y `email_log` por 187. Cuando alguna pase de 1.000, la app mostrará datos incompletos sin avisar: balances e informes contables saldrán mal. Arreglo: paginar con `.range()` dentro de `fetchData`.
 
-## 7. Ideas aparcadas (no pedidas todavía)
+## 6. Ideas aparcadas (no pedidas todavía)
 
 - Remesas SEPA en formato pain.008 para el banco.
 - Flujo de prepago para clientes nuevos.
