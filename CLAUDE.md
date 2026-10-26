@@ -28,19 +28,20 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V82**; la siguiente es **V83**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V83: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V83-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V83**; la siguiente es **V84**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V84: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V84-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V83 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V84 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V83: <resumen corto>`.
+- Mensaje de commit: `V84: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
 - `src/empresa.js` (V82): `EMPRESA`, `LOGO_URL` y `PORTAL_CLIENTE_URL`, importados por `App.jsx` y por `src/AreaCliente.jsx`.
 - `src/AreaCliente.jsx` (V82): área de cliente pública en `/area-cliente?t=<clientes.portal_token>` (la elige `src/main.jsx`; `vercel.json` reescribe la ruta). Solo habla con la Edge Function `portal-cliente`, que filtra por el token con la service role: no le des acceso a tablas con la clave anon.
+- `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
 - Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)`.
 - `AuthProvider` + `LoginPage` (Supabase Auth, dominio permitido `rootflow.es`).
 - `MainApp` (línea ~713) contiene **todo lo demás**: estados, datos, helpers, formularios y secciones. Navegación por `activeSection` (`dashboard`, `pedidos`, `albaranes`, `facturacion`, `gastos`, `contabilidad`, `produccion`, `planificacion`, `calendario`, `clientes`, `tarifas`, `leads`, `desarrollo`, …). Cada sección se pinta con una función `renderXxx()` y algunas tienen pestañas con su propio estado (p. ej. `gastosTab`).

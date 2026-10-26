@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Receipt, ShoppingCart, Repeat, Send, Home, Printer, X, Loader2, AlertCircle,
-  CheckCircle, Clock, XCircle, ChevronDown, ChevronRight, Plus, Trash2, LogOut, Mail, Phone
+  CheckCircle, Clock, XCircle, ChevronDown, ChevronRight, Plus, Trash2, LogOut, Mail, Phone, FileDown, Truck
 } from 'lucide-react';
 import { EMPRESA, LOGO_URL } from './empresa.js';
 
@@ -46,6 +46,31 @@ const llamar = async (payload) => {
   try { data = await res.json(); } catch { /* respuesta vacía */ }
   if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
   return data;
+};
+
+// V83: descarga el PDF de una factura o un albarán (lo genera la Edge Function)
+const descargarPdf = async (token, tipo, id) => {
+  const r = await llamar({ token, accion: 'pdf', tipo, id });
+  const bytes = Uint8Array.from(atob(r.base64), ch => ch.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = r.filename || `${tipo}-${id}.pdf`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+};
+
+const BotonPdf = ({ token, tipo, id, texto = 'PDF', className = '' }) => {
+  const [cargando, setCargando] = useState(false);
+  return (
+    <button
+      onClick={async (e) => { e.stopPropagation(); setCargando(true); try { await descargarPdf(token, tipo, id); } catch (err) { alert('❌ ' + err.message); } setCargando(false); }}
+      disabled={cargando}
+      className={`inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-neutral-300 hover:bg-neutral-100 disabled:opacity-50 ${className}`}
+      title="Descargar PDF"
+    >
+      {cargando ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}{texto}
+    </button>
+  );
 };
 
 const leerToken = () => {
@@ -119,6 +144,7 @@ export default function AreaCliente() {
     { id: 'resumen', label: 'Resumen', Icon: Home },
     { id: 'facturas', label: 'Facturas', Icon: Receipt, n: datos.facturas.length },
     { id: 'pedidos', label: 'Pedidos', Icon: ShoppingCart, n: datos.pedidos.length },
+    { id: 'albaranes', label: 'Albaranes', Icon: Truck, n: (datos.albaranes || []).length }, // V83
     { id: 'recurrentes', label: 'Pedido fijo', Icon: Repeat },
     { id: 'solicitudes', label: 'Solicitudes', Icon: Send, n: pendientesSolicitud || null },
   ];
@@ -154,7 +180,8 @@ export default function AreaCliente() {
 
       <main className="max-w-5xl mx-auto px-4 py-6 no-print">
         {tab === 'resumen' && <Resumen datos={datos} irA={setTab} abrirFactura={(f) => { setTab('facturas'); setFacturaAbierta(f); }} />}
-        {tab === 'facturas' && <Facturas datos={datos} abrir={setFacturaAbierta} />}
+        {tab === 'facturas' && <Facturas datos={datos} token={token} abrir={setFacturaAbierta} />}
+        {tab === 'albaranes' && <Albaranes datos={datos} token={token} />}
         {tab === 'pedidos' && <Pedidos datos={datos} />}
         {tab === 'recurrentes' && <Recurrentes datos={datos} pedir={(r) => setFormSolicitud({ recurrente: r })} />}
         {tab === 'solicitudes' && <Solicitudes datos={datos} token={token} recargar={cargar} />}
@@ -164,7 +191,7 @@ export default function AreaCliente() {
         {EMPRESA.nombre} · CIF {EMPRESA.cif} · <a href={`mailto:${EMPRESA.email}`} className="hover:text-orange-600"><Mail size={11} className="inline" /> {EMPRESA.email}</a> · <Phone size={11} className="inline" /> {EMPRESA.telefono}
       </footer>
 
-      {facturaAbierta && <FacturaDetalle factura={facturaAbierta} cliente={datos.cliente} onClose={() => setFacturaAbierta(null)} />}
+      {facturaAbierta && <FacturaDetalle factura={facturaAbierta} cliente={datos.cliente} token={token} onClose={() => setFacturaAbierta(null)} />}
       {formSolicitud && (
         <FormSolicitud
           recurrente={formSolicitud.recurrente}
@@ -233,37 +260,41 @@ function Resumen({ datos, irA, abrirFactura }) {
 }
 
 // ==================== FACTURAS ====================
-function Facturas({ datos, abrir }) {
+function Facturas({ datos, token, abrir }) {
   if (!datos.facturas.length) return <Tarjeta className="p-8 text-center text-neutral-500">Todavía no tienes facturas.</Tarjeta>;
   return (
     <Tarjeta className="divide-y divide-neutral-100">
       {datos.facturas.map(f => {
         const e = ESTADO_FACTURA[f.estado] || { label: f.estado, cls: 'bg-neutral-100 text-neutral-600' };
         return (
-          <button key={f.id} onClick={() => abrir(f)} className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-neutral-50">
+          <div key={f.id} onClick={() => abrir(f)} className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-neutral-50 cursor-pointer">
             <div className="min-w-0">
               <p className="font-bold">{f.id}</p>
               <p className="text-sm text-neutral-500">{fecha(f.fecha)}{f.periodo_desde ? ` · del ${fecha(f.periodo_desde)} al ${fecha(f.periodo_hasta)}` : ''}</p>
             </div>
-            <div className="text-right shrink-0">
-              <p className="font-black">{eur(f.total)}</p>
-              <Badge cls={e.cls}>{e.label}</Badge>
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="text-right">
+                <p className="font-black">{eur(f.total)}</p>
+                <Badge cls={e.cls}>{e.label}</Badge>
+              </div>
+              <BotonPdf token={token} tipo="factura" id={f.id} />
             </div>
-          </button>
+          </div>
         );
       })}
     </Tarjeta>
   );
 }
 
-function FacturaDetalle({ factura: f, cliente, onClose }) {
+function FacturaDetalle({ factura: f, cliente, token, onClose }) {
   const sepa = cliente.sepa_activo && f.metodo_cobro === 'sepa_b2b';
   const plazo = f.plazo_pago_dias || cliente.plazo_pago_dias || 30;
   return (
     <div className="fixed inset-0 bg-black/40 z-50 overflow-y-auto p-2 sm:p-6" onClick={onClose}>
       <div className="max-w-3xl mx-auto" onClick={e => e.stopPropagation()}>
         <div className="flex justify-end gap-2 mb-2 no-print">
-          <button onClick={() => window.print()} className="bg-orange-500 hover:bg-orange-600 text-white font-semibold rounded-xl px-4 py-2 flex items-center gap-2"><Printer size={16} />Imprimir / PDF</button>
+          <BotonPdf token={token} tipo="factura" id={f.id} texto="Descargar PDF" className="bg-orange-500 hover:bg-orange-600 text-white border-orange-500 text-sm px-4 py-2 rounded-xl" />
+          <button onClick={() => window.print()} className="bg-white font-semibold rounded-xl px-4 py-2 flex items-center gap-2"><Printer size={16} /><span className="hidden sm:inline">Imprimir</span></button>
           <button onClick={onClose} className="bg-white rounded-xl px-3 py-2"><X size={18} /></button>
         </div>
         <div id="factura-imprimir" className="bg-white rounded-2xl p-5 sm:p-8 text-sm">
@@ -351,6 +382,48 @@ function FacturaDetalle({ factura: f, cliente, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ==================== ALBARANES (V83) ====================
+function Albaranes({ datos, token }) {
+  const [abierto, setAbierto] = useState(null);
+  const lista = datos.albaranes || [];
+  if (!lista.length) return <Tarjeta className="p-8 text-center text-neutral-500">Todavía no tienes albaranes.</Tarjeta>;
+  return (
+    <Tarjeta className="divide-y divide-neutral-100">
+      {lista.map(a => {
+        const open = abierto === a.id;
+        return (
+          <div key={a.id}>
+            <div onClick={() => setAbierto(open ? null : a.id)} className="w-full p-4 flex items-center justify-between gap-3 cursor-pointer hover:bg-neutral-50">
+              <div className="flex items-center gap-2 min-w-0">
+                {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                <div className="min-w-0">
+                  <p className="font-bold">{a.id}</p>
+                  <p className="text-sm text-neutral-500">{fecha(a.fecha)} · {a.lineas.length} producto{a.lineas.length === 1 ? '' : 's'}{a.numero_factura ? ` · factura ${a.numero_factura}` : ''}</p>
+                </div>
+              </div>
+              <BotonPdf token={token} tipo="albaran" id={a.id} />
+            </div>
+            {open && (
+              <div className="px-4 pb-4">
+                <table className="w-full text-sm">
+                  <tbody>
+                    {a.lineas.map((l, i) => (
+                      <tr key={i} className="border-t border-neutral-100">
+                        <td className="py-1.5">{nombreLinea(l)}{l.variedad && <span className="text-xs text-neutral-500"> · {l.variedad}</span>}</td>
+                        <td className="py-1.5 text-right font-semibold whitespace-nowrap">{l.cantidad} {l.unidad}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </Tarjeta>
   );
 }
 
