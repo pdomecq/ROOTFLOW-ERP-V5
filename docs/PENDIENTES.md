@@ -27,10 +27,10 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 
 ## 4. 🟠 Facturas de gasto automáticas (V85): ponerlas en marcha
 
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V85-FACTURAS-RECIBIDAS.sql` y desplegar `leer-factura` (`supabase functions deploy leer-factura --no-verify-jwt`).
-- Secret `ANTHROPIC_API_KEY` (cuenta de la API de Claude en console.anthropic.com, distinta de la suscripción Claude Pro). Sin él las facturas entran en la bandeja pero hay que rellenarlas a mano.
-- Token de la revisión diaria del correo en `config_privada` (`token_importar_facturas`) y tarea programada diaria que revisa el Gmail de Peri.
-- Corregir los alquileres de Bellbro abril–octubre (y la repercusión de luz de septiembre) con su base, IVA y retención, y pulsar "Rehacer asientos" en Gastos. El agua de septiembre está al 10 %, no al 21 %.
+- ✅ (27/10) SQL V85 y V85b ejecutados, `leer-factura` desplegada, token en `config_privada`, alquileres de Bellbro corregidos en la tabla `gastos`.
+- Falta el secret `ANTHROPIC_API_KEY` en Supabase → Edge Functions → Secrets: una clave de API (`sk-ant-api03-…`) de console.anthropic.com, no la de la suscripción. Sin él las facturas entran en la bandeja pero hay que rellenarlas a mano. Cuando esté, pulsar "Releer" en las 2 facturas que ya hay en la bandeja.
+- Tarea programada diaria "Facturas del correo al ERP" (8:33, revisa el Gmail de Peri) creada, pero **sin conectores**: hay que añadirle Gmail y Supabase desde claude.ai (Rutinas / tareas programadas) o no podrá leer el correo.
+- Tras desplegar V86 (merge a `main`), pulsar "Rehacer asientos" en Gastos para regenerar los asientos de los alquileres corregidos.
 - Modelo 115: no consta en el ERP ningún pago de retenciones. Confirmar con la gestoría que se presentaron el 2T y 3T. El pago del modelo debe saldar la 4751 (asiento manual), no registrarse como gasto.
 - Los gastos de Claude de abril–julio están como "exento"; la factura de octubre lleva IVA español del 21 %. Revisar con la gestoría si las anteriores también.
 
