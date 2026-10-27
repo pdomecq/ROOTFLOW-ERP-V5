@@ -27,7 +27,14 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - La factura agrupada (semanal, quincenal o mensual) se genera con un clic y al generarla se envía sola. Generarla también sola al cerrar el periodo sería un cambio aparte.
 - Los datos de la empresa están copiados en `supabase/functions/portal-cliente/index.ts` (no puede importar `src/empresa.js`): si cambian, actualizar los dos.
 
-## 4. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
+## 4. 🟠 Líneas de negocio (V84): ponerlas en marcha
+
+- Hecho (27-oct): SQL V84 ejecutado. 7 clientes en distribución y 5 en restaurantes (uno de ellos sin nombre).
+- Revisar en Clientes la línea de los que no encajan por tipo: p. ej. "Tatin catering" y "La Fresquera del Gourmet" están como restaurante; "Gold Gourmet" y las fruterías como tienda (→ distribución).
+- Rellenar en Tarifas → "Precio base por línea" los precios de restaurantes (hoy solo hay precio general, pensado para distribución).
+- Ideas: separar ventas por línea en contabilidad (subcuentas 700x) y en el export de asesoría; zonas calientes y reparto por riders para restaurantes.
+
+## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
 "Dependiendo de dónde pulse las genera de una forma u otra y es un caos; algunas salen sin el detalle de importes."
 - Hoy hay al menos tres caminos distintos:
@@ -36,11 +43,11 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
   - El email (mailto): un texto distinto.
 - Objetivo: una única función que genere el HTML de la factura a partir de `calcularImportesAlbaran` (líneas, descuento, portes, base, IVA 4 %, RE, total, vencimiento, IBAN de `EMPRESA`). Que la usen la vista previa, la impresión o PDF, la factura agrupada y el email, y que el resultado salga igual pulses donde pulses.
 
-## 5. 🟡 Límite de 1.000 filas por tabla
+## 6. 🟡 Límite de 1.000 filas por tabla
 
 `useRealtime` hace `select('*')` sin paginar, y Supabase devuelve como máximo 1.000 filas por consulta (límite por defecto). `asiento_lineas` va por 490 filas, `movimientos_stock` por 270 y `email_log` por 187. Cuando alguna pase de 1.000, la app mostrará datos incompletos sin avisar: balances e informes contables saldrán mal. Arreglo: paginar con `.range()` dentro de `fetchData`.
 
-## 6. Ideas aparcadas (no pedidas todavía)
+## 7. Ideas aparcadas (no pedidas todavía)
 
 - Remesas SEPA en formato pain.008 para el banco.
 - Flujo de prepago para clientes nuevos.

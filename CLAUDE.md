@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V83**; la siguiente es **V84**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V84: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V84-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V84**; la siguiente es **V85**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V85: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V85-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V84 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V85 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V84: <resumen corto>`.
+- Mensaje de commit: `V85: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -68,7 +68,8 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 ## Reglas de negocio y fiscales
 
 - **Ventas**: IVA 4 % (`IVA_VENTAS`), recargo de equivalencia 0,5 % (`RE_VENTAS`) si `cliente.recargo_equivalencia`.
-- **Precio por cliente**: siempre `getPrecioCliente(producto_id, cliente_id)` (tabla `tarifas_cliente`), nunca `producto.precio` a pelo.
+- **Dos líneas de negocio** (V84): `distribucion` (distribuidores, retail, Mercamadrid · volumen) y `restaurantes` (HORECA · margen). Usa `lineaDeCliente(cliente)` / `lineaDeClienteId(id)` (nunca leas `clientes.linea_negocio` a pelo: puede estar vacía y se deduce del tipo), `LINEAS_NEGOCIO` para etiquetas y colores, `BadgeLinea` y el filtro global `lineaFiltro` (`enLineaFiltro(clienteId)`, `renderSelectorLinea()`) en las secciones nuevas que listen clientes, pedidos o facturas.
+- **Precio por cliente**: siempre `getPrecioCliente(producto_id, cliente_id)` = tarifa especial (`tarifas_cliente`) → precio base de su línea (`productos.precio_distribucion` / `precio_restaurantes`) → `productos.precio`. Nunca `producto.precio` a pelo.
 - **Importes de albarán/factura**: la única fuente de verdad es `calcularImportesAlbaran(albaran, cliente, { aplicarTarifas })` = productos − descuento (porcentaje del cliente o `clientes.descuentos_fechas` por rango de fechas) + porte (`albaranes.coste_envio`, por defecto `clientes.coste_porte`, gratis desde `porte_gratis_desde`). IVA y RE se calculan una vez sobre la base. No dupliques esta lógica en otro sitio.
 - **Gastos**: `gastos.importe` es el total con IVA; `iva_tipo` es una clave de `TIPOS_IVA` (`general`, `reducido`, `superreducido`, `exento`). Categoría = clave de `categoriasGasto` (OPEX 6xx, CAPEX 21x).
 - **Formas de pago** (`FORMAS_PAGO`): `banco`, `caja`, `tarjeta_empresa`, `transferencia`, `socio_nico`, `socio_peri`, `socio_guzman`. `socio_*` = deuda con el socio (cuenta 551).

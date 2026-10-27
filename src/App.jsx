@@ -299,11 +299,37 @@ const estadoLeadConfig = {
 
 const tipoClienteConfig = {
   mercamadrid: { label: "Mercamadrid (Mayorista)", icon: Building2, color: "text-orange-600 bg-orange-50 border-orange-200" },
+  distribuidor: { label: "Distribuidor", icon: Truck, color: "text-sky-600 bg-sky-50 border-sky-200" }, // V84
   hotel: { label: "Hotel (HORECA)", icon: Building2, color: "text-blue-600 bg-blue-50 border-blue-200" },
   restaurante: { label: "Restaurante (HORECA)", icon: UtensilsCrossed, color: "text-green-600 bg-green-50 border-green-200" },
   catering: { label: "Catering (HORECA)", icon: Truck, color: "text-purple-600 bg-purple-50 border-purple-200" },
   tienda: { label: "Tienda/Frutería (Minorista)", icon: Package, color: "text-pink-600 bg-pink-50 border-pink-200" },
   otro: { label: "Otro", icon: MoreVertical, color: "text-neutral-600 bg-neutral-50 border-neutral-200" },
+};
+
+// V84: dos líneas de negocio (deck de inversores V18, "Una nave, dos formas de vender").
+// Cada cliente pertenece a una (clientes.linea_negocio); si no la tiene guardada, se deduce del tipo.
+const LINEAS_NEGOCIO = {
+  distribucion: {
+    label: 'Distribución', emoji: '🚚', lema: 'El volumen',
+    descripcion: 'Distribuidores, retail y Mercamadrid · tarifa mayorista',
+    color: 'bg-sky-100 text-sky-800 border-sky-200', barra: 'bg-sky-600', objetivoEurKg: 44,
+  },
+  restaurantes: {
+    label: 'Restaurantes', emoji: '🍽️', lema: 'El margen',
+    descripcion: 'HORECA en las zonas calientes · tarifa restaurante',
+    color: 'bg-emerald-100 text-emerald-800 border-emerald-200', barra: 'bg-emerald-600', objetivoEurKg: 173,
+  },
+};
+const TIPOS_CLIENTE_RESTAURANTES = ['restaurante', 'hotel', 'catering'];
+const lineaDeTipo = (tipo) => TIPOS_CLIENTE_RESTAURANTES.includes(tipo) ? 'restaurantes' : 'distribucion';
+const lineaDeCliente = (cliente) => LINEAS_NEGOCIO[cliente?.linea_negocio] ? cliente.linea_negocio : lineaDeTipo(cliente?.tipo);
+// Gramos que lleva una unidad de producto (bandeja de 15 g → 15; granel vendido por gramo → 1)
+const gramosPorUnidad = (producto) => Number(producto?.formato_gramos) || (producto?.unidad === 'g' ? 1 : producto?.unidad === 'kg' ? 1000 : 0);
+const BadgeLinea = ({ linea, className = '' }) => {
+  const l = LINEAS_NEGOCIO[linea];
+  if (!l) return null;
+  return <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-bold whitespace-nowrap ${l.color} ${className}`}>{l.emoji} {l.label}</span>;
 };
 
 // Tipos de IVA en España
@@ -710,6 +736,10 @@ const MainApp = () => {
   const [editingItem, setEditingItem] = useState(null);
   const [filterEstado, setFilterEstado] = useState('todos');
   const [selectedFactura, setSelectedFactura] = useState(null);
+  // V84: línea de negocio que se está viendo en Clientes, Pedidos, Albaranes, Facturación, Tarifas y Leads
+  const [lineaFiltro, setLineaFiltro] = useState(() => { try { return localStorage.getItem('rootflow_linea_filtro') || 'todas'; } catch { return 'todas'; } });
+  useEffect(() => { try { localStorage.setItem('rootflow_linea_filtro', lineaFiltro); } catch { /* sin almacenamiento */ } }, [lineaFiltro]);
+  const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
   const [envioCargando, setEnvioCargando] = useState(false); // V83
   
@@ -3177,6 +3207,93 @@ const MainApp = () => {
   };
 
 
+  // ==================== V84 — LÍNEAS DE NEGOCIO ====================
+  const lineaDeClienteId = (clienteId) => lineaDeCliente(clientes.find(c => c.id === clienteId));
+  const enLineaFiltro = (clienteId) => lineaFiltro === 'todas' || lineaDeClienteId(clienteId) === lineaFiltro;
+
+  // Selector Todas / Distribución / Restaurantes (mismo filtro en todas las secciones)
+  const renderSelectorLinea = () => (
+    <div className="inline-flex rounded-xl border border-neutral-200 bg-white p-0.5 text-sm font-semibold shadow-sm">
+      {[['todas', 'Todas', ''], ...Object.entries(LINEAS_NEGOCIO).map(([k, l]) => [k, l.label, l.emoji])].map(([k, label, emoji]) => (
+        <button key={k} onClick={() => setLineaFiltro(k)}
+          className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${lineaFiltro === k ? (k === 'todas' ? 'bg-neutral-800 text-white' : k === 'restaurantes' ? 'bg-emerald-600 text-white' : 'bg-sky-600 text-white') : 'text-neutral-600 hover:bg-neutral-100'}`}>
+          {emoji ? `${emoji} ` : ''}{label}
+        </button>
+      ))}
+    </div>
+  );
+
+  // Aviso cuando la sección está filtrada por una línea
+  const renderAvisoLinea = (n, que) => lineaFiltro === 'todas' ? null : (
+    <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl border text-sm ${LINEAS_NEGOCIO[lineaFiltro].color}`}>
+      <span>{LINEAS_NEGOCIO[lineaFiltro].emoji} Viendo solo <strong>{LINEAS_NEGOCIO[lineaFiltro].label}</strong>: {n} {que}</span>
+      <button onClick={() => setLineaFiltro('todas')} className="text-xs font-bold underline">Ver todas las líneas</button>
+    </div>
+  );
+
+  // Ingresos, kilos y €/kg por línea a partir de los pedidos (sin cancelados)
+  const resumenPorLinea = (listaPedidos) => {
+    const r = {};
+    Object.keys(LINEAS_NEGOCIO).forEach(k => { r[k] = { importe: 0, gramos: 0, pedidos: 0, clientes: new Set() }; });
+    listaPedidos.filter(p => p.estado !== 'cancelado').forEach(p => {
+      const linea = lineaDeClienteId(p.cliente_id);
+      const its = pedidoItems.filter(i => i.pedido_id === p.id);
+      const importe = its.length ? its.reduce((t, i) => t + (parseFloat(i.subtotal) || 0), 0) : (parseFloat(p.total) || 0);
+      const gramos = its.reduce((t, i) => t + (parseFloat(i.cantidad) || 0) * gramosPorUnidad(productos.find(x => x.id === i.producto_id)), 0);
+      r[linea].importe += importe;
+      r[linea].gramos += gramos;
+      r[linea].pedidos += 1;
+      r[linea].clientes.add(p.cliente_id);
+    });
+    return r;
+  };
+
+  // Tarjeta "Dos líneas de negocio": reparto de ingresos y kilos, €/kg frente al objetivo del plan
+  const renderResumenLineas = (listaPedidos, titulo) => {
+    const r = resumenPorLinea(listaPedidos);
+    const totImporte = Object.values(r).reduce((t, x) => t + x.importe, 0);
+    const totGramos = Object.values(r).reduce((t, x) => t + x.gramos, 0);
+    const pct = (v, tot) => tot > 0 ? Math.round((v / tot) * 100) : 0;
+    const barra = (campo, tot) => (
+      <div className="flex h-5 w-full rounded-lg overflow-hidden bg-neutral-100 text-[10px] font-bold text-white">
+        {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => { const v = pct(r[k][campo], tot); return v > 0 ? <div key={k} className={`${l.barra} flex items-center justify-center`} style={{ width: `${v}%` }}>{v}%</div> : null; })}
+      </div>
+    );
+    return (
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <h3 className="font-bold text-neutral-900">🌱 Dos líneas de negocio <span className="text-neutral-400 font-medium text-sm">· {titulo}</span></h3>
+          <span className="text-xs text-neutral-400">Base de pedidos sin IVA · kg según el formato de cada producto</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
+            const x = r[k];
+            const kg = x.gramos / 1000;
+            const eurKg = kg > 0 ? x.importe / kg : 0;
+            return (
+              <div key={k} className={`p-4 rounded-xl border ${l.color}`}>
+                <p className="text-xs font-bold uppercase tracking-wider">{l.emoji} {l.label} · {l.lema}</p>
+                <p className="text-2xl font-black mt-1">{formatCurrency(x.importe)}</p>
+                <div className="grid grid-cols-3 gap-2 mt-2 text-xs">
+                  <div><p className="opacity-70">Kilos</p><p className="font-bold">{kg.toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg</p></div>
+                  <div><p className="opacity-70">€/kg (plan {l.objetivoEurKg})</p><p className={`font-bold ${eurKg > 0 && eurKg < l.objetivoEurKg * 0.8 ? 'text-red-600' : ''}`}>{eurKg > 0 ? `${eurKg.toFixed(0)} €/kg` : '—'}</p></div>
+                  <div><p className="opacity-70">Ticket medio</p><p className="font-bold">{x.pedidos ? formatCurrency(x.importe / x.pedidos) : '—'}</p></div>
+                </div>
+                <p className="text-[11px] opacity-70 mt-2">{x.pedidos} pedido{x.pedidos === 1 ? '' : 's'} · {x.clientes.size} cliente{x.clientes.size === 1 ? '' : 's'}</p>
+              </div>
+            );
+          })}
+        </div>
+        {(totImporte > 0 || totGramos > 0) && (
+          <div className="mt-4 space-y-1.5 text-xs">
+            <div className="grid grid-cols-[90px_1fr] items-center gap-2"><span className="text-neutral-500">Kilos</span>{barra('gramos', totGramos)}</div>
+            <div className="grid grid-cols-[90px_1fr] items-center gap-2"><span className="text-neutral-500">Ingresos</span>{barra('importe', totImporte)}</div>
+          </div>
+        )}
+      </Card>
+    );
+  };
+
   // ==================== V82 — ÁREA DE CLIENTE Y ENVÍO DE FACTURAS ====================
   // Enlace privado por cliente: PORTAL_CLIENTE_URL?t=<clientes.portal_token>. Los datos los sirve la
   // Edge Function portal-cliente (service role), nunca la clave anon.
@@ -3585,6 +3702,20 @@ const MainApp = () => {
           }
           if (!result.error) {
             alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
+          }
+        }
+        // V84: fallback si falta la columna linea_negocio en clientes
+        if (result.error && result.error.code === '42703' && table === 'clientes' && form.linea_negocio !== undefined) {
+          const { linea_negocio, ...sinLinea } = form;
+          form = sinLinea;
+          if (id) {
+            result = await supabase.from(table).update(sinLinea).eq('id', id);
+          } else {
+            result = await supabase.from(table).insert(sinLinea).select();
+            if (result.data && result.data[0]) newRecordId = result.data[0].id;
+          }
+          if (!result.error) {
+            alert('⚠️ Cliente guardado, pero la línea de negocio no se ha registrado (se deduce del tipo).\n\nEjecuta el SQL V84 en Supabase.');
           }
         }
         // V83: fallback si faltan las columnas de envío de facturas en clientes
@@ -4911,7 +5042,8 @@ ${pedidoLinea ? `^FO260,258
         <div className="grid grid-cols-2 gap-4">
           <Input label="Nombre" className="col-span-2" value={form.nombre} onChange={e => setForm({...form, nombre: e.target.value})} />
           <Input label="CIF/NIF" value={form.cif} onChange={e => setForm({...form, cif: e.target.value})} placeholder="B12345678 / 12345678A" />
-          <Select label="Tipo Cliente" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})} options={[
+          <Select label="Tipo Cliente" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value, linea_negocio: lineaDeTipo(e.target.value)})} options={[
+            { value: 'distribuidor', label: '🚚 Distribuidor' }, 
             { value: 'mercamadrid', label: '🏪 Mercamadrid (Mayorista)' }, 
             { value: 'hotel', label: '🏨 Hotel (HORECA)' }, 
             { value: 'restaurante', label: '🍽️ Restaurante (HORECA)' }, 
@@ -4919,6 +5051,22 @@ ${pedidoLinea ? `^FO260,258
             { value: 'tienda', label: '🍎 Tienda/Frutería (Minorista)' },
             { value: 'otro', label: '📦 Otro' }
           ]} />
+          {/* V84: línea de negocio (se propone según el tipo; se puede cambiar) */}
+          <div className="col-span-2">
+            <p className="text-sm font-semibold text-neutral-700 mb-1.5">Línea de negocio</p>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
+                const sel = (form.linea_negocio || lineaDeTipo(form.tipo)) === k;
+                return (
+                  <button key={k} type="button" onClick={() => setForm({...form, linea_negocio: k})}
+                    className={`p-3 rounded-xl border-2 text-left transition-all ${sel ? (k === 'restaurantes' ? 'border-emerald-500 bg-emerald-50' : 'border-sky-500 bg-sky-50') : 'border-neutral-200 bg-white hover:border-neutral-300'}`}>
+                    <p className="font-bold text-sm">{l.emoji} {l.label}</p>
+                    <p className="text-[11px] text-neutral-500">{l.descripcion}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <Select label="Tipo Fiscal" value={form.tipo_fiscal || 'empresa'} onChange={e => {
             const esAutonomo = e.target.value === 'autonomo';
             setForm({...form, tipo_fiscal: e.target.value, recargo_equivalencia: esAutonomo && form.tipo === 'tienda'});
@@ -9738,6 +9886,9 @@ ${pedidoLinea ? `^FO260,258
           </Card>
         </div>
 
+        {/* ============ V84: DOS LÍNEAS DE NEGOCIO ============ */}
+        {renderResumenLineas(pedidosPeriodo, dashboardPeriodo === 'mes_actual' ? 'este mes' : dashboardPeriodo === 'año_actual' ? `año ${new Date().getFullYear()}` : (getMesesDisponibles().find(m => m.value === dashboardPeriodo)?.label || dashboardPeriodo))}
+
         {/* ============ FILA: GRÁFICA + ALERTAS ============ */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Gráfica de evolución 6 meses */}
@@ -10290,7 +10441,7 @@ ${pedidoLinea ? `^FO260,258
   const renderClientes = () => {
     // Aplicar filtros
     const clientesFiltrados = aplicarFiltros(
-      clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase())),
+      clientes.filter(c => c.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) && (lineaFiltro === 'todas' || lineaDeCliente(c) === lineaFiltro)), // V84: filtro por línea
       filtrosClientes,
       {
         tipo: c => c.tipo,
@@ -10300,7 +10451,7 @@ ${pedidoLinea ? `^FO260,258
       }
     );
     const filtered = clientesFiltrados;
-    const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
+    const exportColumns = [{ header: 'Nombre', accessor: c => c.nombre },{ header: 'Línea', accessor: c => LINEAS_NEGOCIO[lineaDeCliente(c)].label },{ header: 'Tipo', accessor: c => tipoClienteConfig[c.tipo]?.label },{ header: 'CP', accessor: c => c.codigo_postal },{ header: 'Zona', accessor: c => zonaConfig[c.zona]?.label },{ header: 'Email', accessor: c => c.email },{ header: 'Teléfono', accessor: c => c.telefono },{ header: 'Descuento', accessor: c => c.descuento }];
     
     const tipoOptions = Object.entries(tipoClienteConfig).map(([k, v]) => ({ value: k, label: v.label }));
     const zonaOptions = Object.entries(zonaConfig).map(([k, v]) => ({ value: k, label: v.label }));
@@ -10322,7 +10473,8 @@ ${pedidoLinea ? `^FO260,258
                 <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
               </div>
               <h3 className="font-bold text-neutral-900 text-lg truncate">{cliente.nombre}</h3>
-              <p className="text-sm text-neutral-500 mb-3">{cliente.contacto}</p>
+              <p className="text-sm text-neutral-500 mb-2">{cliente.contacto}</p>
+              <div className="mb-3"><BadgeLinea linea={lineaDeCliente(cliente)} /></div>{/* V84 */}
               {cliente.codigo_postal && <p className="text-xs text-neutral-400 mb-2 flex items-center gap-1"><MapPin size={12} />{cliente.codigo_postal} - {cliente.ciudad}</p>}
               <div className="flex items-center justify-between pt-3 border-t">
                 <Badge variant="orange">{cliente.descuento}% dto</Badge>
@@ -10351,6 +10503,7 @@ ${pedidoLinea ? `^FO260,258
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <h3 className="font-bold text-neutral-900">{cliente.nombre}</h3>
+                    <BadgeLinea linea={lineaDeCliente(cliente)} />{/* V84 */}
                     <Badge className={zonaConfig[cliente.zona]?.color}>{zonaConfig[cliente.zona]?.label}</Badge>
                     <Badge variant="orange">{cliente.descuento}% dto</Badge>
                   </div>
@@ -10418,7 +10571,7 @@ ${pedidoLinea ? `^FO260,258
                     <input type="checkbox" checked={isSelected} onChange={e => setSelectedClientes(e.target.checked ? [...selectedClientes, cliente.id] : selectedClientes.filter(id => id !== cliente.id))} className="w-4 h-4 rounded" />
                   </td>
                   <td className="px-3 md:px-5 py-3 md:py-4">
-                    <p className="font-bold text-neutral-900 text-sm">{cliente.nombre}</p>
+                    <p className="font-bold text-neutral-900 text-sm">{cliente.nombre} <BadgeLinea linea={lineaDeCliente(cliente)} className="ml-1" /></p>{/* V84 */}
                     <p className="text-xs text-neutral-400">{cliente.cif || cliente.email}</p>
                   </td>
                   <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
@@ -10445,8 +10598,9 @@ ${pedidoLinea ? `^FO260,258
     if (viewClientes === 'map') return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
-          <div className="flex items-center gap-3">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros · {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => `${clientes.filter(c => lineaDeCliente(c) === k).length} ${l.label.toLowerCase()}`).join(' · ')}</p></div>
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
             <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
           </div>
@@ -10458,8 +10612,9 @@ ${pedidoLinea ? `^FO260,258
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros</p></div>
-          <div className="flex items-center gap-3">
+          <div><h1 className="text-3xl font-black text-neutral-900">Clientes</h1><p className="text-neutral-500 font-medium">{clientes.length} registros · {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => `${clientes.filter(c => lineaDeCliente(c) === k).length} ${l.label.toLowerCase()}`).join(' · ')}</p></div>
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <ViewSwitcher view={viewClientes} setView={setViewClientes} onExport={() => exportToExcel(filtered, 'clientes', exportColumns)} showMap onMapToggle={() => setViewClientes('map')} />
             <Button onClick={() => { setEditingItem(null); setShowModal('cliente'); }}><Plus size={20} /> Nuevo</Button>
           </div>
@@ -10480,7 +10635,7 @@ ${pedidoLinea ? `^FO260,258
     let filtered = leads.filter(l => { 
       const matchesSearch = l.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || l.empresa?.toLowerCase().includes(searchTerm.toLowerCase()); 
       const matchesFilter = filterEstado === 'todos' || l.estado === filterEstado; 
-      return matchesSearch && matchesFilter; 
+      return matchesSearch && matchesFilter && (lineaFiltro === 'todas' || lineaDeTipo(l.tipo) === lineaFiltro); // V84: línea según el tipo de lead
     });
     
     // Aplicar filtros de columna
@@ -10503,8 +10658,15 @@ ${pedidoLinea ? `^FO260,258
 
     const handleConvertToClient = async (lead) => {
       if (!window.confirm(`¿Convertir "${lead.nombre}" a cliente?`)) return;
-      const clienteData = { nombre: lead.nombre || lead.empresa, tipo: ['mercamadrid', 'hotel', 'restaurante'].includes(lead.tipo) ? lead.tipo : 'restaurante', contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
-      const { data: newCliente } = await supabase.from('clientes').insert(clienteData).select().single();
+      // V84: se conserva el tipo del lead (antes una tienda pasaba a "restaurante") y se guarda su línea de negocio
+      const tipoCliente = tipoClienteConfig[lead.tipo] ? lead.tipo : 'restaurante';
+      const clienteData = { nombre: lead.nombre || lead.empresa, tipo: tipoCliente, linea_negocio: lineaDeTipo(tipoCliente), contacto: lead.contacto, email: lead.email, telefono: lead.telefono, direccion: lead.direccion, codigo_postal: lead.codigo_postal, ciudad: lead.ciudad, zona: lead.zona, descuento: 0 };
+      let { data: newCliente, error: errCli } = await supabase.from('clientes').insert(clienteData).select().single();
+      if (errCli && errCli.code === '42703') {
+        const { linea_negocio, ...sinLinea } = clienteData;
+        ({ data: newCliente, error: errCli } = await supabase.from('clientes').insert(sinLinea).select().single());
+      }
+      if (errCli) { alert('❌ No se pudo crear el cliente: ' + errCli.message); return; }
       if (newCliente) { 
         await supabase.from('leads').update({ estado: 'ganado', convertido_cliente_id: newCliente.id }).eq('id', lead.id); 
         refetchClientes();
@@ -10526,8 +10688,9 @@ ${pedidoLinea ? `^FO260,258
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros</p></div>
-          <div className="flex items-center gap-3">
+          <div><h1 className="text-3xl font-black text-neutral-900">Leads</h1><p className="text-neutral-500 font-medium">{leads.length} registros · {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => `${leads.filter(x => lineaDeTipo(x.tipo) === k).length} ${l.label.toLowerCase()}`).join(' · ')}</p></div>
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <ViewSwitcher view={viewLeads} setView={setViewLeads} onExport={() => exportToExcel(filtered, 'leads', exportColumns)} showMap onMapToggle={() => setViewLeads('map')} />
             <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx,.xls,.csv" onChange={e => { if (e.target.files[0]) handleImportLeads(e.target.files[0]); e.target.value = ''; }} />
             <Button variant="secondary" onClick={() => fileInputRef.current?.click()}><Upload size={18} /> Importar Excel</Button>
@@ -10679,7 +10842,7 @@ ${pedidoLinea ? `^FO260,258
       const cliente = clientes.find(c => c.id === p.cliente_id); 
       const matchesSearch = cliente?.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toString().includes(searchTerm); 
       const matchesFilter = filterEstado === 'todos' || p.estado === filterEstado; 
-      return matchesSearch && matchesFilter; 
+      return matchesSearch && matchesFilter && enLineaFiltro(p.cliente_id); // V84: filtro por línea
     });
     
     // Aplicar filtros de columna
@@ -10693,7 +10856,7 @@ ${pedidoLinea ? `^FO260,258
     const estadoOptions = Object.entries(estadoConfig).map(([k, v]) => ({ value: k, label: v.label }));
     const clienteOptions = clientes.map(c => ({ value: c.nombre?.toLowerCase(), label: c.nombre }));
     
-    const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
+    const exportColumns = [{ header: 'ID', accessor: p => p.id },{ header: 'Cliente', accessor: p => clientes.find(c => c.id === p.cliente_id)?.nombre },{ header: 'Línea', accessor: p => LINEAS_NEGOCIO[lineaDeClienteId(p.cliente_id)].label },{ header: 'Fecha', accessor: p => formatDate(p.fecha) },{ header: 'Entrega', accessor: p => formatDate(p.fecha_entrega) },{ header: 'Estado', accessor: p => estadoConfig[p.estado]?.label },{ header: 'Total', accessor: p => p.total }];
     
     const frecuenciaConfig = {
       semanal: { label: 'Semanal', color: 'bg-blue-100 text-blue-700' },
@@ -10799,7 +10962,8 @@ ${pedidoLinea ? `^FO260,258
             <h1 className={`text-2xl md:text-3xl font-black ${darkMode ? 'text-white' : 'text-neutral-900'}`}>Pedidos</h1>
             <p className={`font-medium text-sm ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>{pedidos.length} pedidos • {pedidosRecurrentes.filter(p => p.activo).length} recurrentes activos</p>
           </div>
-          <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex items-center gap-2 md:gap-3 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <Button variant="secondary" size="sm" onClick={() => exportToExcel(filtered, 'pedidos', exportColumns)}><FileSpreadsheet size={16} /><span className="hidden sm:inline">Excel</span></Button>
             {pedidosTab === 'lista' ? (
               <Button onClick={() => { setEditingItem(null); setShowModal('pedido'); }}><Plus size={18} /><span className="hidden sm:inline">Nuevo Pedido</span></Button>
@@ -10833,6 +10997,7 @@ ${pedidoLinea ? `^FO260,258
           </button>
         </div>
 
+        {renderAvisoLinea(pedidosTab === 'lista' ? filtered.length : pedidosRecurrentes.filter(pr => enLineaFiltro(pr.cliente_id)).length, pedidosTab === 'lista' ? 'pedidos' : 'recurrentes')}{/* V84 */}
         {pedidosTab === 'lista' ? (
           <>
             <Card className={`p-4 flex items-center gap-4 ${darkMode ? 'bg-neutral-800 border-neutral-700' : ''}`}>
@@ -10896,7 +11061,7 @@ ${pedidoLinea ? `^FO260,258
                         {colsVisibles.map(col => {
                           switch(col.id) {
                             case 'id': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4"><p className={`font-black text-sm ${darkMode ? 'text-white' : 'text-neutral-900'}`}>#{pedido.id}</p><p className="text-xs text-neutral-400">{formatDate(pedido.fecha)}</p></td>;
-                            case 'cliente': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre}</td>;
+                            case 'cliente': return <td key={col.id} className={`px-3 md:px-5 py-3 md:py-4 font-semibold text-sm ${darkMode ? 'text-neutral-200' : ''}`}>{cliente?.nombre} {lineaFiltro === 'todas' && <BadgeLinea linea={lineaDeCliente(cliente)} className="ml-1" />}</td>; // V84: etiqueta de línea
                             case 'concepto': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{pedido.concepto ? <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">{pedido.concepto}</span> : <span className="text-neutral-300">-</span>}</td>;
                             case 'fecha_entrega': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-sm">{formatDate(pedido.fecha_entrega)}</td>;
                             case 'horario': return <td key={col.id} className="px-3 md:px-5 py-3 md:py-4 text-xs">{pedido.horario_entrega ? <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg font-medium">{pedido.horario_entrega}</span> : '-'}</td>;
@@ -10985,7 +11150,7 @@ ${pedidoLinea ? `^FO260,258
               </Card>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {pedidosRecurrentes.map(pr => {
+                {pedidosRecurrentes.filter(pr => enLineaFiltro(pr.cliente_id)).map(pr => { // V84: filtro por línea
                   const cliente = clientes.find(c => c.id === pr.cliente_id);
                   const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
                   const totalEstimado = items.reduce((sum, item) => {
@@ -11008,6 +11173,7 @@ ${pedidoLinea ? `^FO260,258
                         <div className="flex items-center gap-2">
                           <Users size={16} className="text-neutral-400" />
                           <span className={`font-semibold ${darkMode ? 'text-white' : ''}`}>{cliente?.nombre || 'Cliente'}</span>
+                          <BadgeLinea linea={lineaDeCliente(cliente)} />{/* V84 */}
                         </div>
                         <div className="flex items-center gap-2">
                           <Calendar size={16} className="text-neutral-400" />
@@ -11727,6 +11893,8 @@ ${pedidoLinea ? `^FO260,258
   const renderFacturacion = () => {
     // Filtrar facturas por mes
     let facturasFiltradas = filtrarPorPeriodo(facturas, 'fecha', filtroFacturasMes);
+    const facturasPeriodoTodas = facturasFiltradas; // V84: para el reparto por línea (sin filtrar por línea)
+    facturasFiltradas = facturasFiltradas.filter(f => enLineaFiltro(f.cliente_id)); // V84: filtro por línea
     
     // Aplicar filtros de columna
     facturasFiltradas = aplicarFiltros(facturasFiltradas, filtrosFacturas, {
@@ -11742,6 +11910,7 @@ ${pedidoLinea ? `^FO260,258
     const exportColumns = [
       { header: 'Factura', accessor: f => f.id },
       { header: 'Cliente', accessor: f => clientes.find(c => c.id === f.cliente_id)?.nombre },
+      { header: 'Línea', accessor: f => LINEAS_NEGOCIO[lineaDeClienteId(f.cliente_id)].label }, // V84
       { header: 'Fecha', accessor: f => formatDate(f.fecha) },
       { header: 'Vencimiento', accessor: f => formatDate(f.fecha_vencimiento) },
       { header: 'Subtotal', accessor: f => f.subtotal },
@@ -11957,7 +12126,8 @@ ${transacciones}
             <h1 className="text-3xl font-black text-neutral-900">Facturación</h1>
             <p className="text-neutral-500 font-medium">{facturasFiltradas.length} facturas</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <select 
               value={filtroFacturasMes} 
               onChange={e => { setFiltroFacturasMes(e.target.value); setSelectedFacturas([]); }}
@@ -11991,6 +12161,27 @@ ${transacciones}
           <StatCard icon={Clock} label="Pendiente Cobro" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
           <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
+        </div>
+
+        {/* V84: facturación por línea de negocio en el periodo elegido */}
+        {renderAvisoLinea(facturasFiltradas.length, 'facturas')}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
+            const fs = facturasPeriodoTodas.filter(f => lineaDeClienteId(f.cliente_id) === k && f.estado !== 'cancelada');
+            const base = fs.reduce((t, f) => t + (parseFloat(f.base_imponible) || 0), 0);
+            const baseTotal = facturasPeriodoTodas.filter(f => f.estado !== 'cancelada').reduce((t, f) => t + (parseFloat(f.base_imponible) || 0), 0);
+            const pendiente = fs.filter(f => f.estado === 'pendiente' || f.estado === 'vencida').reduce((t, f) => t + (parseFloat(f.total) || 0), 0);
+            return (
+              <button key={k} onClick={() => setLineaFiltro(lineaFiltro === k ? 'todas' : k)} className={`p-4 rounded-2xl border-2 text-left transition-all ${l.color} ${lineaFiltro === k ? 'ring-2 ring-offset-1 ring-current' : 'hover:shadow-md'}`}>
+                <p className="text-xs font-bold uppercase tracking-wider">{l.emoji} {l.label} · {l.lema}</p>
+                <div className="flex items-end justify-between gap-2 mt-1">
+                  <p className="text-2xl font-black">{formatCurrency(base)} <span className="text-xs font-semibold opacity-70">base</span></p>
+                  <p className="text-sm font-bold">{baseTotal > 0 ? Math.round(base / baseTotal * 100) : 0}% del total</p>
+                </div>
+                <p className="text-xs mt-1 opacity-80">{fs.length} factura{fs.length === 1 ? '' : 's'} · pendiente de cobro {formatCurrency(pendiente)}</p>
+              </button>
+            );
+          })}
         </div>
 
         {/* ============ V83: ENVÍO AUTOMÁTICO DE FACTURAS ============ */}
@@ -12474,7 +12665,7 @@ ${transacciones}
                       />
                     </td>
                     <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}{!factura.enviada_at && factura.envio_error && <p className="text-xs text-red-600" title={factura.envio_error}>❌ Envío fallido{factura.envio_intentos ? ` (${factura.envio_intentos})` : ''}</p>}{/* V83 */}</td>
-                    <td className="px-5 py-4 font-semibold">{cliente?.nombre}</td>
+                    <td className="px-5 py-4 font-semibold">{cliente?.nombre} {lineaFiltro === 'todas' && <BadgeLinea linea={lineaDeCliente(cliente)} className="ml-1" />}</td>{/* V84 */}
                     <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
                     <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
                     <td className="px-5 py-4"><Badge className={config?.color}>{config?.label}</Badge></td>
@@ -15232,6 +15423,7 @@ ${logoRootflow}^FS
     };
     
     const albaranesFiltrados = albaranes
+      .filter(a => enLineaFiltro(a.cliente_id)) // V84: filtro por línea
       .filter(a => {
         if (busquedaAlbaranes) {
           const q = busquedaAlbaranes.toLowerCase();
@@ -15256,7 +15448,8 @@ ${logoRootflow}^FS
             <h1 className="text-3xl font-black text-neutral-900">📋 Albaranes</h1>
             <p className="text-xs text-neutral-500 mt-1">Documentos de entrega · vinculan pedidos con facturas</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap justify-end">
+            {renderSelectorLinea()}{/* V84 */}
             <Button variant="secondary" onClick={() => setShowModal('resumenKm')} className="relative">
               🚗 Gastos km
               {(() => {
@@ -15320,7 +15513,7 @@ ${logoRootflow}^FS
                       <tr key={alb.id} className="border-t hover:bg-neutral-50">
                         <td className="p-3 font-mono font-bold text-orange-600">{alb.id}</td>
                         <td className="p-3 text-sm">{formatDate(alb.fecha_emision)}</td>
-                        <td className="p-3 font-medium text-sm">{cli?.nombre || alb.cliente_nombre || '—'}</td>
+                        <td className="p-3 font-medium text-sm">{cli?.nombre || alb.cliente_nombre || '—'} {lineaFiltro === 'todas' && cli && <BadgeLinea linea={lineaDeCliente(cli)} className="ml-1" />}</td>{/* V84 */}
                         <td className="p-3 text-center"><Badge className="bg-neutral-100">{itemsArr.length}</Badge></td>
                         <td className="p-3 text-center text-xs text-neutral-500">{pedidosVinc.map(ap => `#${ap.pedido_id}`).join(', ') || '—'}</td>
                         <td className="p-3 text-right font-bold">
@@ -28481,7 +28674,12 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       return tarifa.precio_especial;
     }
     
-    // Si no hay tarifa especial, devolver precio base
+    // V84: si no hay tarifa especial, precio base de la línea del cliente (distribución / restaurantes)
+    const cliente = clientes.find(c => c.id === clienteId);
+    const precioLinea = cliente ? parseFloat(producto[`precio_${lineaDeCliente(cliente)}`]) : NaN;
+    if (precioLinea > 0) return precioLinea;
+    
+    // Si tampoco hay precio de línea, devolver precio base
     return producto.precio;
   };
 
@@ -29324,21 +29522,130 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       refetchTarifasCliente();
     };
 
+    // V84: precio base por línea de negocio (productos.precio_distribucion / precio_restaurantes)
+    const eurKg = (precio, producto) => { const g = gramosPorUnidad(producto); return g > 0 && precio > 0 ? (precio / g) * 1000 : null; };
+    const precioBaseLinea = (producto, linea) => { const v = parseFloat(producto[`precio_${linea}`]); return v > 0 ? v : (parseFloat(producto.precio) || 0); };
+    const productosActivos = productos.filter(p => p.activo !== false).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+
+    const guardarPrecioLinea = async (producto, linea, valor) => {
+      const v = valor === '' || valor === null ? null : Math.round(parseFloat(String(valor).replace(',', '.')) * 10000) / 10000;
+      if (v !== null && !(v >= 0)) { alert('⚠️ Precio no válido'); return; }
+      if ((parseFloat(producto[`precio_${linea}`]) || null) === v) return;
+      const { error } = await supabase.from('productos').update({ [`precio_${linea}`]: v }).eq('id', producto.id);
+      if (error) {
+        alert(error.code === '42703' ? '⚠️ Faltan las columnas de precio por línea. Ejecuta el SQL V84 en Supabase.' : '❌ No se pudo guardar el precio: ' + error.message);
+        return;
+      }
+      refetchProductos();
+    };
+
+    // Rellena los precios vacíos de una línea a partir de un €/kg (p. ej. el del plan: 44 o 173 €/kg)
+    const proponerPreciosLinea = async (linea) => {
+      const l = LINEAS_NEGOCIO[linea];
+      const resp = window.prompt(`Precio de ${l.label} para los productos que aún no lo tienen, calculado desde un precio por kilo.\n\n€/kg (plan: ${l.objetivoEurKg}):`, String(l.objetivoEurKg));
+      if (resp === null) return;
+      const eur = parseFloat(resp.replace(',', '.'));
+      if (!(eur > 0)) { alert('⚠️ Escribe un €/kg válido'); return; }
+      const vacios = productosActivos.filter(p => !(parseFloat(p[`precio_${linea}`]) > 0) && gramosPorUnidad(p) > 0);
+      if (!vacios.length) { alert('Todos los productos con formato en gramos ya tienen precio de ' + l.label + '.'); return; }
+      const redondeo = (p) => gramosPorUnidad(p) === 1 ? 10000 : 100;
+      const ejemplo = vacios.slice(0, 6).map(p => `• ${p.nombre}: ${(Math.round(eur * gramosPorUnidad(p) / 1000 * redondeo(p)) / redondeo(p)).toLocaleString('es-ES')} €`).join('\n');
+      if (!window.confirm(`Se pondrá precio de ${l.label} a ${vacios.length} producto(s) sin precio de esta línea (${eur} €/kg):\n\n${ejemplo}${vacios.length > 6 ? '\n…' : ''}\n\nNo cambia las tarifas especiales de cada cliente. ¿Seguir?`)) return;
+      let ok = 0;
+      for (const p of vacios) {
+        const precio = Math.round(eur * gramosPorUnidad(p) / 1000 * redondeo(p)) / redondeo(p);
+        const { error } = await supabase.from('productos').update({ [`precio_${linea}`]: precio }).eq('id', p.id);
+        if (error) { alert(error.code === '42703' ? '⚠️ Ejecuta el SQL V84 en Supabase.' : '❌ ' + error.message); break; }
+        ok++;
+      }
+      refetchProductos();
+      if (ok) alert(`✅ ${ok} precio(s) de ${l.label} guardados.`);
+    };
+
     return (
       <div className="space-y-6">
+        {/* V84: pestañas (por cliente / precio base por línea) y filtro de línea */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex rounded-xl border border-neutral-200 bg-white p-0.5 text-sm font-semibold shadow-sm">
+            {[['clientes', '👤 Por cliente'], ['lineas', '🏷️ Precio base por línea']].map(([k, label]) => (
+              <button key={k} onClick={() => setTarifasVista(k)} className={`px-3 py-1.5 rounded-lg ${tarifasVista === k ? 'bg-orange-500 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{label}</button>
+            ))}
+          </div>
+          {tarifasVista === 'clientes' && renderSelectorLinea()}
+        </div>
+
         {/* Info */}
         <Card className="p-4 bg-blue-50 border-blue-200">
           <div className="flex items-start gap-3">
             <Tag size={24} className="text-blue-600 mt-1" />
             <div>
-              <h3 className="font-bold text-blue-900">Tarifas por Cliente</h3>
+              <h3 className="font-bold text-blue-900">{tarifasVista === 'clientes' ? 'Tarifas por Cliente' : 'Precio base de cada línea de negocio'}</h3>
               <p className="text-sm text-blue-700">
-                Define precios especiales para cada cliente. Estos precios se aplicarán automáticamente en pedidos y presupuestos.
+                {tarifasVista === 'clientes'
+                  ? 'Define precios especiales para cada cliente. Estos precios se aplicarán automáticamente en pedidos y presupuestos.'
+                  : 'Distribución (mayorista) y restaurantes tienen precios muy distintos. El precio de un cliente sale de: su tarifa especial → si no tiene, el precio base de su línea → si está vacío, el precio general del producto.'}
               </p>
             </div>
           </div>
         </Card>
 
+        {tarifasVista === 'lineas' ? (
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b grid grid-cols-1 md:grid-cols-2 gap-3">
+              {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
+                const conPrecio = productosActivos.filter(p => parseFloat(p[`precio_${k}`]) > 0);
+                const ratios = conPrecio.map(p => eurKg(parseFloat(p[`precio_${k}`]), p)).filter(Boolean);
+                const media = ratios.length ? ratios.reduce((t, x) => t + x, 0) / ratios.length : null;
+                return (
+                  <div key={k} className={`p-3 rounded-xl border ${l.color} flex flex-wrap items-center justify-between gap-2`}>
+                    <div>
+                      <p className="font-bold text-sm">{l.emoji} {l.label} · plan {l.objetivoEurKg} €/kg</p>
+                      <p className="text-xs opacity-80">{conPrecio.length} de {productosActivos.length} productos con precio · media {media ? `${media.toFixed(0)} €/kg` : '—'}</p>
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={() => proponerPreciosLinea(k)}>Rellenar vacíos desde €/kg</Button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-50 text-xs text-neutral-500">
+                  <tr>
+                    <th className="text-left p-3">Producto</th>
+                    <th className="text-right p-3">Precio general</th>
+                    {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => <th key={k} className="text-right p-3">{l.emoji} {l.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {productosActivos.map(p => (
+                    <tr key={p.id} className="border-t hover:bg-neutral-50">
+                      <td className="p-3"><span className="font-medium">{p.nombre}</span> <span className="text-xs text-neutral-400">({gramosPorUnidad(p) === 1 ? 'por gramo' : gramosPorUnidad(p) ? `${gramosPorUnidad(p)} g` : p.unidad})</span></td>
+                      <td className="p-3 text-right text-neutral-500">{formatCurrency(p.precio)}{eurKg(parseFloat(p.precio), p) ? <span className="block text-[10px]">{eurKg(parseFloat(p.precio), p).toFixed(0)} €/kg</span> : null}</td>
+                      {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
+                        const v = parseFloat(p[`precio_${k}`]);
+                        const r = eurKg(v, p);
+                        return (
+                          <td key={k} className="p-3 text-right">
+                            <input
+                              key={`${p.id}-${k}-${p[`precio_${k}`] ?? ''}`}
+                              type="number" step="0.01" min="0"
+                              defaultValue={v > 0 ? v : ''}
+                              placeholder={String(p.precio ?? '')}
+                              onBlur={e => guardarPrecioLinea(p, k, e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                              className="w-24 px-2 py-1 border rounded text-right"
+                            />
+                            {r ? <span className={`block text-[10px] ${r < l.objetivoEurKg * 0.8 ? 'text-red-600 font-bold' : 'text-neutral-400'}`}>{r.toFixed(0)} €/kg</span> : null}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        ) : (
         <div className="grid md:grid-cols-3 gap-6">
           {/* Lista de clientes */}
           <Card className="md:col-span-1">
@@ -29346,13 +29653,15 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
               <h3 className="font-bold">Clientes</h3>
             </div>
             <div className="max-h-[60vh] overflow-y-auto">
-              {clientes.map(cliente => {
+              {[...clientes].filter(c => lineaFiltro === 'todas' || lineaDeCliente(c) === lineaFiltro).sort((a, b) => lineaDeCliente(a).localeCompare(lineaDeCliente(b)) || (a.nombre || '').localeCompare(b.nombre || '')).map((cliente, idx, arr) => { // V84: agrupados por línea
                 const numTarifas = tarifasCliente.filter(t => t.cliente_id === cliente.id).length;
+                const cabeceraLinea = idx === 0 || lineaDeCliente(arr[idx - 1]) !== lineaDeCliente(cliente);
                 const isSelected = clienteSeleccionadoTarifa?.id === cliente.id;
                 
                 return (
+                  <React.Fragment key={cliente.id}>
+                  {cabeceraLinea && <div className="px-4 py-1.5 bg-neutral-50 border-b text-[11px] font-bold text-neutral-500 uppercase tracking-wider">{LINEAS_NEGOCIO[lineaDeCliente(cliente)].emoji} {LINEAS_NEGOCIO[lineaDeCliente(cliente)].label}</div>}
                   <button
-                    key={cliente.id}
                     onClick={() => setClienteSeleccionadoTarifa(cliente)}
                     className={`w-full p-4 text-left border-b hover:bg-neutral-50 flex items-center justify-between transition-colors ${isSelected ? 'bg-orange-50 border-l-4 border-l-orange-500' : ''}`}
                   >
@@ -29364,6 +29673,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
                       <Badge className="bg-green-100 text-green-700">{numTarifas} tarifas</Badge>
                     )}
                   </button>
+                  </React.Fragment>
                 );
               })}
             </div>
@@ -29374,7 +29684,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             {clienteSeleccionadoTarifa ? (
               <>
                 <div className="p-4 border-b bg-neutral-50">
-                  <h3 className="font-bold">{clienteSeleccionadoTarifa.nombre}</h3>
+                  <h3 className="font-bold flex items-center gap-2">{clienteSeleccionadoTarifa.nombre} <BadgeLinea linea={lineaDeCliente(clienteSeleccionadoTarifa)} /></h3>{/* V84 */}
                   <p className="text-sm text-neutral-500">
                     Descuento general: {clienteSeleccionadoTarifa.descuento || 0}% · 
                     Tipo: {tipoClienteConfig[clienteSeleccionadoTarifa.tipo]?.label}
@@ -29385,7 +29695,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
                     <thead>
                       <tr className="border-b">
                         <th className="text-left p-2 text-xs font-semibold text-neutral-500">Producto</th>
-                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Precio Base</th>
+                        <th className="text-right p-2 text-xs font-semibold text-neutral-500">Precio {LINEAS_NEGOCIO[lineaDeCliente(clienteSeleccionadoTarifa)].label}</th>
                         <th className="text-right p-2 text-xs font-semibold text-neutral-500">Precio Especial</th>
                         <th className="text-right p-2 text-xs font-semibold text-neutral-500">Dto.</th>
                         <th className="text-right p-2 text-xs font-semibold text-neutral-500">Acciones</th>
@@ -29395,7 +29705,9 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
                       {productos.map(producto => {
                         const tarifa = tarifasDelCliente.find(t => t.producto_id === producto.id);
                         const precioEspecial = tarifa?.precio_especial;
-                        const descuentoProducto = precioEspecial ? Math.round((1 - precioEspecial / producto.precio) * 100) : 0;
+                        const precioBase = precioBaseLinea(producto, lineaDeCliente(clienteSeleccionadoTarifa)); // V84: base de su línea
+                        const descuentoProducto = precioEspecial && precioBase ? Math.round((1 - precioEspecial / precioBase) * 100) : 0;
+                        const eurKgCliente = eurKg(parseFloat(precioEspecial || precioBase), producto);
                         const isEditing = editandoTarifa === producto.id;
 
                         return (
@@ -29404,18 +29716,18 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
                               <span className="font-medium">{producto.nombre}</span>
                               <span className="text-xs text-neutral-500 ml-2">({producto.unidad})</span>
                             </td>
-                            <td className="p-2 text-right">{formatCurrency(producto.precio)}</td>
+                            <td className="p-2 text-right">{formatCurrency(precioBase)}{eurKgCliente ? <span className="block text-[10px] text-neutral-400">{eurKgCliente.toFixed(0)} €/kg</span> : null}</td>
                             <td className="p-2 text-right">
                               {isEditing ? (
                                 <input
                                   type="number"
                                   step="0.01"
-                                  defaultValue={precioEspecial || producto.precio}
+                                  defaultValue={precioEspecial || precioBase}
                                   className="w-24 px-2 py-1 border rounded text-right"
                                   autoFocus
                                   onBlur={(e) => {
                                     const valor = parseFloat(e.target.value);
-                                    if (valor && valor !== producto.precio) {
+                                    if (valor && valor !== precioBase) {
                                       guardarTarifa(producto.id, valor);
                                     } else {
                                       setEditandoTarifa(null);
@@ -29477,6 +29789,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             )}
           </Card>
         </div>
+        )}
       </div>
     );
   };
