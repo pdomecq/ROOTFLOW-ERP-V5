@@ -350,6 +350,22 @@ const TIPOS_IVA = {
   exento: { valor: 0, label: '0% Exento', re: 0 },
 };
 
+// V85: desglose de un gasto. gastos.importe es lo que se paga (total de la factura).
+// Si la factura trae base, IVA o retención de IRPF guardados (alquiler, profesionales, facturas con
+// varias bases), se usan esos campos; si no, la base y el IVA se deducen del importe y el tipo de IVA.
+const desgloseGasto = (g) => {
+  const importe = parseFloat(g?.importe) || 0;
+  const ivaPct = TIPOS_IVA[g?.iva_tipo || 'general']?.valor ?? 21;
+  const baseGuardada = g?.base_imponible === null || g?.base_imponible === undefined || g?.base_imponible === '' ? NaN : parseFloat(g.base_imponible);
+  if (!isNaN(baseGuardada)) {
+    const iva = parseFloat(g.iva_importe) || 0;
+    const retencion = parseFloat(g.retencion_importe) || 0;
+    return { base: baseGuardada, iva, ivaPct, retencion, retencionPct: parseFloat(g.retencion_pct) || 0, totalFactura: Math.round((baseGuardada + iva) * 100) / 100, aPagar: importe, explicito: true };
+  }
+  const base = importe / (1 + ivaPct / 100);
+  return { base, iva: importe - base, ivaPct, retencion: 0, retencionPct: 0, totalFactura: importe, aPagar: importe, explicito: false };
+};
+
 // IVA para productos alimenticios (microbrotes) = 4%
 const IVA_VENTAS = 4; // Superreducido para alimentos
 const RE_VENTAS = 0.5; // Recargo de equivalencia para alimentos
@@ -765,6 +781,7 @@ const MainApp = () => {
   // Gastos - filtros y selección
   const [filtroGastosMes, setFiltroGastosMes] = useState('todos');
   const [selectedGastos, setSelectedGastos] = useState([]);
+  const [subiendoFacturas, setSubiendoFacturas] = useState(false); // V85: bandeja de facturas recibidas
   
   // Selección múltiple para todas las secciones
   const [selectedClientes, setSelectedClientes] = useState([]);
@@ -1585,6 +1602,7 @@ const MainApp = () => {
   const { data: pedidoItemsData, refetch: refetchPedidoItems } = useRealtime('pedido_items');
   const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
+  const { data: facturasRecibidasData, refetch: refetchFacturasRecibidas } = useRealtime('facturas_recibidas'); // V85
   const { data: lotesData, refetch: refetchLotes } = useRealtime('lotes');
   const { data: proveedoresData, refetch: refetchProveedores } = useRealtime('proveedores');
   // V80 - Compras a particulares (Wallapop)
@@ -1698,6 +1716,7 @@ const MainApp = () => {
   const pedidoItems = pedidoItemsData || [];
   const facturas = facturasData || [];
   const gastos = gastosData || [];
+  const facturasRecibidas = facturasRecibidasData || []; // V85
   const lotes = lotesData || [];
   const proveedores = proveedoresData || [];
   const comprasParticulares = comprasParticularesData || [];
@@ -1939,12 +1958,13 @@ const MainApp = () => {
       
       const importeTotal = parseFloat(gasto.importe) || 0;
       
-      // Usar el tipo de IVA seleccionado - CORREGIDO para manejar 0%
-      const ivaTipo = gasto.iva_tipo || 'general';
-      const ivaPorcentaje = TIPOS_IVA[ivaTipo]?.valor ?? 21; // usar ?? en lugar de || para manejar 0
-      const divisor = 1 + (ivaPorcentaje / 100);
-      const base = parseFloat((importeTotal / divisor).toFixed(2));
-      const iva = parseFloat((importeTotal - base).toFixed(2));
+      // V85: base, IVA y retención del desglose (guardado o deducido del tipo de IVA)
+      const desglose = desgloseGasto(gasto);
+      const ivaPorcentaje = desglose.ivaPct;
+      const base = Math.round(desglose.base * 100) / 100;
+      const retencion = Math.round(desglose.retencion * 100) / 100;
+      // IVA = lo que falta para cuadrar (evita descuadres de céntimos)
+      const iva = desglose.explicito ? Math.round((importeTotal + retencion - base) * 100) / 100 : parseFloat((importeTotal - base).toFixed(2));
       
       // Determinar cuenta de gasto según categoría usando el mapeo PGC
       // V80: las categorías CAPEX (213, 216, 217…) no estaban en el mapeo y caían en 629
@@ -1991,7 +2011,12 @@ const MainApp = () => {
       
       // Solo añadir línea de IVA si hay IVA
       if (iva > 0) {
-        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '472', concepto: `H.P. IVA Soportado (${ivaPorcentaje}%)`, debe: iva, haber: 0 });
+        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '472', concepto: desglose.explicito ? 'H.P. IVA Soportado' : `H.P. IVA Soportado (${ivaPorcentaje}%)`, debe: iva, haber: 0 });
+      }
+      
+      // V85: retención de IRPF practicada (alquiler, profesionales) → se ingresa a Hacienda con el modelo 115/111
+      if (retencion > 0) {
+        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '4751', concepto: `H.P. acreedora por retenciones (${desglose.retencionPct || ''}% IRPF)`, debe: 0, haber: retencion });
       }
       
       lineas.push({ asiento_id: nuevoAsiento.id, cuenta: cuentaPago, concepto: conceptoPago, debe: 0, haber: importeTotal });
@@ -2011,12 +2036,249 @@ const MainApp = () => {
       refetchAsientos();
       refetchAsientoLineas();
       
-      if (!silencioso) alert(`✅ Asiento ${numero} creado:\n\n${cuentaGasto} ${nombreCuenta}: ${base.toFixed(2)}€ (DEBE)\n472 IVA Soportado: ${iva.toFixed(2)}€ (DEBE)\n${cuentaPago} ${conceptoPago}: ${importeTotal.toFixed(2)}€ (HABER)`);
+      if (!silencioso) alert(`✅ Asiento ${numero} creado:\n\n${cuentaGasto} ${nombreCuenta}: ${base.toFixed(2)}€ (DEBE)\n472 IVA Soportado: ${iva.toFixed(2)}€ (DEBE)${retencion > 0 ? `\n4751 Retención IRPF: ${retencion.toFixed(2)}€ (HABER)` : ''}\n${cuentaPago} ${conceptoPago}: ${importeTotal.toFixed(2)}€ (HABER)`);
     } catch (error) {
       console.error('Error creando asiento desde gasto:', error);
       alert('❌ Error inesperado: ' + error.message);
     }
   };
+
+
+  // ==================== V85 — BANDEJA DE FACTURAS RECIBIDAS ====================
+  // Las facturas de proveedor llegan aquí (botón "Subir facturas" o revisión diaria del correo de Peri).
+  // La Edge Function leer-factura guarda el archivo y extrae los datos con IA; al pulsar "Registrar"
+  // se abre el formulario de gasto ya relleno y, al guardarlo, se crea el gasto con su asiento.
+  const invocarFuncion = async (nombre, body) => {
+    const { data, error } = await supabase.functions.invoke(nombre, { body });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      return { error: msg };
+    }
+    return data || {};
+  };
+
+  const subirFacturasRecibidas = async (files) => {
+    const lista = Array.from(files || []);
+    if (!lista.length) return;
+    setSubiendoFacturas(true);
+    let ok = 0;
+    const fallos = [];
+    for (const file of lista) {
+      try {
+        const ext = (file.name.split('.').pop() || 'pdf').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const ruta = `recibidas/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+        const { error: eUp } = await supabase.storage.from('facturas-gastos').upload(ruta, file, { contentType: file.type || undefined });
+        if (eUp) throw eUp;
+        const { data: pub } = supabase.storage.from('facturas-gastos').getPublicUrl(ruta);
+        const { data: fila, error: eIns } = await supabase.from('facturas_recibidas').insert({
+          origen: 'subida', archivo_url: pub.publicUrl, archivo_nombre: file.name, archivo_mime: file.type || null,
+          estado: 'nueva', subido_por: user?.email || null,
+        }).select().single();
+        if (eIns) {
+          if (eIns.code === '42P01') { alert('⚠️ Falta la tabla facturas_recibidas. Ejecuta el SQL V85 en Supabase.'); break; }
+          throw eIns;
+        }
+        const r = await invocarFuncion('leer-factura', { accion: 'procesar', id: fila.id });
+        if (r.error) fallos.push(`${file.name}: ${r.error}`); else ok++;
+      } catch (e) {
+        fallos.push(`${file.name}: ${e.message || e}`);
+      }
+    }
+    setSubiendoFacturas(false);
+    refetchFacturasRecibidas();
+    if (fallos.length) alert(`${ok ? `✅ ${ok} factura(s) leída(s).\n\n` : ''}❌ Con problemas:\n${fallos.join('\n')}\n\nLas que se subieron quedan en la bandeja para rellenarlas a mano.`);
+  };
+
+  // Abre el formulario de gasto relleno con lo que se ha leído de la factura
+  const registrarFacturaRecibida = async (fr) => {
+    const d = fr.datos_json || {};
+    let proveedorId = d.proveedor_id || null;
+    if (!proveedorId && d.proveedor_nombre) {
+      if (window.confirm(`El proveedor "${d.proveedor_nombre}"${d.proveedor_cif ? ` (${d.proveedor_cif})` : ''} no está en el ERP. ¿Lo creo?`)) {
+        let { data: nuevo, error } = await supabase.from('proveedores').insert({ nombre: d.proveedor_nombre, cif: d.proveedor_cif || null, categoria: 'otros', activo: true }).select().single();
+        if (error && error.code === '42703') ({ data: nuevo, error } = await supabase.from('proveedores').insert({ nombre: d.proveedor_nombre, categoria: 'otros', activo: true, notas: d.proveedor_cif ? `CIF: ${d.proveedor_cif}` : null }).select().single());
+        if (error) { alert('❌ No se pudo crear el proveedor: ' + error.message); return; }
+        proveedorId = nuevo.id;
+        refetchProveedores();
+      }
+    }
+    // Forma de pago y "pagado" como el último gasto de ese proveedor
+    const anterior = proveedorId ? [...gastos].filter(g => g.proveedor_id === proveedorId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))[0] : null;
+    const r2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+    const total = r2(d.total_a_pagar);
+    const base = r2(d.base_imponible);
+    const iva = r2(d.iva_importe);
+    const ret = r2(d.retencion_importe);
+    const ivaTipo = TIPOS_IVA[d.iva_tipo] ? d.iva_tipo : 'general';
+    // Desglose explícito si hay retención, varias bases o el IVA no sale del tipo
+    const ivaDelTipo = r2(base * (TIPOS_IVA[ivaTipo]?.valor ?? 21) / 100);
+    const necesitaDesglose = ret > 0 || d.iva_tipo === 'mixto' || (base > 0 && Math.abs(ivaDelTipo - iva) > 0.02);
+    setEditingItem({
+      fecha: /^\d{4}-\d{2}-\d{2}$/.test(d.fecha || '') ? d.fecha : new Date().toISOString().split('T')[0],
+      categoria: categoriasGasto[d.categoria] ? d.categoria : 'otros',
+      concepto: d.concepto || fr.email_asunto || fr.archivo_nombre || '',
+      proveedor_id: proveedorId,
+      numero_factura: d.numero_factura || '',
+      iva_tipo: ivaTipo,
+      importe: total || r2(base + iva - ret),
+      forma_pago: anterior?.forma_pago || 'banco',
+      pagado: anterior ? !!anterior.pagado : false,
+      factura_url: fr.archivo_url || '',
+      ...(necesitaDesglose ? { base_imponible: base, iva_importe: iva, retencion_pct: r2(d.retencion_pct), retencion_importe: ret } : {}),
+      _factura_recibida_id: fr.id,
+    });
+    setShowModal('gasto');
+  };
+
+  const marcarFacturaRecibida = async (fr, cambios) => {
+    const { error } = await supabase.from('facturas_recibidas').update({ ...cambios, updated_at: new Date().toISOString() }).eq('id', fr.id);
+    if (error) alert('❌ ' + error.message);
+    refetchFacturasRecibidas();
+  };
+
+  const releerFacturaRecibida = async (fr) => {
+    await marcarFacturaRecibida(fr, { estado: 'nueva', error: null, datos_json: null });
+    const r = await invocarFuncion('leer-factura', { accion: 'procesar', id: fr.id });
+    refetchFacturasRecibidas();
+    if (r.error) alert('❌ ' + r.error);
+  };
+
+  // Al entrar en Gastos, procesar lo que haya llegado del correo y aún no se haya leído
+  const hayFacturasNuevas = facturasRecibidas.some(f => f.estado === 'nueva');
+  useEffect(() => {
+    if (activeSection !== 'gastos' || !hayFacturasNuevas) return;
+    invocarFuncion('leer-factura', { accion: 'procesar_pendientes' }).then(() => refetchFacturasRecibidas());
+  }, [activeSection, hayFacturasNuevas]);
+
+  const renderBandejaFacturas = () => {
+    const visibles = facturasRecibidas
+      .filter(f => ['nueva', 'pendiente', 'error', 'duplicada'].includes(f.estado))
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    const estadoCfg = {
+      nueva: { label: '⏳ Leyendo…', cls: 'bg-blue-100 text-blue-700' },
+      pendiente: { label: 'Por registrar', cls: 'bg-amber-100 text-amber-800' },
+      error: { label: 'Error', cls: 'bg-red-100 text-red-700' },
+      duplicada: { label: 'Duplicada', cls: 'bg-neutral-200 text-neutral-700' },
+    };
+    return (
+      <Card className="p-4 border-2 border-orange-200 bg-orange-50/40">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-bold flex items-center gap-2"><Inbox size={18} className="text-orange-600" /> Facturas recibidas {visibles.length > 0 && <Badge className="bg-orange-500 text-white">{visibles.length}</Badge>}</h3>
+            <p className="text-xs text-neutral-500">Sube el PDF o una foto de la factura y se rellena sola. Las del correo de Peri llegan aquí cada mañana. Nada se registra hasta que pulses "Registrar".</p>
+          </div>
+          <label className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm cursor-pointer ${subiendoFacturas ? 'bg-neutral-300 text-neutral-600' : 'bg-orange-500 text-white hover:bg-orange-600'}`}>
+            {subiendoFacturas ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            {subiendoFacturas ? 'Leyendo facturas…' : 'Subir facturas'}
+            <input type="file" multiple accept="application/pdf,image/jpeg,image/png,image/webp" className="hidden" disabled={subiendoFacturas}
+              onChange={e => { subirFacturasRecibidas(e.target.files); e.target.value = ''; }} />
+          </label>
+        </div>
+        {visibles.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {visibles.map(fr => {
+              const d = fr.datos_json || {};
+              const cfg = estadoCfg[fr.estado] || estadoCfg.pendiente;
+              return (
+                <div key={fr.id} className="p-3 rounded-xl bg-white border flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span title={fr.origen === 'gmail' ? `Correo de ${fr.email_de || ''}` : `Subida por ${fr.subido_por || ''}`}>{fr.origen === 'gmail' ? '📧' : '⬆️'}</span>
+                      <span className="font-semibold">{d.proveedor_erp || d.proveedor_nombre || fr.archivo_nombre || 'Factura'}</span>
+                      <Badge className={cfg.cls}>{cfg.label}</Badge>
+                      {d.proveedor_nombre && !d.proveedor_id && fr.estado === 'pendiente' && <Badge className="bg-purple-100 text-purple-700">Proveedor nuevo</Badge>}
+                    </div>
+                    {Object.keys(d).length > 0 && (
+                      <p className="text-xs text-neutral-600 mt-0.5">
+                        {d.numero_factura ? `Nº ${d.numero_factura} · ` : ''}{d.fecha ? `${formatDate(d.fecha)} · ` : ''}{d.concepto || ''}
+                        {d.total_a_pagar != null && <> · <strong>{formatCurrency(d.total_a_pagar)}</strong></>}
+                        {(parseFloat(d.retencion_importe) || 0) > 0 && <span className="text-rose-700"> · retención {formatCurrency(d.retencion_importe)}</span>}
+                        {d.moneda && d.moneda !== 'EUR' && <span className="text-red-600 font-bold"> · {d.moneda}</span>}
+                      </p>
+                    )}
+                    {d.notas && <p className="text-[11px] text-neutral-500 italic">{d.notas}</p>}
+                    {fr.error && <p className={`text-[11px] ${fr.estado === 'error' ? 'text-red-600' : 'text-amber-700'}`}>{fr.error}</p>}
+                  </div>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {fr.archivo_url && <a href={fr.archivo_url} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold hover:bg-neutral-50 inline-flex items-center gap-1"><Eye size={13} />Ver</a>}
+                    {['pendiente', 'duplicada'].includes(fr.estado) && <Button size="sm" onClick={() => registrarFacturaRecibida(fr)}><Check size={14} />Registrar</Button>}
+                    {['error', 'pendiente'].includes(fr.estado) && <Button size="sm" variant="secondary" onClick={() => releerFacturaRecibida(fr)} title="Volver a leer con IA"><RefreshCw size={13} /></Button>}
+                    <Button size="sm" variant="secondary" onClick={() => { if (window.confirm('¿Descartar esta factura? No se registra ningún gasto.')) marcarFacturaRecibida(fr, { estado: 'descartada' }); }} title="Descartar"><X size={13} /></Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  // ==================== V85 — RETENCIONES DE IRPF (MODELOS 115 Y 111) ====================
+  const renderRetencionesIRPF = () => {
+    const conRetencion = gastos.filter(g => desgloseGasto(g).retencion > 0);
+    const desactualizados = gastosConAsientoDesactualizado();
+    if (!conRetencion.length && !desactualizados.length) return null;
+    const anio = new Date().getFullYear();
+    const hoy = new Date().toISOString().split('T')[0];
+    const plazo = (y, t) => t === 4 ? `${y + 1}-01-30` : `${y}-${String(t * 3 + 1).padStart(2, '0')}-20`;
+    const filas = [];
+    [anio - 1, anio].forEach(y => [1, 2, 3, 4].forEach(t => {
+      const delTrim = conRetencion.filter(g => String(g.fecha).startsWith(String(y)) && Math.floor((parseInt(String(g.fecha).slice(5, 7), 10) - 1) / 3) + 1 === t);
+      if (!delTrim.length) return;
+      const m115 = delTrim.filter(g => g.categoria === 'alquiler').reduce((s2, g) => s2 + desgloseGasto(g).retencion, 0);
+      const m111 = delTrim.filter(g => g.categoria !== 'alquiler').reduce((s2, g) => s2 + desgloseGasto(g).retencion, 0);
+      filas.push({ y, t, m115, m111, plazo: plazo(y, t), n: delTrim.length });
+    }));
+    const rehacerTodos = async () => {
+      if (!window.confirm(`Se rehará el asiento de ${desactualizados.length} gasto(s) con el desglose de la factura (base, IVA y retención en la 4751):\n\n${desactualizados.map(g => `• ${formatDate(g.fecha)} · ${g.concepto} · ${formatCurrency(g.importe)}`).join('\n')}\n\n¿Seguir?`)) return;
+      for (const g of desactualizados) await rehacerAsientoGasto(g.id, g, proveedores.find(p => p.id === g.proveedor_id)?.nombre);
+      alert('✅ Asientos rehechos.');
+    };
+    return (
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 className="font-bold">🧾 Retenciones de IRPF practicadas</h3>
+          <span className="text-xs text-neutral-500">Se ingresan a Hacienda cada trimestre: modelo 115 (alquiler) y 111 (profesionales)</span>
+        </div>
+        {desactualizados.length > 0 && (
+          <div className="mb-3 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex flex-wrap items-center justify-between gap-2">
+            <span>⚠️ {desactualizados.length} gasto(s) con retención tienen el asiento antiguo (sin la 4751 o con base e IVA mal calculados).</span>
+            <Button size="sm" onClick={rehacerTodos}>Rehacer asientos</Button>
+          </div>
+        )}
+        {filas.length > 0 && (
+          <table className="w-full text-sm">
+            <thead><tr className="text-xs text-neutral-500 text-left"><th className="py-1">Trimestre</th><th className="py-1 text-right">Modelo 115</th><th className="py-1 text-right">Modelo 111</th><th className="py-1 text-right">Plazo</th></tr></thead>
+            <tbody>
+              {filas.map(f => (
+                <tr key={`${f.y}-${f.t}`} className="border-t">
+                  <td className="py-1.5">{f.t}T {f.y} <span className="text-xs text-neutral-400">· {f.n} factura{f.n === 1 ? '' : 's'}</span></td>
+                  <td className="py-1.5 text-right font-semibold">{f.m115 ? formatCurrency(f.m115) : '—'}</td>
+                  <td className="py-1.5 text-right font-semibold">{f.m111 ? formatCurrency(f.m111) : '—'}</td>
+                  <td className={`py-1.5 text-right text-xs ${f.plazo < hoy ? 'text-neutral-400' : 'text-amber-700 font-semibold'}`}>{formatDate(f.plazo)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="text-[11px] text-neutral-400 mt-2">Comprueba con la gestoría que se han presentado. El pago del modelo salda la cuenta 4751 (no es un gasto nuevo).</p>
+      </Card>
+    );
+  };
+
+  // V85: gastos con desglose guardado (retención o varias bases) cuyo asiento no cuadra con él
+  const gastosConAsientoDesactualizado = () => gastos.filter(g => {
+    const d = desgloseGasto(g);
+    if (!d.explicito) return false;
+    const asiento = asientosContables.find(a => a.referencia === `GAS-${g.id}`);
+    if (!asiento) return true;
+    const lineas = asientoLineasDB.filter(l => l.asiento_id === asiento.id);
+    const suma = (cuenta, campo) => lineas.filter(l => String(l.cuenta) === cuenta).reduce((t, l) => t + (parseFloat(l[campo]) || 0), 0);
+    const cerca = (a, b) => Math.abs(a - b) < 0.02;
+    return !cerca(suma('4751', 'haber'), d.retencion) || !cerca(suma('472', 'debe'), Math.round((d.aPagar + d.retencion - d.base) * 100) / 100);
+  });
 
   // ==================== EXPORTACIÓN DE INFORMES CONTABLES ====================
   
@@ -3704,6 +3966,20 @@ const MainApp = () => {
             alert('⚠️ Gasto guardado, pero el reparto entre socios no se ha podido registrar.\n\nEjecuta el SQL V66 en Supabase para activar esa función.');
           }
         }
+        // V85: fallback si faltan las columnas de desglose (base, IVA, retención) en gastos
+        if (result.error && result.error.code === '42703' && table === 'gastos' && ['base_imponible', 'iva_importe', 'retencion_pct', 'retencion_importe', 'numero_factura'].some(c => form[c] !== undefined)) {
+          const { base_imponible, iva_importe, retencion_pct, retencion_importe, numero_factura, ...sinDesglose } = form;
+          form = sinDesglose;
+          if (id) {
+            result = await supabase.from(table).update(sinDesglose).eq('id', id);
+          } else {
+            result = await supabase.from(table).insert(sinDesglose).select();
+            if (result.data && result.data[0]) newRecordId = result.data[0].id;
+          }
+          if (!result.error) {
+            alert('⚠️ Gasto guardado, pero sin el desglose de base, IVA y retención.\n\nEjecuta el SQL V85 en Supabase.');
+          }
+        }
         // V84: fallback si falta la columna linea_negocio en clientes
         if (result.error && result.error.code === '42703' && table === 'clientes' && form.linea_negocio !== undefined) {
           const { linea_negocio, ...sinLinea } = form;
@@ -3765,6 +4041,12 @@ const MainApp = () => {
         const proveedor = proveedores.find(p => p.id === form.proveedor_id);
         await crearAsientoDesdeGasto({ ...form, id: newRecordId }, proveedor);
       }
+      // V85: al editar un gasto, rehacer su asiento si cambian importe, fecha, IVA, retención, categoría o forma de pago
+      if (table === 'gastos' && id && datosAnteriores) {
+        const campos = ['importe', 'fecha', 'iva_tipo', 'base_imponible', 'iva_importe', 'retencion_importe', 'categoria', 'forma_pago', 'proveedor_id'];
+        const cambia = campos.some(c => form[c] !== undefined && String(form[c] ?? '') !== String(datosAnteriores[c] ?? ''));
+        if (cambia) await rehacerAsientoGasto(id, { ...datosAnteriores, ...form }, proveedores.find(p => p.id === (form.proveedor_id ?? datosAnteriores.proveedor_id))?.nombre);
+      }
       
       setShowModal(null);
       setEditingItem(null);
@@ -3777,6 +4059,7 @@ const MainApp = () => {
       else if (table === 'proveedores') refetchProveedores();
       else if (table === 'tareas') refetchTareas();
       else if (table === 'mermas') refetchMermas();
+      return registroId; // V85
     } catch (error) { 
       console.error('Error:', error); 
       alert('Error: ' + error.message);
@@ -6466,6 +6749,12 @@ ${pedidoLinea ? `^FO260,258
       factura_url: gasto?.factura_url || '',
       justificante_pago_url: gasto?.justificante_pago_url || '',
       reparto_socios: Array.isArray(gasto?.reparto_socios) ? gasto.reparto_socios : [],
+      // V85: nº de factura y desglose (retención IRPF / varias bases). null = se deduce del importe
+      numero_factura: gasto?.numero_factura || '',
+      base_imponible: gasto?.base_imponible ?? null,
+      iva_importe: gasto?.iva_importe ?? null,
+      retencion_pct: gasto?.retencion_pct ?? null,
+      retencion_importe: gasto?.retencion_importe ?? null,
     };
     
     // Usar hook de persistencia (solo para formularios nuevos, no edición)
@@ -6563,11 +6852,28 @@ ${pedidoLinea ? `^FO260,258
     };
 
     // Calcular base e IVA según el tipo seleccionado - CORREGIDO para 0%
+    // V85: con desglose (retención IRPF o varias bases) se usan los importes de la factura
     const tipoIVASeleccionado = form.iva_tipo || 'general';
     const ivaPorcentaje = TIPOS_IVA[tipoIVASeleccionado]?.valor ?? 21; // usar ?? en lugar de || para manejar 0
-    const divisor = 1 + (ivaPorcentaje / 100);
-    const base = form.importe ? (parseFloat(form.importe) / divisor).toFixed(2) : '0.00';
-    const iva = form.importe ? (parseFloat(form.importe) - parseFloat(base)).toFixed(2) : '0.00';
+    const desgloseForm = desgloseGasto(form);
+    const conDesglose = desgloseForm.explicito;
+    const base = desgloseForm.base.toFixed(2);
+    const iva = desgloseForm.iva.toFixed(2);
+    const r2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+    // Recalcula el total a pagar a partir de base + IVA − retención
+    const setDesglose = (cambios) => {
+      const f = { ...form, ...cambios };
+      const b = r2(f.base_imponible);
+      const total = r2(b + r2(f.iva_importe) - r2(f.retencion_importe));
+      setForm({ ...f, importe: total });
+    };
+    const activarDesglose = (on) => {
+      if (!on) { setForm({ ...form, base_imponible: null, iva_importe: null, retencion_pct: null, retencion_importe: null }); return; }
+      const b = r2(desgloseForm.base);
+      const ivaE = r2(b * ivaPorcentaje / 100);
+      const ret = r2(b * 0.19);
+      setForm({ ...form, base_imponible: b, iva_importe: ivaE, retencion_pct: 19, retencion_importe: ret, importe: r2(b + ivaE - ret) });
+    };
     const categoriaInfo = categoriasGasto[form.categoria] || categoriasGasto.otros;
     const cuentaGasto = categoriaInfo?.cuenta || '629';
     const esCapex = categoriaInfo?.tipo === 'capex';
@@ -6596,7 +6902,8 @@ ${pedidoLinea ? `^FO260,258
               </optgroup>
             </select>
           </div>
-          <Input label="Concepto" className="col-span-2" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
+          <Input label="Concepto" value={form.concepto} onChange={e => setForm({...form, concepto: e.target.value})} />
+          <Input label="Nº de factura" value={form.numero_factura || ''} onChange={e => setForm({...form, numero_factura: e.target.value})} placeholder="Opcional" />{/* V85 */}
           <Select 
             label="Proveedor" 
             value={form.proveedor_id || ''} 
@@ -6609,13 +6916,40 @@ ${pedidoLinea ? `^FO260,258
             onChange={e => setForm({...form, iva_tipo: e.target.value})} 
             options={tiposIVA} 
           />
-          <Input label="Importe TOTAL con IVA (€)" type="number" step="0.01" value={form.importe} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
+          <Input label={conDesglose ? 'Total a pagar (€) · calculado' : 'Importe TOTAL con IVA (€)'} type="number" step="0.01" value={form.importe} disabled={conDesglose} onChange={e => setForm({...form, importe: parseFloat(e.target.value) || 0})} />
           <Select 
             label="Forma de pago" 
             value={form.forma_pago || 'banco'} 
             onChange={e => setForm({...form, forma_pago: e.target.value})} 
             options={formasPago} 
           />
+        </div>
+
+        {/* V85: factura con retención de IRPF (alquiler, profesionales) o con varias bases */}
+        <div className={`p-3 rounded-xl border-2 ${conDesglose ? 'border-rose-300 bg-rose-50' : 'border-neutral-200'}`}>
+          <label className="flex items-center justify-between gap-2 cursor-pointer">
+            <div>
+              <p className="font-semibold text-sm">🧾 Factura con retención de IRPF o con varias bases</p>
+              <p className="text-[11px] text-neutral-500">Alquiler del local, asesorías y profesionales autónomos, o facturas con importes sin IVA (suplidos de luz, agua…). Se copian la base, el IVA y la retención tal como vienen en la factura.</p>
+            </div>
+            <input type="checkbox" checked={conDesglose} onChange={e => activarDesglose(e.target.checked)} className="w-5 h-5 shrink-0" />
+          </label>
+          {conDesglose && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+              <Input label="Base imponible (€)" type="number" step="0.01" value={form.base_imponible ?? ''} onChange={e => setDesglose({ base_imponible: e.target.value === '' ? 0 : parseFloat(e.target.value), retencion_importe: form.retencion_pct ? r2((parseFloat(e.target.value) || 0) * form.retencion_pct / 100) : form.retencion_importe })} />
+              <div>
+                <Input label="IVA (€)" type="number" step="0.01" value={form.iva_importe ?? ''} onChange={e => setDesglose({ iva_importe: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
+                <button type="button" onClick={() => setDesglose({ iva_importe: r2(r2(form.base_imponible) * ivaPorcentaje / 100) })} className="text-[11px] text-rose-700 font-semibold hover:underline mt-1">= base × {ivaPorcentaje}%</button>
+              </div>
+              <Select label="Retención IRPF" value={String(form.retencion_pct ?? 0)} onChange={e => { const pct = parseFloat(e.target.value) || 0; setDesglose({ retencion_pct: pct, retencion_importe: r2(r2(form.base_imponible) * pct / 100) }); }}
+                options={[{ value: '0', label: 'Sin retención' }, { value: '19', label: '19 % (alquiler)' }, { value: '15', label: '15 % (profesionales)' }, { value: '7', label: '7 % (profesional nuevo)' }]} />
+              <Input label="Retención (€)" type="number" step="0.01" value={form.retencion_importe ?? ''} onChange={e => setDesglose({ retencion_importe: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
+              <p className="col-span-2 md:col-span-4 text-xs text-rose-800">
+                {formatCurrency(form.base_imponible)} base + {formatCurrency(form.iva_importe)} IVA − {formatCurrency(form.retencion_importe)} retención = <strong>{formatCurrency(form.importe)} a pagar</strong>.
+                {(parseFloat(form.retencion_importe) || 0) > 0 && ' La retención se ingresa a Hacienda con el modelo 115 (alquiler) o 111 (profesionales).'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* V66: Reparto entre socios (si la forma de pago es un socio) */}
@@ -6794,7 +7128,8 @@ ${pedidoLinea ? `^FO260,258
               <div>
                 <span className="font-mono">{cuentaGasto}</span> {esCapex ? 'Activo' : 'Gasto'}: <strong>{base}€</strong> (D)
               </div>
-              <div><span className="font-mono">472</span> IVA {ivaPorcentaje}%: <strong>{iva}€</strong> (D)</div>
+              <div><span className="font-mono">472</span> IVA {conDesglose ? '' : `${ivaPorcentaje}%`}: <strong>{iva}€</strong> (D)</div>
+              {desgloseForm.retencion > 0 && <div><span className="font-mono">4751</span> Retención IRPF: <strong>{desgloseForm.retencion.toFixed(2)}€</strong> (H)</div>}{/* V85 */}
               <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
             </div>
           </div>
@@ -13646,15 +13981,9 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
       { header: 'Proveedor', accessor: g => getProveedorGasto(g)?.nombre || '' },
       { header: 'CIF Proveedor', accessor: g => getProveedorGasto(g)?.cif || '' },
       { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21}%` },
-      { header: 'Base Imponible', accessor: g => {
-        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-        return (Number(g.importe || 0) / (1 + ivaPct / 100)).toFixed(2);
-      }},
-      { header: 'Cuota IVA', accessor: g => {
-        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-        const base = Number(g.importe || 0) / (1 + ivaPct / 100);
-        return (Number(g.importe || 0) - base).toFixed(2);
-      }},
+      { header: 'Base Imponible', accessor: g => desgloseGasto(g).base.toFixed(2) }, // V85
+      { header: 'Cuota IVA', accessor: g => desgloseGasto(g).iva.toFixed(2) },
+      { header: 'Retención IRPF', accessor: g => desgloseGasto(g).retencion.toFixed(2) },
       { header: 'Total', accessor: g => Number(g.importe || 0).toFixed(2) },
       { header: 'Forma de pago', accessor: g => formaPagoLabelExcel(g.forma_pago) },
       { header: 'Cuenta contable', accessor: g => cuentaContableFormaPago(g.forma_pago) },
@@ -13705,10 +14034,10 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
       const fechaCompra = new Date(gasto.fecha);
       const aniosTranscurridos = (hoy - fechaCompra) / (365.25 * 24 * 60 * 60 * 1000);
       
-      // IVA deducible - calcular base imponible
+      // IVA deducible - calcular base imponible (V85: desglose guardado si lo hay)
       const tipoIVA = TIPOS_IVA[gasto.iva_tipo] || TIPOS_IVA.general;
       const ivaPct = tipoIVA?.valor ?? 21;
-      const baseImponible = gasto.importe / (1 + ivaPct / 100);
+      const baseImponible = desgloseGasto(gasto).base;
       
       // Amortización lineal
       const amortizacionAnual = baseImponible / aniosAmortizacion;
@@ -13820,6 +14149,8 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
 
         {gastosTab === 'gastos' && (
           <>
+            {renderBandejaFacturas()}{/* V85 */}
+            {renderRetencionesIRPF()}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <StatCard icon={Wallet} label="Total" value={formatCurrency(gastosFiltradosPorMes.reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-red-100 text-red-600" />
               <StatCard icon={CreditCard} label="Pagados" value={formatCurrency(gastosFiltradosPorMes.filter(g => g.pagado).reduce((sum, g) => sum + (g.importe || 0), 0))} color="bg-green-100 text-green-600" />
@@ -14235,9 +14566,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
                     const url = tipo === 'facturas' ? g.factura_url : g.justificante_pago_url;
                     const ext = url.split('.').pop().split('?')[0];
                     const nombre = formatearNombre(g, tipo === 'facturas' ? 'F' : 'JUST') + '.' + ext;
-                    const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-                    const base = Number(g.importe || 0) / (1 + ivaPct / 100);
-                    const cuota = Number(g.importe || 0) - base;
+                    const { ivaPct, base, iva: cuota } = desgloseGasto(g); // V85
                     csvLines.push([
                       g.fecha,
                       `"${(g.concepto || '').replace(/"/g, '""')}"`,
@@ -14468,9 +14797,8 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
                 // ---- Hoja 1: un gasto por fila, con la columna de cada socio ----
                 const filas = gastosDeuda.map(g => {
                   const prov = proveedores.find(p => p.id === g.proveedor_id);
-                  const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
                   const total = parseFloat(g.importe) || 0;
-                  const base = total / (1 + ivaPct / 100);
+                  const { ivaPct, base } = desgloseGasto(g); // V85
                   const rep = repartoDe(g);
                   const sumaRep = clavesSocio.reduce((s, k) => s + rep[k], 0);
                   const tieneReparto = Array.isArray(g.reparto_socios) && g.reparto_socios.length > 0;
@@ -14508,10 +14836,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
                 const totalesFila = {
                   'Fecha': '', 'Concepto': 'TOTALES', 'Proveedor': '', 'CIF Proveedor': '',
                   'Categoría': '', 'Tipo gasto': '', 'Tipo IVA': '',
-                  'Base imponible (€)': gastosDeuda.reduce((s, g) => {
-                    const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-                    return s + (parseFloat(g.importe) || 0) / (1 + ivaPct / 100);
-                  }, 0).toFixed(2),
+                  'Base imponible (€)': gastosDeuda.reduce((s, g) => s + desgloseGasto(g).base, 0).toFixed(2), // V85
                   'Cuota IVA (€)': '',
                   'Total factura (€)': gastosDeuda.reduce((s, g) => s + (parseFloat(g.importe) || 0), 0).toFixed(2),
                   'Pagó contablemente': '', 'Repartido entre socios': '',
@@ -27665,11 +27990,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
 
       const ivaRepercutido = facturasT.reduce((sum, f) => sum + (f.iva || 0) + (f.re_importe || 0), 0);
       // Calcular IVA soportado usando el tipo real de cada gasto
-      const ivaSoportado = gastosT.reduce((sum, g) => {
-        const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-        const base = (g.importe || 0) / (1 + ivaPct/100);
-        return sum + ((g.importe || 0) - base);
-      }, 0);
+      const ivaSoportado = gastosT.reduce((sum, g) => sum + desgloseGasto(g).iva, 0); // V85
       const resultado = ivaRepercutido - ivaSoportado;
 
       return {
@@ -27763,15 +28084,9 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           { header: 'Concepto', accessor: g => g.concepto },
           { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
           { header: 'Tipo IVA', accessor: g => `${TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21}%` },
-          { header: 'Base Imponible', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            return (g.importe / (1 + ivaPct/100)).toFixed(2);
-          }},
-          { header: 'IVA', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            const base = g.importe / (1 + ivaPct/100);
-            return (g.importe - base).toFixed(2);
-          }},
+          { header: 'Base Imponible', accessor: g => desgloseGasto(g).base.toFixed(2) }, // V85
+          { header: 'IVA', accessor: g => desgloseGasto(g).iva.toFixed(2) },
+          { header: 'Retención IRPF', accessor: g => desgloseGasto(g).retencion.toFixed(2) },
           { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
           { header: 'Estado', accessor: g => g.pagado ? 'Pagado' : 'Pendiente' },
           { header: 'URL Factura', accessor: g => g.factura_url || '' },
@@ -27793,8 +28108,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             total: f.total || 0,
           })),
           ...gastosFiltrados.map(g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            const base = g.importe / (1 + ivaPct/100);
+            const { ivaPct, base, iva } = desgloseGasto(g); // V85
             return {
               fecha: g.fecha,
               tipo: 'GASTO',
@@ -27804,7 +28118,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
               concepto: g.concepto,
               base: base,
               iva_pct: ivaPct,
-              iva: g.importe - base,
+              iva: iva,
               re: 0,
               total: g.importe || 0,
             };
@@ -27888,15 +28202,9 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           { header: 'Concepto', accessor: g => g.concepto },
           { header: 'Categoría', accessor: g => categoriasGasto[g.categoria]?.label || g.categoria },
           { header: 'IVA %', accessor: g => TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21 },
-          { header: 'Base', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            return (g.importe / (1 + ivaPct/100)).toFixed(2);
-          }},
-          { header: 'IVA €', accessor: g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            const base = g.importe / (1 + ivaPct/100);
-            return (g.importe - base).toFixed(2);
-          }},
+          { header: 'Base', accessor: g => desgloseGasto(g).base.toFixed(2) }, // V85
+          { header: 'IVA €', accessor: g => desgloseGasto(g).iva.toFixed(2) },
+          { header: 'Retención €', accessor: g => desgloseGasto(g).retencion.toFixed(2) },
           { header: 'Total', accessor: g => g.importe?.toFixed(2) || '0.00' },
           { header: 'Pagado', accessor: g => g.pagado ? 'Sí' : 'No' },
           { header: 'Archivo', accessor: g => g.factura_url ? 'Sí' : 'No' },
@@ -27919,8 +28227,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             total: f.total || 0,
           })),
           ...gastosFiltrados.map(g => {
-            const ivaPct = TIPOS_IVA[g.iva_tipo || 'general']?.valor ?? 21;
-            const base = g.importe / (1 + ivaPct/100);
+            const { ivaPct, base, iva } = desgloseGasto(g); // V85
             return {
               fecha: g.fecha,
               tipo: 'GASTO',
@@ -27930,7 +28237,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
               concepto: g.concepto,
               base: base,
               iva_pct: ivaPct,
-              iva: g.importe - base,
+              iva: iva,
               total: g.importe || 0,
             };
           }),
@@ -30670,7 +30977,15 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       {leadSeguimiento && <LeadSeguimientoPanel lead={leadSeguimiento} onClose={() => setLeadSeguimiento(null)} />}
       {showModal === 'producto' && <Modal title={editingItem ? 'Editar Producto' : 'Nuevo Producto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><ProductoForm producto={editingItem} onSave={form => handleSave('productos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'pedido' && <Modal title={editingItem ? 'Editar Pedido' : 'Nuevo Pedido'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoForm pedido={editingItem} onSave={handleCreatePedido} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
-      {showModal === 'gasto' && <Modal title={editingItem ? 'Editar Gasto' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={form => handleSave('gastos', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'gasto' && <Modal title={editingItem?.id ? 'Editar Gasto' : editingItem?._factura_recibida_id ? '📥 Registrar factura recibida' : 'Nuevo Gasto'} onClose={() => { setShowModal(null); setEditingItem(null); }}><GastoForm gasto={editingItem} onSave={async form => {
+        const facturaRecibidaId = editingItem?._factura_recibida_id; // V85
+        const gastoId = await handleSave('gastos', form, editingItem?.id);
+        if (facturaRecibidaId && gastoId) {
+          const { error } = await supabase.from('facturas_recibidas').update({ estado: 'registrada', gasto_id: gastoId, updated_at: new Date().toISOString() }).eq('id', facturaRecibidaId);
+          if (error) alert('⚠️ Gasto guardado, pero la factura sigue en la bandeja: ' + error.message);
+          refetchFacturasRecibidas();
+        }
+      }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={async (form) => {
         const ubicaciones = form.__ubicaciones || [];
         delete form.__ubicaciones;

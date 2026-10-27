@@ -16,23 +16,23 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - El SQL V71 no se ejecutó: no existen la tabla `siembra_notif_log`, las columnas `notificaciones_config.notif_siembra_pedidos` / `email_siembra`, ni las extensiones `pg_cron` / `pg_net`.
 - La Edge Function `siembra-diaria` no está desplegada. Su código ya está en `supabase/functions/siembra-diaria/index.ts`, y ahora usa el secret `SLACK_WEBHOOK_URL` si `notificaciones_config` no tiene webhook (hoy esa tabla está vacía).
 - Pasos: desplegar la función (`supabase functions deploy siembra-diaria --no-verify-jwt`), revisar los secrets `RESEND_API_KEY` y `SLACK_WEBHOOK_URL`, ejecutar `supabase/sql/historico/ROOTFLOW-SQL-V71-SIEMBRA-DIARIA.sql` (ya lleva el project ref puesto) y probar con `?force=1`.
-- El email depende además del punto 3.
+- El email ya puede salir: Resend funciona desde el 27-oct.
 
-## 3. 🟠 Emails: falta solo la clave de Resend
-
-- Hecho (26-oct): `send-email` desplegada con su nombre correcto; `portal-cliente` V83 desplegada; SQL V83 ejecutado (columnas, ajustes y pg_cron 9:15/16:15). El DNS de rootflow.es (IONOS) ya tiene los registros de Resend (`resend._domainkey`, `send` SPF y MX, región eu-west-1).
-- Falta: el secret `RESEND_API_KEY` en Supabase → Edge Functions → Secrets (una clave de la cuenta de Resend que tiene el dominio rootflow.es). Comprobar en Resend → Domains que rootflow.es sale "Verified".
-- Después: probar con ✉️ a un email propio, revisar "PDF del cliente" y activar en ERP → Facturación (el interruptor está apagado).
-- Limpieza opcional: borrar las funciones de prueba `send-mail`, `supabase-functions-deploy-send-email` y `swift-handler` (no las usa nada).
-- La factura agrupada (semanal, quincenal o mensual) se genera con un clic y al generarla se envía sola. Generarla también sola al cerrar el periodo sería un cambio aparte.
-- Los datos de la empresa están copiados en `supabase/functions/portal-cliente/index.ts` (no puede importar `src/empresa.js`): si cambian, actualizar los dos.
-
-## 4. 🟠 Líneas de negocio (V84): ponerlas en marcha
+## 3. 🟠 Líneas de negocio (V84): ponerlas en marcha
 
 - Hecho (27-oct): SQL V84 ejecutado. 7 clientes en distribución y 5 en restaurantes (uno de ellos sin nombre).
 - Revisar en Clientes la línea de los que no encajan por tipo: p. ej. "Tatin catering" y "La Fresquera del Gourmet" están como restaurante; "Gold Gourmet" y las fruterías como tienda (→ distribución).
 - Rellenar en Tarifas → "Precio base por línea" los precios de restaurantes (hoy solo hay precio general, pensado para distribución).
 - Ideas: separar ventas por línea en contabilidad (subcuentas 700x) y en el export de asesoría; zonas calientes y reparto por riders para restaurantes.
+
+## 4. 🟠 Facturas de gasto automáticas (V85): ponerlas en marcha
+
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V85-FACTURAS-RECIBIDAS.sql` y desplegar `leer-factura` (`supabase functions deploy leer-factura --no-verify-jwt`).
+- Secret `ANTHROPIC_API_KEY` (cuenta de la API de Claude en console.anthropic.com, distinta de la suscripción Claude Pro). Sin él las facturas entran en la bandeja pero hay que rellenarlas a mano.
+- Token de la revisión diaria del correo en `config_privada` (`token_importar_facturas`) y tarea programada diaria que revisa el Gmail de Peri.
+- Corregir los alquileres de Bellbro abril–octubre (y la repercusión de luz de septiembre) con su base, IVA y retención, y pulsar "Rehacer asientos" en Gastos. El agua de septiembre está al 10 %, no al 21 %.
+- Modelo 115: no consta en el ERP ningún pago de retenciones. Confirmar con la gestoría que se presentaron el 2T y 3T. El pago del modelo debe saldar la 4751 (asiento manual), no registrarse como gasto.
+- Los gastos de Claude de abril–julio están como "exento"; la factura de octubre lleva IVA español del 21 %. Revisar con la gestoría si las anteriores también.
 
 ## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
