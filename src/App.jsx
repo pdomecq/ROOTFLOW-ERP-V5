@@ -18,6 +18,7 @@ import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChar
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
+import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -756,6 +757,8 @@ const MainApp = () => {
   const [lineaFiltro, setLineaFiltro] = useState(() => { try { return localStorage.getItem('rootflow_linea_filtro') || 'todas'; } catch { return 'todas'; } });
   useEffect(() => { try { localStorage.setItem('rootflow_linea_filtro', lineaFiltro); } catch { /* sin almacenamiento */ } }, [lineaFiltro]);
   const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
+  const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
+  const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
   const [envioCargando, setEnvioCargando] = useState(false); // V83
   
@@ -3553,6 +3556,245 @@ const MainApp = () => {
           </div>
         )}
       </Card>
+    );
+  };
+
+  // ==================== V86 — RENTABILIDAD (MARGEN BRUTO, EBITDA, EBIT) ====================
+  // Cálculo en src/rentabilidad.js. Ventas = facturas (sin IVA); costes = gastos sin IVA (desgloseGasto).
+  const periodoRentabilidad = (clave) => {
+    const hoy = new Date();
+    const iso = (d) => d.toISOString().split('T')[0];
+    const finMes = (y, m) => iso(new Date(Date.UTC(y, m, 0)));
+    const [tipo, valor] = clave.split(':');
+    if (tipo === 'anio') return { desde: `${valor}-01-01`, hasta: `${valor}-12-31`, label: `Año ${valor}` };
+    if (tipo === '12m') { const d = new Date(Date.UTC(hoy.getFullYear(), hoy.getMonth() - 11, 1)); return { desde: iso(d), hasta: finMes(hoy.getFullYear(), hoy.getMonth() + 1), label: 'Últimos 12 meses' }; }
+    if (tipo === 'trim') { const [y, q] = valor.split('-T').map(Number); return { desde: `${y}-${String((q - 1) * 3 + 1).padStart(2, '0')}-01`, hasta: finMes(y, q * 3), label: `${q}T ${y}` }; }
+    const [y, m] = valor.split('-').map(Number);
+    return { desde: `${valor}-01`, hasta: finMes(y, m), label: new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'UTC' }) };
+  };
+
+  const renderRentabilidad = () => {
+    const per = periodoRentabilidad(rentPeriodo);
+    const r = calcularRentabilidad(
+      { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes },
+      { desde: per.desde, hasta: per.hasta, reparto: rentReparto, linea: lineaFiltro },
+      { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
+    );
+    const t = r.tot;
+    const eur = (n) => (n == null ? '—' : formatCurrency(n));
+    const pct = (n) => (n == null ? '—' : `${(n * 100).toFixed(1)} %`);
+    const kgf = (n) => `${(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg`;
+    const colorPct = (n) => n == null ? 'text-neutral-400' : n >= 0.3 ? 'text-emerald-700' : n >= 0 ? 'text-amber-700' : 'text-red-600';
+    const colorEur = (n) => (n || 0) >= 0 ? 'text-emerald-700' : 'text-red-600';
+    const anioActual = new Date().getFullYear();
+    const opcionesMes = mesesEntre(`${anioActual - 1}-01-01`, new Date().toISOString().split('T')[0]).reverse();
+    const mesCorto = (m) => new Date(`${m}-15`).toLocaleDateString('es-ES', { month: 'short' }) + (m.slice(0, 4) !== String(anioActual) ? ` ${m.slice(2, 4)}` : '');
+    const mesesConDatos = r.pyg.filter(m => m.ventas || m.materiales || m.variables || m.estructura);
+
+    // Filas de la cuenta de resultados (los conceptos de gasto salen desglosados)
+    const conceptosDe = (grupo) => Object.entries(r.conceptos).filter(([, c]) => c.grupo === grupo).map(([k, c]) => ({ k, label: c.label }));
+    const filasPyg = [
+      { label: 'Ventas de producto', campo: 'ventasProducto' },
+      { label: 'Portes cobrados', campo: 'portes', ocultarSiCero: true },
+      { label: 'Ventas netas', campo: 'ventas', fuerte: true },
+      ...conceptosDe('materiales').map(c => ({ label: `− ${c.label}`, concepto: c.k, sub: true })),
+      { label: 'Margen bruto', campo: 'margenBruto', fuerte: true, color: true },
+      { label: '% margen bruto', pct: 'mbPct' },
+      ...conceptosDe('variables').map(c => ({ label: `− ${c.label}`, concepto: c.k, sub: true })),
+      { label: 'Margen de contribución', campo: 'contribucion', fuerte: true, color: true },
+      ...conceptosDe('estructura').map(c => ({ label: `− ${c.label}`, concepto: c.k, sub: true })),
+      { label: 'EBITDA', campo: 'ebitda', fuerte: true, color: true, destacado: true },
+      { label: '% EBITDA', pct: 'ebitdaPct' },
+      { label: '− Amortización', campo: 'amortizacion', sub: true, ocultarSiCero: true },
+      { label: 'EBIT (resultado de explotación)', campo: 'ebit', fuerte: true, color: true },
+      { label: 'Kilos vendidos', kg: true },
+    ].filter(f => !f.ocultarSiCero || Math.abs(t[f.campo] || 0) > 0.005);
+    const valorFila = (f, m) => f.concepto ? (m.conceptos?.[f.concepto] || 0) : f.pct ? m[f.pct] : f.kg ? m.kg : m[f.campo];
+
+    const exportarPyg = () => exportToExcel(filasPyg, `cuenta_resultados_${rentPeriodo.replace(':', '_')}`, [
+      { header: 'Concepto', accessor: f => f.label.replace(/^− /, '') },
+      ...mesesConDatos.map(m => ({ header: m.mes, accessor: f => { const v = valorFila(f, m); return v == null ? '' : f.pct ? Math.round(v * 1000) / 10 : Math.round(v * 100) / 100; } })),
+      { header: 'Total', accessor: f => { const v = f.concepto ? t.conceptos[f.concepto] : f.pct ? t[f.pct] : f.kg ? t.kg : t[f.campo]; return v == null ? '' : f.pct ? Math.round(v * 1000) / 10 : Math.round(v * 100) / 100; } },
+    ]);
+    const colsDetalle = (nombre, clave) => [
+      { header: nombre, accessor: x => x[clave] },
+      { header: 'Ventas (€)', accessor: x => Math.round(x.ventas * 100) / 100 },
+      { header: 'Kg', accessor: x => Math.round((x.kg || 0) * 100) / 100 },
+      { header: '€/kg', accessor: x => x.eurKg == null ? '' : Math.round(x.eurKg * 100) / 100 },
+      { header: 'Materiales (€)', accessor: x => Math.round(x.materiales * 100) / 100 },
+      { header: 'Margen bruto (€)', accessor: x => Math.round(x.margenBruto * 100) / 100 },
+      { header: '% MB', accessor: x => x.mbPct == null ? '' : Math.round(x.mbPct * 1000) / 10 },
+      { header: 'Variables (€)', accessor: x => Math.round(x.variables * 100) / 100 },
+      { header: 'Estructura (€)', accessor: x => Math.round(x.estructura * 100) / 100 },
+      { header: 'EBITDA (€)', accessor: x => Math.round(x.ebitda * 100) / 100 },
+      { header: '% EBITDA', accessor: x => x.ebitdaPct == null ? '' : Math.round(x.ebitdaPct * 1000) / 10 },
+    ];
+
+    const Kpi = ({ titulo, valor, sub, color = '' }) => (
+      <Card className="p-4">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">{titulo}</p>
+        <p className={`text-2xl font-black mt-1 ${color}`}>{valor}</p>
+        {sub && <p className="text-xs text-neutral-500 mt-0.5">{sub}</p>}
+      </Card>
+    );
+    const th = 'px-3 py-2 text-right text-[11px] font-bold uppercase text-neutral-500 whitespace-nowrap';
+    const td = 'px-3 py-1.5 text-right whitespace-nowrap tabular-nums';
+
+    const tablaDetalle = (filas, nombreCol, nombreDe, extra) => (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-neutral-50 border-b"><tr>
+            <th className={`${th} text-left`}>{nombreCol}</th><th className={th}>Ventas</th><th className={th}>Kg</th><th className={th}>€/kg</th>
+            {extra?.cabecera}
+            <th className={th}>Materiales</th><th className={th}>Margen bruto</th><th className={th}>% MB</th><th className={th}>Variables + estructura</th><th className={th}>EBITDA</th><th className={th}>% EBITDA</th>
+          </tr></thead>
+          <tbody>
+            {filas.map((x, i) => (
+              <tr key={i} className="border-b hover:bg-neutral-50">
+                <td className="px-3 py-1.5 font-semibold whitespace-nowrap">{nombreDe(x)}</td>
+                <td className={td}>{eur(x.ventas)}</td>
+                <td className={td}>{(x.kg || 0).toFixed(2)}</td>
+                <td className={td}>{x.eurKg == null ? '—' : `${x.eurKg.toFixed(0)} €`}</td>
+                {extra?.celdas?.(x)}
+                <td className={td}>{eur(x.materiales)}</td>
+                <td className={`${td} font-semibold ${colorEur(x.margenBruto)}`}>{eur(x.margenBruto)}</td>
+                <td className={`${td} ${colorPct(x.mbPct)}`}>{pct(x.mbPct)}</td>
+                <td className={td}>{eur(x.variables + x.estructura)}</td>
+                <td className={`${td} font-bold ${colorEur(x.ebitda)}`}>{eur(x.ebitda)}</td>
+                <td className={`${td} ${colorPct(x.ebitdaPct)}`}>{pct(x.ebitdaPct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">📈 Rentabilidad</h1>
+            <p className="text-neutral-500 font-medium">Margen bruto, EBITDA y EBIT por mes, variedad, línea de negocio y cliente · {per.label} · sin IVA</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={rentPeriodo} onChange={e => setRentPeriodo(e.target.value)} className="px-3 py-2 rounded-xl border bg-white font-semibold text-sm">
+              <option value={`anio:${anioActual}`}>Año {anioActual}</option>
+              <option value="12m">Últimos 12 meses</option>
+              <option value={`anio:${anioActual - 1}`}>Año {anioActual - 1}</option>
+              <optgroup label="Trimestres">
+                {[4, 3, 2, 1].map(q => <option key={q} value={`trim:${anioActual}-T${q}`}>{q}T {anioActual}</option>)}
+              </optgroup>
+              <optgroup label="Meses">
+                {opcionesMes.map(m => <option key={m} value={`mes:${m}`}>{new Date(`${m}-15`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</option>)}
+              </optgroup>
+            </select>
+            <select value={rentReparto} onChange={e => setRentReparto(e.target.value)} className="px-3 py-2 rounded-xl border bg-white text-sm" title="Cómo se reparten luz, alquiler y demás costes entre variedades">
+              <option value="bandeja_dia">Reparto: espacio en rack (bandeja-día)</option>
+              <option value="kg">Reparto: kg vendidos</option>
+              <option value="ventas">Reparto: ventas (€)</option>
+            </select>
+            <Button variant="secondary" size="sm" onClick={exportarPyg}><Download size={16} />Excel</Button>
+          </div>
+        </div>
+
+        {/* KPIs */}
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          <Kpi titulo="Ventas netas" valor={eur(t.ventas)} sub={`${eur(t.ventasMes)} al mes · ${kgf(t.kg)}`} />
+          <Kpi titulo="Margen bruto" valor={pct(t.mbPct)} sub={eur(t.margenBruto)} color={colorPct(t.mbPct)} />
+          <Kpi titulo="Margen de contribución" valor={pct(t.contribucionPct)} sub={eur(t.contribucion)} color={colorPct(t.contribucionPct)} />
+          <Kpi titulo="EBITDA" valor={eur(t.ebitda)} sub={pct(t.ebitdaPct)} color={colorEur(t.ebitda)} />
+          <Kpi titulo="EBIT" valor={eur(t.ebit)} sub={`tras ${eur(t.amortizacion)} de amortización`} color={colorEur(t.ebit)} />
+          <Kpi titulo="Precio vs coste por kg" valor={t.eurKg == null ? '—' : `${t.eurKg.toFixed(0)} € / ${t.costeKg?.toFixed(0) ?? '—'} €`} sub="venta media / coste total (antes de amortización)" />
+        </div>
+        <Card className={`p-4 border-2 ${t.puntoEquilibrioMes && t.ventasMes >= t.puntoEquilibrioMes ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
+          <p className="text-sm">
+            <strong>Punto de equilibrio:</strong>{' '}
+            {t.puntoEquilibrioMes == null
+              ? 'no se puede calcular (el margen de contribución es negativo: cada venta cuesta más de lo que deja).'
+              : <>hay que vender <strong>{eur(t.puntoEquilibrioMes)} al mes</strong> para cubrir la estructura ({eur(t.estructuraMes)} al mes con un margen de contribución del {pct(t.contribucionPct)}). Ahora se venden {eur(t.ventasMes)} al mes{t.ventasMes < t.puntoEquilibrioMes ? `: faltan ${eur(t.puntoEquilibrioMes - t.ventasMes)} (×${(t.puntoEquilibrioMes / Math.max(1, t.ventasMes)).toFixed(1)}).` : '.'}</>}
+          </p>
+        </Card>
+
+        {/* Cuenta de resultados mensual */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold">Cuenta de resultados analítica</h3>
+            <span className="text-xs text-neutral-500">Ventas por fecha de factura · gastos por fecha de factura del proveedor · compras de semilla y envases en el mes en que se compran</span>
+          </div>
+          {mesesConDatos.length === 0 ? <p className="p-6 text-center text-neutral-500">No hay ventas ni gastos en este periodo.</p> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-50 border-b"><tr>
+                  <th className={`${th} text-left sticky left-0 bg-neutral-50`}>Concepto</th>
+                  {mesesConDatos.map(m => <th key={m.mes} className={th}>{mesCorto(m.mes)}</th>)}
+                  <th className={`${th} bg-neutral-100`}>Total</th>
+                </tr></thead>
+                <tbody>
+                  {filasPyg.map((f, i) => {
+                    const total = f.concepto ? t.conceptos[f.concepto] : f.pct ? t[f.pct] : f.kg ? t.kg : t[f.campo];
+                    const fmt = (v) => f.pct ? pct(v) : f.kg ? (v || 0).toFixed(2) : eur(v);
+                    return (
+                      <tr key={i} className={`border-b ${f.destacado ? 'bg-orange-50' : f.fuerte ? 'bg-neutral-50/60' : ''}`}>
+                        <td className={`px-3 py-1.5 whitespace-nowrap sticky left-0 ${f.destacado ? 'bg-orange-50' : 'bg-white'} ${f.fuerte ? 'font-bold' : f.sub ? 'pl-6 text-neutral-600' : f.pct ? 'text-neutral-500 italic' : ''}`}>{f.label}</td>
+                        {mesesConDatos.map(m => {
+                          const v = valorFila(f, m);
+                          return <td key={m.mes} className={`${td} ${f.fuerte ? 'font-bold' : ''} ${f.color ? colorEur(v) : f.pct ? colorPct(v) : f.sub ? 'text-neutral-600' : ''}`}>{fmt(v)}</td>;
+                        })}
+                        <td className={`${td} bg-neutral-100 ${f.fuerte ? 'font-black' : 'font-semibold'} ${f.color ? colorEur(total) : f.pct ? colorPct(total) : ''}`}>{fmt(total)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        {/* Por variedad */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-bold">Por variedad</h3>
+              <p className="text-xs text-neutral-500">Semilla y sustrato según bandejas sembradas · envases según unidades · resto según {rentReparto === 'bandeja_dia' ? 'espacio en rack (bandejas × días de ciclo)' : rentReparto === 'kg' ? 'kg vendidos' : 'ventas'}. Todas las líneas de negocio.</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(r.porVariedad, `rentabilidad_variedades_${rentPeriodo.replace(':', '_')}`, [...colsDetalle('Variedad', 'variedad'), { header: 'Bandejas sembradas', accessor: x => x.bandejas }, { header: 'Bandejas estimadas', accessor: x => Math.round((x.bandejasEstimadas || 0) * 10) / 10 }, { header: 'Coste total €/kg', accessor: x => x.costeKg == null ? '' : Math.round(x.costeKg * 100) / 100 }, { header: 'EBITDA €/kg', accessor: x => x.ebitdaKg == null ? '' : Math.round(x.ebitdaKg * 100) / 100 }])}><Download size={14} />Excel</Button>
+          </div>
+          {r.porVariedad.length === 0 ? <p className="p-6 text-center text-neutral-500">Sin ventas ni producción en este periodo.</p> : tablaDetalle(r.porVariedad, 'Variedad', x => <>{x.variedad}{x.bandejasEstimadas > 0 && <span className="text-[10px] text-neutral-400 font-normal" title="Vendida sin lotes propios en algún mes: se estiman sus bandejas a partir de los kg"> ~</span>}</>, {
+            cabecera: <><th className={th}>Bandejas</th><th className={th}>Coste €/kg</th></>,
+            celdas: x => <><td className={td}>{x.bandejas || (x.bandejasEstimadas ? `~${x.bandejasEstimadas.toFixed(0)}` : 0)}</td><td className={td}>{x.costeKg == null ? '—' : `${x.costeKg.toFixed(0)} €`}</td></>,
+          })}
+        </Card>
+
+        {/* Por línea de negocio */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b"><h3 className="font-bold">Por línea de negocio</h3><p className="text-xs text-neutral-500">Cada kg vendido carga el coste por kg de su variedad en ese mes. Plan: distribución 44 €/kg, restaurantes 173 €/kg.</p></div>
+          {tablaDetalle(r.porLinea, 'Línea', x => <BadgeLinea linea={x.clave} />)}
+        </Card>
+
+        {/* Por cliente */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold">Por cliente</h3>
+            <div className="flex items-center gap-2">
+              {renderSelectorLinea()}
+              <Button variant="secondary" size="sm" onClick={() => exportToExcel(r.porCliente, `rentabilidad_clientes_${rentPeriodo.replace(':', '_')}`, [...colsDetalle('Cliente', 'cliente'), { header: 'Línea', accessor: x => LINEAS_NEGOCIO[x.linea]?.label || '' }])}><Download size={14} />Excel</Button>
+            </div>
+          </div>
+          {r.porCliente.length === 0 ? <p className="p-6 text-center text-neutral-500">Sin ventas en este periodo.</p> : tablaDetalle(r.porCliente, 'Cliente', x => <>{x.cliente} <BadgeLinea linea={x.linea} className="ml-1" /></>)}
+        </Card>
+
+        {/* Cómo se calcula y calidad de los datos */}
+        <Card className="p-4 text-xs text-neutral-600 space-y-1.5">
+          <p className="font-bold text-sm text-neutral-800">Cómo se calcula</p>
+          <p>• <strong>Ventas</strong>: base imponible de las facturas emitidas (sin IVA ni recargo), repartida entre sus líneas de pedido o albarán; los portes van aparte.</p>
+          <p>• <strong>Margen bruto</strong> = ventas − semillas, sustrato y envases. <strong>Margen de contribución</strong> = margen bruto − luz, agua y transporte. <strong>EBITDA</strong> = contribución − estructura (alquiler, asesoría, software, publicidad…). <strong>EBIT</strong> = EBITDA − amortización de las inversiones (CAPEX, lineal según su vida útil).</p>
+          <p>• Los gastos cuentan <strong>sin IVA</strong> (base del desglose del gasto). Las compras de semilla y envases cuentan el mes en que se compran: si se compra para varios meses, mira el trimestre o el año.</p>
+          {r.avisos.mesesSinLotes > 0 && <p className="text-amber-700">⚠️ {r.avisos.mesesSinLotes} mes(es) con ventas pero sin lotes sembrados registrados: ahí el reparto por variedad se hace con bandejas estimadas a partir de los kg vendidos.</p>}
+          {r.avisos.facturasSinDetalle > 0 && <p className="text-amber-700">⚠️ {r.avisos.facturasSinDetalle} factura(s) sin líneas de pedido o albarán ({eur(r.avisos.importeSinDetalle)}): cuentan en la cuenta de resultados pero no se pueden asignar a ninguna variedad.</p>}
+          {r.avisos.lineasSinGramos > 0 && <p className="text-amber-700">⚠️ {r.avisos.lineasSinGramos} línea(s) de productos sin formato en gramos: no suman kilos (rellena el formato del producto).</p>}
+          {Math.abs(r.noAsignado) > 1 && <p>• {eur(r.noAsignado)} de costes no se cargan a ningún cliente: meses sin ventas (p. ej. antes de empezar a facturar), producción sembrada que no se vendió en el mes y facturas sin detalle. Sí están en la cuenta de resultados.</p>}
+        </Card>
+      </div>
     );
   };
 
@@ -30561,6 +30803,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           <NavItem icon={Wallet} label="Gastos" section="gastos" />
           <NavItem icon={Building2} label="Proveedores" section="proveedores" badge={pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) <= new Date()).length} />
           <NavItem icon={BarChart3} label="Informes" section="informes" />
+          <NavItem icon={TrendingUp} label="Rentabilidad" section="rentabilidad" />{/* V86 */}
           <NavItem icon={Euro} label="Contabilidad" section="contabilidad" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Producción</p>}</div>
           <NavItem icon={Sprout} label="Producción" section="produccion" badge={lotesActivos} />
@@ -30955,6 +31198,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           {activeSection === 'gastos' && renderGastos()}
           {activeSection === 'proveedores' && renderProveedores()}
           {activeSection === 'informes' && renderInformes()}
+          {activeSection === 'rentabilidad' && renderRentabilidad()}{/* V86 */}
           {activeSection === 'contabilidad' && renderContabilidad()}
           {activeSection === 'produccion' && renderProduccion()}
           {activeSection === 'planificacion' && renderPlanificacion()}

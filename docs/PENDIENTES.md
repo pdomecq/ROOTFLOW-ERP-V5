@@ -34,7 +34,14 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Modelo 115: no consta en el ERP ningún pago de retenciones. Confirmar con la gestoría que se presentaron el 2T y 3T. El pago del modelo debe saldar la 4751 (asiento manual), no registrarse como gasto.
 - Los gastos de Claude de abril–julio están como "exento"; la factura de octubre lleva IVA español del 21 %. Revisar con la gestoría si las anteriores también.
 
-## 5. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
+## 5. 🟡 Rentabilidad (V86): mejorar la precisión
+
+- Rellenar en Producción las fichas de coste de cada variedad (gramos y €/kg de semilla, sustrato) y en Productos el coste de envase y etiqueta: permitirá comparar el coste real (compras) con el estándar y ver la merma.
+- Registrar todos los lotes sembrados: sin ellos el reparto por variedad usa bandejas estimadas a partir de los kg vendidos.
+- Las compras de semilla y envases cuentan el mes en que se compran (no hay control de existencias): para márgenes mensuales finos haría falta valorar el stock de semilla y envases.
+- No hay nóminas ni Seguridad Social registradas: si los socios cobran, el EBITDA real será menor.
+
+## 6. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
 
 "Dependiendo de dónde pulse las genera de una forma u otra y es un caos; algunas salen sin el detalle de importes."
 - Hoy hay al menos tres caminos distintos:
@@ -43,11 +50,11 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
   - El email (mailto): un texto distinto.
 - Objetivo: una única función que genere el HTML de la factura a partir de `calcularImportesAlbaran` (líneas, descuento, portes, base, IVA 4 %, RE, total, vencimiento, IBAN de `EMPRESA`). Que la usen la vista previa, la impresión o PDF, la factura agrupada y el email, y que el resultado salga igual pulses donde pulses.
 
-## 6. 🟡 Límite de 1.000 filas por tabla
+## 7. 🟡 Límite de 1.000 filas por tabla
 
 `useRealtime` hace `select('*')` sin paginar, y Supabase devuelve como máximo 1.000 filas por consulta (límite por defecto). `asiento_lineas` va por 490 filas, `movimientos_stock` por 270 y `email_log` por 187. Cuando alguna pase de 1.000, la app mostrará datos incompletos sin avisar: balances e informes contables saldrán mal. Arreglo: paginar con `.range()` dentro de `fetchData`.
 
-## 7. Ideas aparcadas (no pedidas todavía)
+## 8. Ideas aparcadas (no pedidas todavía)
 
 - Remesas SEPA en formato pain.008 para el banco.
 - Flujo de prepago para clientes nuevos.
