@@ -29,7 +29,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 
 ## 4. 🟠 Líneas de negocio (V84): ponerlas en marcha
 
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V84-LINEAS-NEGOCIO.sql` (rellena la línea de cada cliente según su tipo).
+- Hecho (27-oct): SQL V84 ejecutado. 7 clientes en distribución y 5 en restaurantes (uno de ellos sin nombre).
 - Revisar en Clientes la línea de los que no encajan por tipo: p. ej. "Tatin catering" y "La Fresquera del Gourmet" están como restaurante; "Gold Gourmet" y las fruterías como tienda (→ distribución).
 - Rellenar en Tarifas → "Precio base por línea" los precios de restaurantes (hoy solo hay precio general, pensado para distribución).
 - Ideas: separar ventas por línea en contabilidad (subcuentas 700x) y en el export de asesoría; zonas calientes y reparto por riders para restaurantes.
