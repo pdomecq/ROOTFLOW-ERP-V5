@@ -28,19 +28,20 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V84**; la siguiente es **V85**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V85: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V85-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V86**; la siguiente es **V87**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V87: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V87-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V85 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V87 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V85: <resumen corto>`.
+- Mensaje de commit: `V87: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
 - `src/empresa.js` (V82): `EMPRESA`, `LOGO_URL` y `PORTAL_CLIENTE_URL`, importados por `App.jsx` y por `src/AreaCliente.jsx`.
 - `src/AreaCliente.jsx` (V82): área de cliente pública en `/area-cliente?t=<clientes.portal_token>` (la elige `src/main.jsx`; `vercel.json` reescribe la ruta). Solo habla con la Edge Function `portal-cliente`, que filtra por el token con la service role: no le des acceso a tablas con la clave anon.
+- `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
 - Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)`.
 - `AuthProvider` + `LoginPage` (Supabase Auth, dominio permitido `rootflow.es`).
@@ -63,7 +64,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - **IDs de documentos** (albaranes, facturas, presupuestos, lotes, asientos): usa `generarIdSecuencial(tabla, prefijo, padding, campo)` y `insertarConIdUnico(tabla, datos, prefijo, padding)`. Nunca `COUNT + 1` (provocó duplicados de `albaranes_pkey`).
 - Comprueba siempre `error` en cada llamada a Supabase y enséñalo con `alert('❌ …' + error.message)`; no des por guardado lo que no se ha guardado.
 - Archivos: bucket `facturas-gastos` (URL pública con `getPublicUrl`).
-- Edge Functions del repo: `send-email`, `send-slack`, `siembra-diaria`, `portal-cliente` (`supabase/functions/`). Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
+- Edge Functions del repo: `send-email`, `send-slack`, `siembra-diaria`, `portal-cliente`, `leer-factura` (`supabase/functions/`). `leer-factura` (V85) lee facturas de proveedor con la API de Claude (secret `ANTHROPIC_API_KEY`) y las deja en `facturas_recibidas`; el gasto y su asiento los crea siempre el ERP al registrarla. Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
 
 ## Reglas de negocio y fiscales
 
@@ -71,7 +72,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - **Dos líneas de negocio** (V84): `distribucion` (distribuidores, retail, Mercamadrid · volumen) y `restaurantes` (HORECA · margen). Usa `lineaDeCliente(cliente)` / `lineaDeClienteId(id)` (nunca leas `clientes.linea_negocio` a pelo: puede estar vacía y se deduce del tipo), `LINEAS_NEGOCIO` para etiquetas y colores, `BadgeLinea` y el filtro global `lineaFiltro` (`enLineaFiltro(clienteId)`, `renderSelectorLinea()`) en las secciones nuevas que listen clientes, pedidos o facturas.
 - **Precio por cliente**: siempre `getPrecioCliente(producto_id, cliente_id)` = tarifa especial (`tarifas_cliente`) → precio base de su línea (`productos.precio_distribucion` / `precio_restaurantes`) → `productos.precio`. Nunca `producto.precio` a pelo.
 - **Importes de albarán/factura**: la única fuente de verdad es `calcularImportesAlbaran(albaran, cliente, { aplicarTarifas })` = productos − descuento (porcentaje del cliente o `clientes.descuentos_fechas` por rango de fechas) + porte (`albaranes.coste_envio`, por defecto `clientes.coste_porte`, gratis desde `porte_gratis_desde`). IVA y RE se calculan una vez sobre la base. No dupliques esta lógica en otro sitio.
-- **Gastos**: `gastos.importe` es el total con IVA; `iva_tipo` es una clave de `TIPOS_IVA` (`general`, `reducido`, `superreducido`, `exento`). Categoría = clave de `categoriasGasto` (OPEX 6xx, CAPEX 21x).
+- **Gastos**: `gastos.importe` es lo que se paga (total de la factura: base + IVA − retención IRPF si la hay); `iva_tipo` es una clave de `TIPOS_IVA` (`general`, `reducido`, `superreducido`, `exento`). Si la factura lleva retención o varias bases se guardan `base_imponible`, `iva_importe`, `retencion_pct` y `retencion_importe` (V85). **Base, IVA y retención siempre con `desgloseGasto(g)`**, nunca `importe / (1 + iva)` a pelo. El asiento lleva la retención a la 4751 (modelos 115 alquiler / 111 profesionales). Categoría = clave de `categoriasGasto` (OPEX 6xx, CAPEX 21x); si añades una, añádela también a `CATEGORIAS` en `supabase/functions/leer-factura/index.ts`.
 - **Formas de pago** (`FORMAS_PAGO`): `banco`, `caja`, `tarjeta_empresa`, `transferencia`, `socio_nico`, `socio_peri`, `socio_guzman`. `socio_*` = deuda con el socio (cuenta 551).
 - Asiento de un gasto: `crearAsientoDesdeGasto(gasto, proveedor, silencioso)` con referencia `GAS-<id>`. Si cambias importe/fecha/forma de pago de un gasto vinculado, rehaz su asiento.
 - Compras a particulares (V80): sin IVA, ITP 4 % con modelo 600 en 30 días hábiles; todo en la pestaña Gastos → Compras a particulares.
