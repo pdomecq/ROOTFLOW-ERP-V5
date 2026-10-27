@@ -11,6 +11,7 @@
 //
 // Acciones (POST JSON):
 //   { accion: 'procesar', id }            → procesa una factura (usuario del ERP)
+//   { accion: 'estado' }                  → V87: { ia: true/false } si está el secret ANTHROPIC_API_KEY
 //   { accion: 'procesar_pendientes' }     → procesa las que estén en estado 'nueva' (sin login: solo
 //                                           trabaja con filas que ya están en la tabla, que solo pueden
 //                                           crear usuarios del ERP o la revisión del correo)
@@ -75,6 +76,7 @@ const ESQUEMA = {
 const INSTRUCCIONES = `Eres el contable de ROOTFLOW HYDROPONICS SL (CIF B27535137), una empresa de microbrotes hidropónicos de Madrid. Te paso una factura o recibo de un proveedor que ha recibido la empresa. Extrae los datos tal como aparecen en el documento:
 
 - proveedor_nombre y proveedor_cif: los del emisor, nunca los de Rootflow (B27535137).
+- numero_factura: el número de la factura exactamente como aparece (con sus ceros, letras y guiones; en recibos de Stripe, el "Invoice number").
 - fecha: la fecha de la factura en formato AAAA-MM-DD.
 - concepto: una descripción corta en español de qué se compra (p. ej. "Alquiler local noviembre 2026", "Suscripción Claude Pro octubre 2026").
 - base_imponible: la suma de todas las bases (también las que no llevan IVA, como suplidos de luz o agua).
@@ -95,6 +97,7 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   try {
+    if (body?.accion === "estado") return json({ ok: true, ia: !!Deno.env.get("ANTHROPIC_API_KEY") }); // V87
     if (body?.accion === "procesar_pendientes") {
       const { data, error } = await supabase.from("facturas_recibidas").select("id").eq("estado", "nueva").order("id").limit(MAX_POR_RONDA);
       if (error) return json({ error: error.code === "42P01" ? "Falta ejecutar el SQL V85" : error.message }, 500);
@@ -194,6 +197,15 @@ async function procesar(supabase: any, id: number) {
       return { id, ok: true, estado: "duplicada" };
     }
 
+    // V87: proveedor y cómo se han registrado antes sus facturas (se le pasa a la IA como pista)
+    const { data: provs } = await supabase.from("proveedores").select("*"); // sin columna cif: se busca también en las notas
+    const provPorCorreo = proveedorPorRemitente(provs || [], f.email_de);
+    const historialDe = async (provId: number) => {
+      const { data } = await supabase.from("gastos").select("fecha, concepto, categoria, iva_tipo, importe, base_imponible, iva_importe, retencion_pct, numero_factura")
+        .eq("proveedor_id", provId).order("fecha", { ascending: false }).limit(12);
+      return data || [];
+    };
+
     // 3. Datos con IA (si no los trae ya)
     let datos = f.datos_json;
     if (!datos || !Object.keys(datos).length) {
@@ -202,13 +214,18 @@ async function procesar(supabase: any, id: number) {
         return { id, ok: true, estado: "pendiente", sin_ia: true };
       }
       if (mime !== MIME_PDF && !MIMES_IMAGEN.includes(mime)) throw new Error(`Formato no soportado (${mime || "desconocido"}): sube un PDF o una foto JPG/PNG`);
-      datos = await extraerConClaude(bytes!, mime);
+      datos = await extraerConClaude(bytes!, mime, provPorCorreo ? { proveedor: provPorCorreo, gastos: await historialDe(provPorCorreo.id) } : null);
     }
 
     // 4. Proveedor conocido y factura ya registrada
-    const { data: provs } = await supabase.from("proveedores").select("*"); // sin columna cif: se busca también en las notas
-    const prov = buscarProveedor(provs || [], datos);
-    if (prov) datos = { ...datos, proveedor_id: prov.id, proveedor_erp: prov.nombre };
+    const prov = buscarProveedor(provs || [], datos) || provPorCorreo;
+    if (prov) {
+      datos = { ...datos, proveedor_id: prov.id, proveedor_erp: prov.nombre };
+      // V87: si la IA no ha sabido clasificarla, la categoría con la que se registran siempre las de este proveedor
+      const hist = await historialDe(prov.id);
+      const sugerida = categoriaHabitual(hist, datos);
+      if (sugerida && (!datos.categoria || datos.categoria === "otros")) datos = { ...datos, categoria: sugerida, categoria_por_historial: true };
+    }
     let estado = "pendiente";
     let aviso: string | null = datos?.es_factura === false ? "No parece una factura: revisa antes de registrarla." : null;
     if (prov && datos?.numero_factura) {
@@ -224,7 +241,43 @@ async function procesar(supabase: any, id: number) {
   }
 }
 
-async function extraerConClaude(bytes: Uint8Array, mime: string) {
+// V87: historial del proveedor para que la IA registre igual que las veces anteriores
+function textoHistorial(h: any) {
+  if (!h?.gastos?.length) return "";
+  const filas = h.gastos.map((g: any) =>
+    `- ${g.fecha} · "${g.concepto}" · categoria=${g.categoria} · iva_tipo=${g.iva_tipo}${Number(g.retencion_pct) > 0 ? ` · retencion ${g.retencion_pct} %` : ""} · total ${g.importe} €${g.numero_factura ? ` · nº ${g.numero_factura}` : ""}`).join("\n");
+  return `\n\nEsta factura parece de un proveedor que ya está en el ERP: "${h.proveedor.nombre}". Así se registraron sus últimas facturas (la contabilidad las revisa la gestoría; pueden tener errores antiguos, pero la categoría suele ser la buena para el mismo tipo de gasto):\n${filas}\nSi esta factura es del mismo tipo (p. ej. el alquiler de otro mes), usa la misma categoría y escribe el concepto con el mismo estilo, indicando el mes o periodo que factura. Los importes, la fecha y el número sácalos SIEMPRE del documento, nunca del historial.`;
+}
+
+const PALABRAS_VACIAS = ["factura", "facturas", "recibo", "invoice", "receipt", "cuota", "pago", "mensual", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre", "2025", "2026", "2027", "2028"];
+export function categoriaHabitual(hist: any[], datos: any) {
+  if (!hist?.length) return null;
+  const palabras = (t: any) => new Set(String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !PALABRAS_VACIAS.includes(w)));
+  const delDoc = palabras(`${datos?.concepto || ""} ${datos?.notas || ""}`);
+  // 1º: un gasto anterior con palabras en común (alquiler, luz, agua…); 2º: la categoría más repetida si es clara
+  for (const g of hist) {
+    if (!g.categoria || g.categoria === "otros") continue;
+    for (const w of palabras(g.concepto)) if (delDoc.has(w)) return g.categoria;
+  }
+  const cuenta: Record<string, number> = {};
+  hist.forEach((g) => { if (g.categoria && g.categoria !== "otros") cuenta[g.categoria] = (cuenta[g.categoria] || 0) + 1; });
+  const [top, n] = Object.entries(cuenta).sort((a, b) => b[1] - a[1])[0] || [];
+  return top && n / hist.length >= 0.6 ? top : null;
+}
+
+// V87: proveedor por el email del remitente (mismo email, o mismo dominio si no es un correo genérico)
+const DOMINIOS_GENERICOS = ["gmail.com", "googlemail.com", "hotmail.com", "hotmail.es", "outlook.com", "outlook.es", "yahoo.com", "yahoo.es", "icloud.com", "live.com", "stripe.com", "paypal.com", "rootflow.es"];
+export function proveedorPorRemitente(provs: any[], emailDe: any) {
+  const m = String(emailDe || "").toLowerCase().match(/[a-z0-9._%+-]+@([a-z0-9.-]+\.[a-z]+)/);
+  if (!m) return null;
+  const email = m[0], dominio = m[1];
+  const exacto = provs.find((p) => String(p.email || "").toLowerCase().trim() === email);
+  if (exacto) return exacto;
+  if (DOMINIOS_GENERICOS.includes(dominio)) return null;
+  return provs.find((p) => String(p.email || "").toLowerCase().trim().endsWith("@" + dominio)) || null;
+}
+
+async function extraerConClaude(bytes: Uint8Array, mime: string, historial: any = null) {
   const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") });
   const data = bytesABase64(bytes);
   const adjunto = mime === MIME_PDF
@@ -236,7 +289,7 @@ async function extraerConClaude(bytes: Uint8Array, mime: string) {
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: { effort: "low", format: { type: "json_schema", schema: ESQUEMA } },
-    messages: [{ role: "user", content: [adjunto, { type: "text", text: INSTRUCCIONES }] }],
+    messages: [{ role: "user", content: [adjunto, { type: "text", text: INSTRUCCIONES + textoHistorial(historial) }] }],
   } as any);
   if (response.stop_reason === "refusal") throw new Error("La IA no ha podido leer este documento");
   if (response.stop_reason === "max_tokens") throw new Error("La respuesta de la IA se cortó");

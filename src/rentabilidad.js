@@ -93,7 +93,7 @@ export function calcularRentabilidad(datos, op, h) {
   // ---------- 1. Ventas por línea ----------
   const lineas = []; // { mes, cliente_id, linea, variedad, producto, importe, gramos, unidades, porte }
   const avisos = { facturasSinDetalle: 0, importeSinDetalle: 0, lineasSinGramos: 0 };
-  const facturasPeriodo = facturas.filter((f) => f.estado !== 'cancelada' && enPeriodo(f.fecha));
+  const facturasPeriodo = facturas.filter((f) => !['cancelada', 'anulada', 'rectificativa'].includes(f.estado) && enPeriodo(f.fecha)); // V87: anuladas y sus rectificativas no son ventas
   for (const f of facturasPeriodo) {
     const cli = cliById.get(f.cliente_id);
     const linea = h.lineaDeCliente(cli);

@@ -193,8 +193,19 @@ const mapFactura = (f: any, grupos: any[]) => ({
   plazo_pago_dias: f.plazo_pago_dias,
   fecha_cobro: f.fecha_cobro,
   enviada_at: f.enviada_at || null,
+  factura_rectificada_id: f.factura_rectificada_id || (String(f.concepto || "").match(/rectificativa de la factura (\S+) de /) || [])[1] || null, // V87
+  motivo_anulacion: f.motivo_anulacion || null, // V87
   grupos,
 });
+
+// V87: rectificativas y números anulados (numeración correlativa)
+const esRectificativa = (f: any) => f?.tipo === "rectificativa" || /^R-/.test(String(f?.id || ""));
+const esNumeroAnulado = (f: any) => f?.tipo === "anulada";
+// Las rectificativas no traen líneas: una sola línea "Anulación de la factura X" por la base en negativo
+const gruposRectificativa = (f: any) => [{
+  titulo: `Rectifica la factura ${f.factura_rectificada_id || ""}`.trim(), fecha: null,
+  lineas: [{ producto: `Anulación total de la factura ${f.factura_rectificada_id || ""}`.trim(), cantidad: 1, precio_unitario: Number(f.subtotal) || 0, subtotal: Number(f.subtotal) || 0 }],
+}];
 
 async function catalogo(supabase: any) {
   const [productosR, variedadesR] = await Promise.all([
@@ -239,13 +250,14 @@ async function cargarDatos(supabase: any, cliente: any) {
 
   // Facturas: importes tal como se emitieron + líneas (de los albaranes si es agrupada, del pedido si no)
   const facturas = (facturasR.data || [])
-    .filter((f: any) => f.estado !== "cancelada")
+    .filter((f: any) => f.estado !== "cancelada" && !esNumeroAnulado(f)) // V87: los números anulados (sin importes) no se enseñan
     .map((f: any) => {
       const albIds: string[] = Array.isArray(f.albaranes_ids) ? f.albaranes_ids.map(String) : [];
       const grupos = albIds.length
         ? albIds.map((id) => albById.get(id)).filter(Boolean).map((a: any) => ({ titulo: `Albarán ${a.id}`, fecha: a.fecha, lineas: a.lineas }))
         : f.pedido_id ? [{ titulo: `Pedido #${f.pedido_id}`, fecha: pedidos.find((p: any) => p.id === f.pedido_id)?.fecha_entrega || null, lineas: lineasPedido(f.pedido_id) }] : [];
-      return mapFactura(f, grupos);
+      const m = mapFactura(f, grupos);
+      return esRectificativa(f) ? { ...m, grupos: gruposRectificativa(m) } : m; // V87
     });
 
   const recurrentes = recurrentesR.data || [];
@@ -301,14 +313,20 @@ async function cargarFactura(supabase: any, facturaId: string) {
       lineas: (its || []).map((i: any) => ({ ...describir(i.producto_id), cantidad: Number(i.cantidad) || 0, precio_unitario: Number(i.precio_unitario) || 0, subtotal: Number(i.subtotal) || 0 })),
     }];
   }
-  return { factura: mapFactura(f, grupos), cliente };
+  const factura = mapFactura(f, grupos);
+  if (esRectificativa(f)) factura.grupos = gruposRectificativa(factura); // V87
+  if (f.estado === "anulada" && !esNumeroAnulado(f)) {
+    const { data: r } = await supabase.from("facturas").select("id").eq("tipo", "rectificativa").ilike("concepto", `%factura ${f.id} %`).limit(1);
+    (factura as any).rectificada_por = r?.[0]?.id || null;
+  }
+  return { factura, cliente };
 }
 
 // ==================== PDF ====================
 async function generarPdf(supabase: any, tipo: string, id: any, clienteIdObligatorio: number | null) {
   if (tipo === "factura") {
     const r = await cargarFactura(supabase, String(id));
-    if (!r || r.factura.estado === "cancelada" || (clienteIdObligatorio && r.cliente?.id !== clienteIdObligatorio)) return { error: "Factura no encontrada" };
+    if (!r || r.factura.estado === "cancelada" || r.factura.tipo === "anulada" || (clienteIdObligatorio && r.cliente?.id !== clienteIdObligatorio)) return { error: "Factura no encontrada" };
     return { filename: `Factura-${r.factura.id}.pdf`, base64: bytesABase64(await pdfFactura(r.factura, r.cliente)) };
   }
   if (tipo === "albaran") {
@@ -501,7 +519,9 @@ export async function pdfFactura(f: any, cliente: any) {
   const ctx = await nuevoDocumento();
   const { M, W } = ctx;
   ctx.nuevaPagina();
-  cabecera(ctx, "FACTURA", f.id, [`Fecha: ${fechaES(f.fecha)}`, `Vencimiento: ${fechaES(f.fecha_vencimiento)}`]);
+  const rect = esRectificativa(f); // V87
+  cabecera(ctx, rect ? "FACTURA RECTIFICATIVA" : f.estado === "anulada" ? "FACTURA (ANULADA)" : "FACTURA", f.id,
+    rect ? [`Fecha: ${fechaES(f.fecha)}`, `Rectifica: ${f.factura_rectificada_id || "—"}`] : [`Fecha: ${fechaES(f.fecha)}`, `Vencimiento: ${fechaES(f.fecha_vencimiento)}`]);
   cajasPartes(ctx, cliente);
   if (f.concepto) {
     for (const l of ctx.partir(f.concepto, W - 2 * M, 8.5)) { ctx.texto(l, M, ctx.y - 10, { size: 8.5, color: GRIS }); ctx.y -= 11; }
@@ -532,17 +552,21 @@ export async function pdfFactura(f: any, cliente: any) {
   // Pago
   const sepa = cliente?.sepa_activo && f.metodo_cobro === "sepa_b2b";
   const plazo = f.plazo_pago_dias || cliente?.plazo_pago_dias || 30;
-  const pago: string[] = f.estado === "pagada"
+  const pago: string[] = rect
+    ? [`Anula por completo la factura ${f.factura_rectificada_id || ""}${f.motivo_anulacion ? ". Motivo: " + f.motivo_anulacion : ""}.`, `Si ya la habías pagado, te devolvemos ${eur(-f.total)} o lo descontamos de tu próxima factura.`]
+    : f.estado === "anulada"
+    ? [`Esta factura está ANULADA${f.rectificada_por ? " por la factura rectificativa " + f.rectificada_por : ""}. No hay que pagarla.`]
+    : f.estado === "pagada"
     ? [`Factura pagada${f.fecha_cobro ? " el " + fechaES(f.fecha_cobro) : ""}. Gracias.`]
     : sepa
       ? [`Cobro por domiciliación SEPA B2B el ${fechaES(f.fecha_vencimiento)} en la cuenta del mandato firmado${cliente?.sepa_mandato_ref ? " (mandato " + cliente.sepa_mandato_ref + ")" : ""}.`]
       : [`Pago por transferencia · Titular: ${EMPRESA.nombre} · Banco: ${EMPRESA.banco}`, `IBAN: ${EMPRESA.iban} · BIC: ${EMPRESA.swift} · Concepto: ${f.id}`];
-  const legal = ctx.partir(`Plazo de pago: ${plazo} días desde la fecha de factura (Ley 15/2010, productos perecederos). El impago en plazo devengará intereses de demora conforme al art. 7 de la Ley 3/2004, de 29 de diciembre.`, W - 2 * M - 20, 7.5);
+  const legal = rect || f.estado === "anulada" ? [] : ctx.partir(`Plazo de pago: ${plazo} días desde la fecha de factura (Ley 15/2010, productos perecederos). El impago en plazo devengará intereses de demora conforme al art. 7 de la Ley 3/2004, de 29 de diciembre.`, W - 2 * M - 20, 7.5);
   const alto = 18 + pago.length * 12 + legal.length * 9.5 + 8;
   ctx.necesita(alto + 10);
   ctx.rect(M, ctx.y - alto, W - 2 * M, alto, rgb(0.93, 0.98, 0.95));
   ctx.rect(M, ctx.y - alto, 3, alto, VERDE);
-  ctx.texto(f.estado === "pagada" ? "PAGADA" : sepa ? "DOMICILIACIÓN SEPA" : "DATOS DE PAGO", M + 12, ctx.y - 13, { bold: true, size: 7.5, color: VERDE });
+  ctx.texto(rect ? "FACTURA RECTIFICATIVA (art. 15 RD 1619/2012)" : f.estado === "anulada" ? "ANULADA" : f.estado === "pagada" ? "PAGADA" : sepa ? "DOMICILIACIÓN SEPA" : "DATOS DE PAGO", M + 12, ctx.y - 13, { bold: true, size: 7.5, color: VERDE });
   pago.forEach((l, i) => ctx.texto(l, M + 12, ctx.y - 27 - i * 12, { size: 9, bold: i === 1 }));
   legal.forEach((l: string, i: number) => ctx.texto(l, M + 12, ctx.y - 27 - pago.length * 12 - 2 - i * 9.5, { size: 7.5, color: GRIS }));
   ctx.y -= alto + 10;
@@ -706,7 +730,7 @@ async function enviarFactura(supabase: any, facturaId: string, para: string[], c
     const token = await asegurarToken(supabase, cliente);
     const { data: pend } = await supabase.from("facturas").select("id, fecha, fecha_vencimiento, total, estado").eq("cliente_id", cliente.id).in("estado", ["pendiente", "vencida"]).order("fecha");
     const pdf = await pdfFactura(factura, cliente);
-    const asunto = `Factura ${factura.id} · RootFlow Hydroponics`;
+    const asunto = `${esRectificativa(factura) ? "Factura rectificativa" : "Factura"} ${factura.id} · RootFlow Hydroponics`; // V87
     const html = htmlEmailFactura(factura, cliente, token, pend || []);
     const envio = await enviarResend({ para, copia, asunto, html, adjuntos: [{ filename: `Factura-${factura.id}.pdf`, content: bytesABase64(pdf) }] });
     await supabase.from("email_log").insert({ destinatarios: para.join(", "), asunto, alerta_id: `factura:${factura.id}`, estado: envio.ok ? "enviado" : "error", respuesta: envio.ok ? JSON.stringify({ id: envio.id, por: usuario || "automatico" }) : envio.error });
@@ -769,19 +793,24 @@ export function htmlEmailFactura(f: any, c: any, token: string, pendientes: any[
   const otras = pendientes.filter((p) => p.id !== f.id);
   const totalPend = pendientes.reduce((s, p) => s + (Number(p.total) || 0), 0);
   const hoy = new Date().toISOString().slice(0, 10);
+  const rect = esRectificativa(f); // V87
   return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,Helvetica,sans-serif;">
   <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
     <div style="margin-bottom:20px;"><img src="${LOGO_URL}" alt="RootFlow" width="44" style="vertical-align:middle;"> <span style="font-size:22px;font-weight:800;vertical-align:middle;">Root<span style="color:#F97316;">Flow</span></span></div>
     <p style="font-size:15px;">Hola ${esc(c?.contacto || c?.nombre || "")},</p>
-    <p style="font-size:15px;">Te enviamos la factura <strong>${esc(f.id)}</strong> del ${fechaES(f.fecha)}${f.periodo_desde ? ` (entregas del ${fechaES(f.periodo_desde)} al ${fechaES(f.periodo_hasta)})` : ""}. La tienes en PDF adjunta a este correo.</p>
+    <p style="font-size:15px;">${rect
+      ? `Te enviamos la factura rectificativa <strong>${esc(f.id)}</strong>, que anula por completo la factura <strong>${esc(f.factura_rectificada_id || "")}</strong>${f.motivo_anulacion ? ` (${esc(f.motivo_anulacion)})` : ""}. La tienes en PDF adjunta a este correo.`
+      : `Te enviamos la factura <strong>${esc(f.id)}</strong> del ${fechaES(f.fecha)}${f.periodo_desde ? ` (entregas del ${fechaES(f.periodo_desde)} al ${fechaES(f.periodo_hasta)})` : ""}. La tienes en PDF adjunta a este correo.`}</p>
     <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;border-top:1px solid #eee;">
       ${fila("Base imponible", eur(f.base_imponible))}
       ${fila(`IVA (${f.iva_porcentaje}%)`, eur(f.iva))}
       ${f.recargo_equivalencia ? fila(`Recargo de equivalencia (${f.re_porcentaje}%)`, eur(f.re_importe)) : ""}
       ${fila("<strong>Total</strong>", `<strong>${eur(f.total)}</strong>`, "border-top:2px solid #333;font-size:16px;")}
-      ${fila("Vencimiento", fechaES(f.fecha_vencimiento))}
+      ${rect ? "" : fila("Vencimiento", fechaES(f.fecha_vencimiento))}
     </table>
-    <p style="font-size:14px;">${sepa
+    <p style="font-size:14px;">${rect
+      ? `Si ya habías pagado la factura ${esc(f.factura_rectificada_id || "")}, te devolvemos ${eur(-f.total)} o lo descontamos de tu próxima factura.`
+      : sepa
       ? `Se cobrará por domiciliación SEPA B2B el ${fechaES(f.fecha_vencimiento)} en la cuenta del mandato firmado.`
       : `Pago por transferencia a ${esc(EMPRESA.nombre)} (${esc(EMPRESA.banco)}) · IBAN <strong>${esc(EMPRESA.iban)}</strong> · Concepto: ${esc(f.id)}.`}</p>
     ${otras.length ? `

@@ -19,6 +19,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
+import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -280,6 +281,8 @@ const estadoFacturaConfig = {
   pagada: { label: "Pagada", color: "bg-green-100 text-green-700" },
   vencida: { label: "Vencida", color: "bg-red-100 text-red-700" },
   cancelada: { label: "Cancelada", color: "bg-neutral-100 text-neutral-700" },
+  anulada: { label: "Anulada", color: "bg-neutral-200 text-neutral-600 line-through" }, // V87: anulada con rectificativa (o número anulado)
+  rectificativa: { label: "Rectificativa", color: "bg-purple-100 text-purple-700" }, // V87
 };
 
 const estadoLoteConfig = {
@@ -785,6 +788,7 @@ const MainApp = () => {
   const [filtroGastosMes, setFiltroGastosMes] = useState('todos');
   const [selectedGastos, setSelectedGastos] = useState([]);
   const [subiendoFacturas, setSubiendoFacturas] = useState(false); // V85: bandeja de facturas recibidas
+  const [iaFacturas, setIaFacturas] = useState(null); // V87: ¿está la clave de la IA en leer-factura? (null = sin comprobar)
   
   // Selección múltiple para todas las secciones
   const [selectedClientes, setSelectedClientes] = useState([]);
@@ -1473,7 +1477,7 @@ const MainApp = () => {
     // Asientos de ventas (facturas emitidas)
     facturas.forEach(f => {
       const ref = `FAC-${f.id}`;
-      if (!asientosExistentes.has(ref)) {
+      if (!asientosExistentes.has(ref) && !esNumeroAnulado(f)) { // V87: los números anulados no llevan asiento
         const cliente = clientes.find(c => c.id === f.cliente_id);
         nuevosAsientos.push({
           fecha: f.fecha,
@@ -1895,7 +1899,7 @@ const MainApp = () => {
   };
 
   // Crear asiento automático desde una factura
-  const crearAsientoDesdeFactura = async (factura, cliente) => {
+  const crearAsientoDesdeFactura = async (factura, cliente, silencioso = false) => {
     try {
       // V73: número basado en el último asiento real (antes COUNT+1 → duplicados)
       const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
@@ -1903,7 +1907,7 @@ const MainApp = () => {
       const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
         fecha: factura.fecha,
         numero,
-        concepto: `Factura ${factura.id} - ${cliente?.nombre || 'Cliente'}`,
+        concepto: `${esRectificativa(factura) ? 'Factura rectificativa' : 'Factura'} ${factura.id} - ${cliente?.nombre || 'Cliente'}`, // V87
         referencia: `FAC-${factura.id}`,
       }).select().single();
       
@@ -1919,15 +1923,20 @@ const MainApp = () => {
       const reImporte = parseFloat((factura.re_importe || 0).toFixed(2));
       const ivaPorcentaje = factura.iva_porcentaje || IVA_VENTAS;
       
+      // V87: una rectificativa lleva importes negativos → cada importe va al lado contrario (asiento inverso)
+      const lado = (cuenta, concepto, importe, alDebe) => {
+        const debe = alDebe ? importe : -importe;
+        return { asiento_id: nuevoAsiento.id, cuenta, concepto, debe: debe > 0 ? debe : 0, haber: debe < 0 ? -debe : 0 };
+      };
       const lineas = [
-        { asiento_id: nuevoAsiento.id, cuenta: '430', concepto: 'Clientes', debe: totalFactura, haber: 0 },
-        { asiento_id: nuevoAsiento.id, cuenta: '701', concepto: 'Ventas de productos terminados (microbrotes)', debe: 0, haber: baseImponible },
-        { asiento_id: nuevoAsiento.id, cuenta: '477', concepto: `H.P. IVA Repercutido (${ivaPorcentaje}%)`, debe: 0, haber: ivaFactura },
+        lado('430', 'Clientes', totalFactura, true),
+        lado('701', 'Ventas de productos terminados (microbrotes)', baseImponible, false),
+        lado('477', `H.P. IVA Repercutido (${ivaPorcentaje}%)`, ivaFactura, false),
       ];
       
       // Si hay recargo de equivalencia, añadir línea
-      if (reImporte > 0) {
-        lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '477', concepto: 'H.P. Recargo Equivalencia (0,5%)', debe: 0, haber: reImporte });
+      if (reImporte !== 0) {
+        lineas.push(lado('477', 'H.P. Recargo Equivalencia (0,5%)', reImporte, false));
       }
       
       console.log('Insertando líneas:', lineas);
@@ -1946,11 +1955,237 @@ const MainApp = () => {
       refetchAsientoLineas();
       
       let mensajeRE = reImporte > 0 ? `\n477 RE: ${reImporte}€ (HABER)` : '';
+      if (silencioso) return; // V87
       alert(`✅ Asiento ${numero} creado:\n\n430 Clientes: ${totalFactura}€ (DEBE)\n701 Ventas: ${baseImponible}€ (HABER)\n477 IVA ${ivaPorcentaje}%: ${ivaFactura}€ (HABER)${mensajeRE}`);
     } catch (error) {
       console.error('Error creando asiento desde factura:', error);
       alert('❌ Error inesperado: ' + error.message);
     }
+  };
+
+  // ==================== V87 — NUMERACIÓN CORRELATIVA DE FACTURAS EMITIDAS ====================
+  // Una factura emitida no se borra: se anula con una factura rectificativa (serie R-AAAA-) y su número
+  // se queda en la serie. Solo la última de su serie, sin enviar ni cobrar, se puede borrar (su número se
+  // reutiliza). Lógica pura en src/serieFacturas.js; en la base de datos lo refuerza el trigger del SQL V87.
+
+  // Vuelve a hacer el asiento de venta de una factura con sus importes actuales (tras corregirla)
+  const rehacerAsientoFactura = async (facturaOId) => {
+    const id = typeof facturaOId === 'string' ? facturaOId : facturaOId?.id;
+    const { data: f, error } = await supabase.from('facturas').select('*').eq('id', id).maybeSingle();
+    if (error || !f) { if (error) alert('❌ No se pudo leer la factura ' + id + ': ' + error.message); return false; }
+    const { error: eDel } = await supabase.from('asientos_contables').delete().eq('referencia', `FAC-${id}`);
+    if (eDel) { alert('❌ No se pudo borrar el asiento anterior de ' + id + ': ' + eDel.message); return false; }
+    if (!esNumeroAnulado(f) && Math.abs(parseFloat(f.total) || 0) > 0.005) await crearAsientoDesdeFactura(f, clientes.find(c => c.id === f.cliente_id), true);
+    refetchAsientos();
+    refetchAsientoLineas();
+    return true;
+  };
+
+  // Rectificativa que anula una factura (columna factura_rectificada_id; sin el SQL V87, por el concepto)
+  const rectificativaDe = (facturaId) => facturas.find(r => esRectificativa(r) && (r.factura_rectificada_id === facturaId || String(r.concepto || '').includes(`factura ${facturaId} `)));
+  const facturaRectificadaPor = (r) => r.factura_rectificada_id || (String(r.concepto || '').match(/factura (\S+) de /) || [])[1] || null;
+
+  // Inserta en facturas; si falta alguna columna del SQL V87, reintenta sin ellas
+  const insertarFacturaV87 = async (datos, prefijo) => {
+    let res = await insertarConIdUnico('facturas', datos, prefijo, 4);
+    if (res.error?.code === '42703') {
+      const { factura_rectificada_id, motivo_anulacion, anulada_at, portes_importe, ...sinV87 } = datos;
+      res = await insertarConIdUnico('facturas', sinV87, prefijo, 4);
+      if (!res.error) res.sinColumnasV87 = true;
+    }
+    return res;
+  };
+
+  const anularFactura = async (factura) => {
+    if (esNumeroAnulado(factura)) { alert(`El número ${factura.id} ya está anulado.`); return; }
+    if (factura.estado === 'anulada') { alert(`La factura ${factura.id} ya está anulada${rectificativaDe(factura.id) ? ` (rectificativa ${rectificativaDe(factura.id).id})` : ''}.`); return; }
+    if (esRectificativa(factura)) { alert('Una factura rectificativa no se anula. Si está mal, emite otra factura corregida.'); return; }
+    const cli = clientes.find(c => c.id === factura.cliente_id);
+    const ultima = esUltimaDeSuSerie(factura, facturas);
+
+    // 1) Última de la serie, sin enviar ni cobrar → se puede borrar y su número se reutiliza
+    if (ultima && !factura.enviada_at && factura.estado !== 'pagada') {
+      if (!window.confirm(`🗑️ ¿Borrar la factura ${factura.id} (${cli?.nombre || ''} · ${formatCurrency(factura.total)})?\n\nEs la última de la serie y no se ha enviado ni cobrado, así que se puede borrar sin dejar hueco: su número se usará en la próxima factura.\n\nTambién se borra su asiento contable y sus albaranes vuelven a quedar pendientes de facturar.`)) return;
+      const { error: eAlb } = await supabase.from('albaranes').update({ estado: 'entregado', numero_factura: null }).eq('numero_factura', factura.id);
+      if (eAlb) { alert('❌ No se pudieron liberar los albaranes: ' + eAlb.message); return; }
+      await supabase.from('asientos_contables').delete().in('referencia', [`FAC-${factura.id}`, `COB-${factura.id}`]);
+      const { error } = await supabase.from('facturas').delete().eq('id', factura.id);
+      if (error) { alert('❌ No se pudo borrar: ' + error.message); return; }
+      refetchFacturas(); refetchAlbaranes(); refetchAsientos(); refetchAsientoLineas();
+      setSelectedFacturas(prev => prev.filter(id => id !== factura.id));
+      alert(`✅ Factura ${factura.id} borrada. La próxima factura volverá a usar ese número.`);
+      return;
+    }
+
+    // 2) Cualquier otra → anulación con factura rectificativa (el número se queda en la serie)
+    const motivo = window.prompt(
+      `ANULAR LA FACTURA ${factura.id}\n${cli?.nombre || ''} · ${formatDate(factura.fecha)} · ${formatCurrency(factura.total)}\n\n` +
+      `${factura.enviada_at ? 'Ya se envió al cliente' : !ultima ? 'Ya hay facturas posteriores' : 'Ya está cobrada'}, así que no se puede borrar sin dejar un hueco en la numeración (lo que ve la asesoría y Hacienda).\n\n` +
+      `Se emitirá la factura rectificativa ${'R-' + String(factura.fecha || new Date().toISOString()).slice(0, 4)}-… con los mismos importes en negativo, la factura quedará "Anulada" con su número, ` +
+      `${Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length ? 'sus albaranes volverán a estar pendientes de facturar ' : ''}y la contabilidad lo recogerá con un asiento inverso.\n\n` +
+      `Motivo de la anulación (sale en la rectificativa):`,
+      'Error en la factura'
+    );
+    if (motivo === null) return;
+    const hoy = new Date().toISOString().split('T')[0];
+    const prefijo = `R-${hoy.slice(0, 4)}-`;
+    const idR = await generarIdSecuencial('facturas', prefijo, 4);
+    const datosR = datosRectificativa(factura, idR, hoy, motivo.trim());
+    const res = await insertarFacturaV87(datosR, prefijo);
+    if (res.error) { alert('❌ No se pudo crear la rectificativa: ' + res.error.message); return; }
+    const idFinal = res.id;
+    let { error: eUpd } = await supabase.from('facturas').update({ estado: 'anulada', motivo_anulacion: motivo.trim() || null, anulada_at: new Date().toISOString() }).eq('id', factura.id);
+    if (eUpd?.code === '42703') ({ error: eUpd } = await supabase.from('facturas').update({ estado: 'anulada' }).eq('id', factura.id));
+    if (eUpd) { alert(`⚠️ Se creó la rectificativa ${idFinal} pero no se pudo marcar ${factura.id} como anulada: ${eUpd.message}`); }
+    await supabase.from('albaranes').update({ estado: 'entregado', numero_factura: null }).eq('numero_factura', factura.id);
+    await crearAsientoDesdeFactura({ ...datosR, id: idFinal }, cli, true);
+    refetchFacturas(); refetchAlbaranes(); refetchAsientos(); refetchAsientoLineas();
+    alert(
+      `✅ Factura ${factura.id} anulada con la rectificativa ${idFinal} (${formatCurrency(datosR.total)}).\n\n` +
+      (factura.estado === 'pagada' ? `⚠️ La factura estaba COBRADA: hay que devolver ${formatCurrency(factura.total)} al cliente o descontarlo de su próxima factura.\n\n` : '') +
+      (factura.pedido_id && !(Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length) ? `Si hay que volver a facturar el pedido #${factura.pedido_id}, usa "Facturar de nuevo" en la factura anulada.\n\n` : '') +
+      `Envía la rectificativa al cliente con el botón ✉️.` +
+      (res.sinColumnasV87 ? '\n\n⚠️ Ejecuta el SQL V87 en Supabase para guardar el enlace entre las dos facturas.' : '')
+    );
+  };
+
+  // Nueva factura de un pedido cuya factura se anuló (importes del pedido con las tarifas actuales)
+  const facturarPedidoDeNuevo = async (anulada) => {
+    const pedidoId = anulada.pedido_id;
+    if (facturas.some(f => f.pedido_id === pedidoId && f.id !== anulada.id && !['anulada', 'rectificativa'].includes(f.estado))) { alert(`El pedido #${pedidoId} ya tiene otra factura vigente.`); return; }
+    const itemsPed = pedidoItems.filter(i => i.pedido_id === pedidoId);
+    if (!itemsPed.length) { alert('El pedido no tiene líneas.'); return; }
+    const cli = clientes.find(c => c.id === anulada.cliente_id);
+    const pedidoFac = pedidos.find(p => p.id === pedidoId);
+    const r2 = (x) => Math.round(x * 100) / 100;
+    const subtotal = r2(itemsPed.reduce((t, it) => t + (parseFloat(it.precio_unitario) || 0) * (parseFloat(it.cantidad) || 0), 0));
+    const pct = tieneDescuentoFijado(anulada) ? (parseFloat(anulada.descuento_pct) || 0) : descuentoClienteEnFecha(cli, pedidoFac?.fecha_entrega || pedidoFac?.fecha || anulada.fecha);
+    const descuento = r2(subtotal * pct / 100);
+    const base = r2(subtotal - descuento);
+    const iva = r2(base * IVA_VENTAS / 100);
+    const re = cli?.recargo_equivalencia ? r2(base * RE_VENTAS / 100) : 0;
+    const total = r2(base + iva + re);
+    if (!window.confirm(`Emitir una factura NUEVA del pedido #${pedidoId} (${cli?.nombre || ''}) con fecha de hoy:\n\nBase ${formatCurrency(base)} + IVA ${formatCurrency(iva)}${re ? ` + RE ${formatCurrency(re)}` : ''} = ${formatCurrency(total)}\n\n(Las líneas y precios son los que tiene ahora el pedido: corrígelo antes si hace falta.)`)) return;
+    const hoy = new Date().toISOString().split('T')[0];
+    const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cli?.plazo_pago_dias, 10) || 30));
+    const prefijo = `F-${hoy.slice(0, 4)}-`;
+    const datos = {
+      id: await generarIdSecuencial('facturas', prefijo, 4), pedido_id: pedidoId, cliente_id: anulada.cliente_id, fecha: hoy,
+      fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente', tipo: 'pedido', subtotal, descuento_aplicado: descuento,
+      base_imponible: base, iva_porcentaje: IVA_VENTAS, iva, recargo_equivalencia: re > 0, re_porcentaje: re > 0 ? RE_VENTAS : 0, re_importe: re, total,
+    };
+    const res = await insertarConIdUnico('facturas', datos, prefijo, 4);
+    if (res.error) { alert('❌ No se pudo crear la factura: ' + res.error.message); return; }
+    await crearAsientoDesdeFactura({ ...datos, id: res.id }, cli, true);
+    refetchFacturas(); refetchAsientos(); refetchAsientoLineas();
+    alert(`✅ Factura ${res.id} emitida (${formatCurrency(total)}).`);
+  };
+
+  // Fechas de los asientos que dejaron las facturas borradas (para fechar bien los números anulados)
+  const fechasAsientosFactura = () => {
+    const out = {};
+    asientosContables.forEach(a => { const r = String(a.referencia || ''); if (r.startsWith('FAC-') && !out[r.slice(4)]) out[r.slice(4)] = a.fecha; });
+    return out;
+  };
+
+  // Registra los huecos de la serie (facturas borradas antes de la V87) como números anulados
+  const registrarHuecosAnulados = async (huecos) => {
+    if (!window.confirm(
+      `Se registrarán ${huecos.length} número(s) como ANULADOS para que la serie no tenga huecos:\n\n${huecos.map(h => `• ${h.id} (${formatDate(h.fecha)})`).join('\n')}\n\n` +
+      `Quedan en Facturación con importe 0 y el motivo "factura borrada por error antes de emitirse". No se envían a nadie ni cuentan como ventas. ` +
+      `Si alguno de esos números llegó a enviarse a un cliente, avísale de que queda anulado.\n\n¿Seguir?`
+    )) return;
+    let ok = 0; const fallos = [];
+    for (const h of huecos) {
+      const datos = {
+        id: h.id, pedido_id: null, cliente_id: null, fecha: h.fecha, fecha_vencimiento: h.fecha, estado: 'anulada', tipo: 'anulada',
+        subtotal: 0, descuento_aplicado: 0, base_imponible: 0, iva_porcentaje: IVA_VENTAS, iva: 0, recargo_equivalencia: false, re_porcentaje: 0, re_importe: 0, total: 0,
+        concepto: 'Número anulado: la factura se borró por error antes de la V87 del ERP. No tiene efectos fiscales.',
+        motivo_anulacion: 'Factura borrada por error (registrada en la V87 para mantener la numeración correlativa)', anulada_at: new Date().toISOString(),
+      };
+      let { error } = await supabase.from('facturas').insert(datos);
+      if (error?.code === '42703') { const { motivo_anulacion, anulada_at, ...sin } = datos; ({ error } = await supabase.from('facturas').insert(sin)); }
+      if (error) fallos.push(`${h.id}: ${error.message}`); else ok++;
+    }
+    refetchFacturas();
+    alert(`${ok ? `✅ ${ok} número(s) registrados como anulados.` : ''}${fallos.length ? `\n\n❌ Errores:\n${fallos.join('\n')}` : ''}`);
+  };
+
+  // Deja los asientos de ventas iguales a las facturas: borra los de facturas que ya no existen y rehace los descuadrados
+  const arreglarAsientosVentas = async (cuadre) => {
+    const { sobrantes, facturasARehacer, cobrosDescuadrados } = cuadre;
+    if (!window.confirm(
+      `Cuadrar la contabilidad de ventas con las facturas:\n\n` +
+      (sobrantes.length ? `🗑️ Borrar ${sobrantes.length} asiento(s) de facturas que ya no existen o están anuladas por número:\n${sobrantes.map(x => `   • ${x.asiento.numero} · ${x.facturaId} · ${formatCurrency(x.importe)}`).join('\n')}\n\n` : '') +
+      (facturasARehacer.length ? `🔁 Rehacer el asiento de ${facturasARehacer.length} factura(s) (sin asiento, repetido o con otro importe):\n${facturasARehacer.map(f => `   • ${f.id} → ${formatCurrency(f.total)}`).join('\n')}\n\n` : '') +
+      (cobrosDescuadrados.length ? `💶 Corregir ${cobrosDescuadrados.length} cobro(s) con importe distinto del de la factura:\n${cobrosDescuadrados.map(x => `   • ${x.factura.id}: ${formatCurrency(x.importe)} → ${formatCurrency(x.factura.total)}`).join('\n')}\n\n` : '') +
+      `Si la asesoría ya ha presentado el IVA de esos trimestres con otros importes, avísales.\n\n¿Seguir?`
+    )) return;
+    const fallos = [];
+    for (const x of sobrantes) {
+      const { error } = await supabase.from('asientos_contables').delete().eq('id', x.asiento.id);
+      if (error) fallos.push(`${x.asiento.numero}: ${error.message}`);
+    }
+    for (const f of facturasARehacer) if (!(await rehacerAsientoFactura(f.id))) fallos.push(f.id);
+    for (const x of cobrosDescuadrados) {
+      const t = Math.round((parseFloat(x.factura.total) || 0) * 100) / 100;
+      const { error: e1 } = await supabase.from('asiento_lineas').delete().eq('asiento_id', x.asiento.id);
+      const { error: e2 } = e1 ? { error: e1 } : await supabase.from('asiento_lineas').insert([
+        { asiento_id: x.asiento.id, cuenta: '572', concepto: 'Bancos c/c', debe: t, haber: 0 },
+        { asiento_id: x.asiento.id, cuenta: '430', concepto: 'Clientes', debe: 0, haber: t },
+      ]);
+      if (e2) fallos.push(`cobro ${x.factura.id}: ${e2.message}`);
+    }
+    refetchAsientos(); refetchAsientoLineas();
+    alert(fallos.length ? `⚠️ Terminado con errores:\n${fallos.join('\n')}` : '✅ Contabilidad de ventas cuadrada con las facturas.');
+  };
+
+  // Panel en Facturación: huecos, orden de fechas y cuadre con la contabilidad
+  const renderControlSerie = () => {
+    const series = analizarSerie(facturas, fechasAsientosFactura());
+    const huecos = series.flatMap(s => s.huecos);
+    const desordenadas = series.flatMap(s => s.desordenadas);
+    const cuadre = cuadreVentas(facturas, asientosContables);
+    const anuladas = facturas.filter(f => f.estado === 'anulada').length;
+    const rectificativas = facturas.filter(esRectificativa).length;
+    const todoBien = !huecos.length && !desordenadas.length && !cuadre.totalIncidencias;
+    return (
+      <Card className={`p-4 ${todoBien ? '' : 'border-2 border-amber-300 bg-amber-50/40'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-bold">🔢 Numeración de facturas</h3>
+          <span className="text-xs text-neutral-500">
+            {series.map(s => `${s.prefijo}… ${s.total} (última ${s.ultimo})`).join(' · ')}
+            {anuladas > 0 && ` · ${anuladas} anulada(s)`}{rectificativas > 0 && ` · ${rectificativas} rectificativa(s)`}
+          </span>
+        </div>
+        {todoBien && <p className="text-sm text-emerald-700 mt-1">✅ Serie correlativa sin huecos, en orden de fecha y cuadrada con la contabilidad. Las facturas no se borran: se anulan con una rectificativa (botón ⛔).</p>}
+        {huecos.length > 0 && (
+          <div className="mt-2 p-2 rounded-lg bg-white border border-amber-200 text-sm flex flex-wrap items-center justify-between gap-2">
+            <span>⚠️ Faltan {huecos.length} número(s) en la serie (facturas borradas): <strong>{huecos.map(h => h.id.replace(/^F-\d{4}-/, '')).join(', ')}</strong>. La asesoría los ve como saltos.</span>
+            <Button size="sm" onClick={() => registrarHuecosAnulados(huecos)}>Registrar como anulados</Button>
+          </div>
+        )}
+        {desordenadas.length > 0 && (
+          <p className="mt-2 text-sm text-red-700">⚠️ Fechas fuera de orden: {desordenadas.map(d => `${d.id} (${formatDate(d.fecha)}) es anterior a ${d.anteriorId} (${formatDate(d.anteriorFecha)})`).join(' · ')}. Una factura con número mayor no puede tener fecha anterior.</p>
+        )}
+        {(cuadre.sobrantes.length + cuadre.facturasARehacer.length + cuadre.cobrosDescuadrados.length) > 0 && (
+          <div className="mt-2 p-2 rounded-lg bg-white border border-amber-200 text-sm flex flex-wrap items-center justify-between gap-2">
+            <span>
+              📒 La contabilidad no cuadra con las facturas:
+              {cuadre.sobrantes.length > 0 && <> {cuadre.sobrantes.length} asiento(s) de facturas borradas ({formatCurrency(cuadre.sobrantes.reduce((t, x) => t + x.importe, 0))} de ventas que no existen);</>}
+              {cuadre.duplicados.length > 0 && <> {cuadre.duplicados.length} factura(s) con asiento repetido;</>}
+              {cuadre.descuadrados.length > 0 && <> {cuadre.descuadrados.length} con importe distinto (corregidas después);</>}
+              {cuadre.sinAsiento.length > 0 && <> {cuadre.sinAsiento.length} sin asiento;</>}
+              {cuadre.cobrosDescuadrados.length > 0 && <> {cuadre.cobrosDescuadrados.length} cobro(s) con otro importe.</>}
+            </span>
+            <Button size="sm" onClick={() => arreglarAsientosVentas(cuadre)}>Cuadrar contabilidad</Button>
+          </div>
+        )}
+        {cuadre.cobrosHuerfanos.length > 0 && (
+          <p className="mt-2 text-xs text-amber-800">💶 Cobros a revisar a mano en Contabilidad (no los toco porque el dinero sí pudo entrar): {cuadre.cobrosHuerfanos.map(x => `${x.asiento.numero} · ${x.facturaId} · ${formatCurrency(x.importe)} (${x.motivo})`).join(' · ')}</p>
+        )}
+      </Card>
+    );
   };
 
   // Crear asiento automático desde un gasto
@@ -2093,9 +2328,50 @@ const MainApp = () => {
     if (fallos.length) alert(`${ok ? `✅ ${ok} factura(s) leída(s).\n\n` : ''}❌ Con problemas:\n${fallos.join('\n')}\n\nLas que se subieron quedan en la bandeja para rellenarlas a mano.`);
   };
 
+  // V87: proveedor por el email del remitente (mismo email o mismo dominio, salvo correos genéricos)
+  const proveedorPorRemitente = (emailDe) => {
+    const m = String(emailDe || '').toLowerCase().match(/[a-z0-9._%+-]+@([a-z0-9.-]+\.[a-z]+)/);
+    if (!m) return null;
+    const exacto = proveedores.find(p => String(p.email || '').toLowerCase().trim() === m[0]);
+    if (exacto) return exacto;
+    if (['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.es', 'outlook.com', 'outlook.es', 'yahoo.com', 'yahoo.es', 'icloud.com', 'live.com', 'stripe.com', 'paypal.com', 'rootflow.es'].includes(m[1])) return null;
+    return proveedores.find(p => String(p.email || '').toLowerCase().trim().endsWith('@' + m[1])) || null;
+  };
+
+  // V87: la factura anterior más parecida del mismo proveedor (misma palabra clave en el concepto, o la última)
+  const gastoAnteriorParecido = (proveedorId, texto) => {
+    const delProv = gastos.filter(g => g.proveedor_id === proveedorId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+    if (!delProv.length) return null;
+    const vacias = ['factura', 'facturas', 'recibo', 'invoice', 'receipt', 'cuota', 'pago', 'mensual', 'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const palabras = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(w => w.length >= 4 && !vacias.includes(w) && !/^\d+$/.test(w));
+    const buscadas = new Set(palabras(texto));
+    return delProv.find(g => g.categoria !== 'otros' && palabras(g.concepto).some(w => buscadas.has(w))) || delProv[0];
+  };
+
   // Abre el formulario de gasto relleno con lo que se ha leído de la factura
   const registrarFacturaRecibida = async (fr) => {
     const d = fr.datos_json || {};
+    // V87: sin lectura de la IA, se copia la factura anterior del mismo proveedor (el remitente del correo)
+    if (!Object.keys(d).length) {
+      const prov = proveedorPorRemitente(fr.email_de);
+      const ant = prov ? gastoAnteriorParecido(prov.id, `${fr.email_asunto || ''} ${fr.archivo_nombre || ''}`) : null;
+      if (!ant) {
+        setEditingItem({ fecha: new Date().toISOString().split('T')[0], concepto: fr.email_asunto || fr.archivo_nombre || '', proveedor_id: prov?.id || null, factura_url: fr.archivo_url || '', categoria: 'otros', iva_tipo: 'general', forma_pago: 'banco', pagado: false, _factura_recibida_id: fr.id });
+        setShowModal('gasto');
+        return;
+      }
+      alert(`ℹ️ Esta factura no se ha leído con IA${fr.error ? ` (${fr.error})` : ''}.\n\nTe relleno el formulario copiando la última factura parecida de ${prov.nombre} (${formatDate(ant.fecha)} · ${ant.concepto} · ${formatCurrency(ant.importe)}).\n\nRevisa fecha, nº de factura e importes con el PDF antes de guardar.`);
+      setEditingItem({
+        fecha: (fr.email_fecha || '').slice(0, 10) || new Date().toISOString().split('T')[0],
+        categoria: ant.categoria, concepto: fr.email_asunto || ant.concepto, proveedor_id: prov.id, numero_factura: '',
+        iva_tipo: ant.iva_tipo || 'general', importe: ant.importe, forma_pago: ant.forma_pago || 'banco', pagado: !!ant.pagado,
+        factura_url: fr.archivo_url || '',
+        ...(desgloseGasto(ant).explicito ? { base_imponible: ant.base_imponible, iva_importe: ant.iva_importe, retencion_pct: ant.retencion_pct, retencion_importe: ant.retencion_importe } : {}),
+        _factura_recibida_id: fr.id,
+      });
+      setShowModal('gasto');
+      return;
+    }
     let proveedorId = d.proveedor_id || null;
     if (!proveedorId && d.proveedor_nombre) {
       if (window.confirm(`El proveedor "${d.proveedor_nombre}"${d.proveedor_cif ? ` (${d.proveedor_cif})` : ''} no está en el ERP. ¿Lo creo?`)) {
@@ -2106,8 +2382,8 @@ const MainApp = () => {
         refetchProveedores();
       }
     }
-    // Forma de pago y "pagado" como el último gasto de ese proveedor
-    const anterior = proveedorId ? [...gastos].filter(g => g.proveedor_id === proveedorId).sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))[0] : null;
+    // Forma de pago y "pagado" como la factura anterior más parecida de ese proveedor (V87; antes, la última)
+    const anterior = proveedorId ? gastoAnteriorParecido(proveedorId, `${d.concepto || ''} ${fr.email_asunto || ''}`) : null;
     const r2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
     const total = r2(d.total_a_pagar);
     const base = r2(d.base_imponible);
@@ -2119,7 +2395,7 @@ const MainApp = () => {
     const necesitaDesglose = ret > 0 || d.iva_tipo === 'mixto' || (base > 0 && Math.abs(ivaDelTipo - iva) > 0.02);
     setEditingItem({
       fecha: /^\d{4}-\d{2}-\d{2}$/.test(d.fecha || '') ? d.fecha : new Date().toISOString().split('T')[0],
-      categoria: categoriasGasto[d.categoria] ? d.categoria : 'otros',
+      categoria: categoriasGasto[d.categoria] && d.categoria !== 'otros' ? d.categoria : (anterior?.categoria || 'otros'), // V87
       concepto: d.concepto || fr.email_asunto || fr.archivo_nombre || '',
       proveedor_id: proveedorId,
       numero_factura: d.numero_factura || '',
@@ -2147,6 +2423,12 @@ const MainApp = () => {
     if (r.error) alert('❌ ' + r.error);
   };
 
+  // V87: comprobar una vez si la lectura con IA está configurada
+  useEffect(() => {
+    if (activeSection !== 'gastos' || iaFacturas !== null) return;
+    invocarFuncion('leer-factura', { accion: 'estado' }).then(r => setIaFacturas(r?.error ? null : !!r?.ia));
+  }, [activeSection, iaFacturas]);
+
   // Al entrar en Gastos, procesar lo que haya llegado del correo y aún no se haya leído
   const hayFacturasNuevas = facturasRecibidas.some(f => f.estado === 'nueva');
   useEffect(() => {
@@ -2170,6 +2452,8 @@ const MainApp = () => {
           <div>
             <h3 className="font-bold flex items-center gap-2"><Inbox size={18} className="text-orange-600" /> Facturas recibidas {visibles.length > 0 && <Badge className="bg-orange-500 text-white">{visibles.length}</Badge>}</h3>
             <p className="text-xs text-neutral-500">Sube el PDF o una foto de la factura y se rellena sola. Las del correo de Peri llegan aquí cada mañana. Nada se registra hasta que pulses "Registrar".</p>
+            {iaFacturas === true && <p className="text-[11px] text-emerald-700 font-semibold mt-0.5">✨ Lectura con IA activa: nº, fecha, base, IVA, retención y categoría (como las facturas anteriores del proveedor).</p>}{/* V87 */}
+            {iaFacturas === false && <p className="text-[11px] text-red-600 font-semibold mt-0.5">⚠️ Lectura con IA desactivada: falta el secret ANTHROPIC_API_KEY en Supabase. Se rellenan copiando la factura anterior del proveedor.</p>}
           </div>
           <label className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm cursor-pointer ${subiendoFacturas ? 'bg-neutral-300 text-neutral-600' : 'bg-orange-500 text-white hover:bg-orange-600'}`}>
             {subiendoFacturas ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
@@ -2724,6 +3008,13 @@ const MainApp = () => {
         
         if (existentes && existentes.length > 0) {
           await supabase.from('asientos_contables').update({ concepto, fecha: fechaCobro }).eq('id', existentes[0].id);
+          // V87: con el importe actual de la factura (antes se quedaba el de un cobro antiguo)
+          await supabase.from('asiento_lineas').delete().eq('asiento_id', existentes[0].id);
+          const { error: errLin0 } = await supabase.from('asiento_lineas').insert([
+            { asiento_id: existentes[0].id, cuenta: '572', concepto: 'Bancos c/c', debe: factura.total, haber: 0 },
+            { asiento_id: existentes[0].id, cuenta: '430', concepto: 'Clientes', debe: 0, haber: factura.total },
+          ]);
+          if (errLin0) throw errLin0;
         } else {
           const numero = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
           const { data: nuevoAsiento, error } = await supabase.from('asientos_contables').insert({
@@ -4319,6 +4610,11 @@ const MainApp = () => {
       const contactosCliente = (clienteContactosData || []).filter(c => c.cliente_id === id).length;
       
       const totalRelaciones = pedidosCliente + facturasCliente + presupuestosCliente + tarifasCliente + contactosCliente;
+      // V87: las facturas emitidas se conservan (numeración correlativa y obligación de guardarlas)
+      if (facturasCliente > 0) {
+        alert(`⛔ No se puede eliminar este cliente: tiene ${facturasCliente} factura(s) emitida(s).\n\nLas facturas hay que conservarlas y borrarlas dejaría huecos en la numeración. Si ya no trabajáis con él, desactívalo (Activo = No) en su ficha.`);
+        return;
+      }
       
       if (totalRelaciones > 0) {
         const detalles = [];
@@ -12512,13 +12808,8 @@ ${pedidoLinea ? `^FO260,258
       }
     };
 
-    const handleDeleteFactura = async (id) => {
-      if (window.confirm('¿Eliminar esta factura?')) {
-        await supabase.from('facturas').delete().eq('id', id);
-        refetchFacturas();
-        setSelectedFacturas(selectedFacturas.filter(fId => fId !== id));
-      }
-    };
+    // V87: las facturas ya no se borran a pelo (dejaba huecos en la numeración): ver anularFactura
+    const handleDeleteFactura = (id) => { const f = facturas.find(x => x.id === id); if (f) anularFactura(f); };
 
     const handleExportSelected = () => {
       const toExport = selectedFacturas.length > 0 
@@ -12739,6 +13030,8 @@ ${transacciones}
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
           <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
         </div>
+
+        {renderControlSerie()}{/* V87 */}
 
         {/* V84: facturación por línea de negocio en el periodo elegido */}
         {renderAvisoLinea(facturasFiltradas.length, 'facturas')}
@@ -13241,7 +13534,7 @@ ${transacciones}
                         className="w-4 h-4 rounded"
                       />
                     </td>
-                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p><p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}{!factura.enviada_at && factura.envio_error && <p className="text-xs text-red-600" title={factura.envio_error}>❌ Envío fallido{factura.envio_intentos ? ` (${factura.envio_intentos})` : ''}</p>}{/* V83 */}</td>
+                    <td className="px-5 py-4"><p className="font-black">{factura.id}</p>{factura.pedido_id && <p className="text-xs text-neutral-400">Pedido #{factura.pedido_id}</p>}{factura.enviada_at && <p className="text-xs text-emerald-600" title={factura.enviada_a || ''}>✉️ Enviada {formatDateShort(factura.enviada_at)}</p>}{/* V82 */}{!factura.enviada_at && factura.envio_error && <p className="text-xs text-red-600" title={factura.envio_error}>❌ Envío fallido{factura.envio_intentos ? ` (${factura.envio_intentos})` : ''}</p>}{/* V83 */}{factura.estado === 'anulada' && <p className="text-xs text-neutral-500" title={factura.motivo_anulacion || ''}>⛔ {esNumeroAnulado(factura) ? 'Número anulado' : `Anulada${rectificativaDe(factura.id) ? ` por ${rectificativaDe(factura.id).id}` : ''}`}</p>}{esRectificativa(factura) && facturaRectificadaPor(factura) && <p className="text-xs text-purple-700">↩️ Rectifica {facturaRectificadaPor(factura)}</p>}{/* V87 */}</td>
                     <td className="px-5 py-4 font-semibold">{cliente?.nombre} {lineaFiltro === 'todas' && <BadgeLinea linea={lineaDeCliente(cliente)} className="ml-1" />}</td>{/* V84 */}
                     <td className="px-5 py-4 text-sm">{formatDate(factura.fecha)}</td>
                     <td className="px-5 py-4 font-bold text-lg">{formatCurrency(factura.total)}</td>
@@ -13250,18 +13543,18 @@ ${transacciones}
                       <div className="flex justify-end gap-1">
                         <button onClick={() => setSelectedFactura(factura)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Ver factura"><Eye size={16} /></button>
                         {/* V82: enviar la factura al cliente con un clic */}
-                        <button onClick={() => enviarFacturaCliente(factura)} className={`p-2 rounded-lg ${factura.enviada_at ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={factura.enviada_at ? `Reenviar (enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''})` : 'Enviar por email al cliente'}><Send size={16} /></button>
-                        {factura.tipo === 'agrupada' && (
+                        {!esNumeroAnulado(factura) && <button onClick={() => enviarFacturaCliente(factura)} className={`p-2 rounded-lg ${factura.enviada_at ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={factura.enviada_at ? `Reenviar (enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''})` : 'Enviar por email al cliente'}><Send size={16} /></button>}
+                        {factura.tipo === 'agrupada' && factura.estado !== 'anulada' && (
                           <>
                             <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
                             <button onClick={() => descargarZipAlbaranesFactura(factura)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Descargar ZIP con los albaranes valorados de esta factura">🗂️</button>
                             <button onClick={() => recalcularFacturaAgrupada(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales (corrige precios y doble IVA)"><Calculator size={16} /></button>
                           </>
                         )}
-                        {factura.tipo !== 'agrupada' && factura.pedido_id && (
+                        {factura.tipo !== 'agrupada' && factura.pedido_id && factura.estado !== 'anulada' && (
                           <button onClick={() => recalcularFacturaPedido(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales del cliente"><Calculator size={16} /></button>
                         )}
-                        {((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && (
+                        {factura.estado !== 'anulada' && ((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && (
                           <button onClick={() => { setEditingItem(factura); setShowModal('corregirFactura'); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Corregir descuento y portes de esta factura"><Edit2 size={16} /></button>
                         )}
                         {factura.estado === 'pendiente' && (
@@ -13282,7 +13575,13 @@ ${transacciones}
                             <RotateCcw size={16} />
                           </button>
                         )}
-                        <button onClick={() => handleDeleteFactura(factura.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
+                        {/* V87: anular con rectificativa (o borrar si es la última sin enviar ni cobrar) */}
+                        {factura.estado === 'anulada' && factura.pedido_id && !esNumeroAnulado(factura) && (
+                          <button onClick={() => facturarPedidoDeNuevo(factura)} className="p-2 text-emerald-700 hover:bg-emerald-50 rounded-lg text-xs font-bold" title={`Emitir una factura nueva del pedido #${factura.pedido_id}`}>Facturar de nuevo</button>
+                        )}
+                        {!['anulada', 'rectificativa'].includes(factura.estado) && !esRectificativa(factura) && (
+                          <button onClick={() => handleDeleteFactura(factura.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title={esUltimaDeSuSerie(factura, facturas) && !factura.enviada_at && factura.estado !== 'pagada' ? 'Borrar (es la última y no se ha enviado: su número se reutiliza)' : 'Anular con factura rectificativa (el número se mantiene)'}>{esUltimaDeSuSerie(factura, facturas) && !factura.enviada_at && factura.estado !== 'pagada' ? <Trash2 size={16} /> : <XCircle size={16} />}</button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -23599,9 +23898,10 @@ SELECT cron.schedule(
         ({ error } = await supabase.from('facturas').update(updFactura).eq('id', factura.id));
       }
       if (error) throw error;
+      await rehacerAsientoFactura(factura.id); // V87: el asiento sigue a la factura
       refetchFacturas();
       refetchAlbaranes();
-      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}\n\n⚠️ Si ya habías generado el asiento contable o enviado la factura anterior al cliente, revisa/reenvía.`);
+      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}\n\nSu asiento contable se ha rehecho.${factura.enviada_at ? ' ⚠️ Ya se había enviado al cliente: reenvíasela.' : ''}`);
     } catch (e) {
       alert('❌ Error al actualizar: ' + e.message);
     }
@@ -23683,10 +23983,11 @@ SELECT cron.schedule(
       }).eq('id', factura.id);
       if (error) throw error;
       
+      await rehacerAsientoFactura(factura.id); // V87
       refetchFacturas();
       refetchPedidoItems();
       refetchPedidos();
-      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}`);
+      alert(`✅ Factura ${factura.id} corregida con las tarifas actuales.\n\nNuevo total: ${formatCurrency(total)}${factura.enviada_at ? '\n\n⚠️ Ya se había enviado al cliente: reenvíasela.' : ''}`);
     } catch (e) {
       alert('❌ Error al actualizar: ' + e.message);
     }
@@ -23921,7 +24222,7 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
         `${Math.abs(diff) < 0.01 ? '' : diff < 0 ? `⬇️ Baja ${formatCurrency(-diff)}` : `⬆️ Sube ${formatCurrency(diff)}`}\n\n` +
         `Se mantiene el número de factura.` +
         (factura.estado === 'pagada' ? `\n\n⚠️ Esta factura ya está COBRADA: revisa el importe cobrado con el cliente.` : '') +
-        `\nSi ya contabilizaste o presentaste el IVA de esta factura, revisa el asiento.`
+        `\nSu asiento contable se rehará con el nuevo importe (V87).` + (factura.enviada_at ? `\n⚠️ Ya se envió al cliente: reenvíasela después.` : '')
       )) return;
       setGuardando(true);
       let avisoSinColumna = false;
@@ -23991,6 +24292,7 @@ ${factura.concepto ? `<div class="concepto"><strong>Concepto:</strong> ${factura
           if (error) throw error;
           if (pedidoFac) await supabase.from('pedidos').update({ total: nuevo.base }).eq('id', pedidoFac.id);
         }
+        await rehacerAsientoFactura(factura.id); // V87: el asiento sigue a la factura
         refetchFacturas();
         refetchAlbaranes();
         refetchPedidos();

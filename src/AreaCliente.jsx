@@ -28,6 +28,8 @@ const ESTADO_FACTURA = {
   pendiente: { label: 'Pendiente de pago', cls: 'bg-amber-100 text-amber-700' },
   vencida: { label: 'Vencida', cls: 'bg-red-100 text-red-700' },
   pagada: { label: 'Pagada', cls: 'bg-green-100 text-green-700' },
+  anulada: { label: 'Anulada', cls: 'bg-neutral-200 text-neutral-600' }, // V87
+  rectificativa: { label: 'Rectificativa', cls: 'bg-purple-100 text-purple-700' }, // V87
 };
 const ESTADO_SOLICITUD = {
   pendiente: { label: 'En revisión', cls: 'bg-amber-100 text-amber-700', Icon: Clock },
@@ -364,7 +366,11 @@ function FacturaDetalle({ factura: f, cliente, token, onClose }) {
           </div>
 
           <div className={`mt-5 p-3 rounded-xl border ${sepa ? 'bg-blue-50 border-blue-200' : 'bg-emerald-50 border-emerald-200'}`}>
-            {f.estado === 'pagada' ? (
+            {f.estado === 'rectificativa' ? (
+              <p>Factura rectificativa: anula por completo la factura <strong>{f.factura_rectificada_id || ''}</strong>{f.motivo_anulacion ? ` (${f.motivo_anulacion})` : ''}. Si ya la habías pagado, te devolvemos el importe o lo descontamos de tu próxima factura.</p>
+            ) : f.estado === 'anulada' ? (
+              <p className="font-semibold text-neutral-600">Factura anulada: no hay que pagarla.</p>
+            ) : f.estado === 'pagada' ? (
               <p className="font-semibold text-green-700">✓ Pagada{f.fecha_cobro ? ` el ${fecha(f.fecha_cobro)}` : ''}. ¡Gracias!</p>
             ) : sepa ? (
               <p>Se cobrará por <strong>domiciliación SEPA B2B</strong> el {fecha(f.fecha_vencimiento)} en la cuenta del mandato firmado.</p>
