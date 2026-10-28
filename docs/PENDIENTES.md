@@ -28,11 +28,27 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 ## 4. 🟠 Facturas de gasto automáticas (V85): ponerlas en marcha
 
 - ✅ (27/10) SQL V85 y V85b ejecutados, `leer-factura` desplegada, token en `config_privada`, alquileres de Bellbro corregidos en la tabla `gastos`.
-- Falta el secret `ANTHROPIC_API_KEY` en Supabase → Edge Functions → Secrets: una clave de API (`sk-ant-api03-…`) de console.anthropic.com, no la de la suscripción. Sin él las facturas entran en la bandeja pero hay que rellenarlas a mano. Cuando esté, pulsar "Releer" en las 2 facturas que ya hay en la bandeja.
+- ✅ (27/10) Secret `ANTHROPIC_API_KEY` puesto: probado con dos facturas de Bellbro ya registradas (las leyó perfectas y las marcó como duplicadas).
 - Tarea programada diaria "Facturas del correo al ERP" (8:33, revisa el Gmail de Peri) creada, pero **sin conectores**: hay que añadirle Gmail y Supabase desde claude.ai (Rutinas / tareas programadas) o no podrá leer el correo.
 - Tras desplegar V86 (merge a `main`), pulsar "Rehacer asientos" en Gastos para regenerar los asientos de los alquileres corregidos.
 - Modelo 115: no consta en el ERP ningún pago de retenciones. Confirmar con la gestoría que se presentaron el 2T y 3T. El pago del modelo debe saldar la 4751 (asiento manual), no registrarse como gasto.
 - Los gastos de Claude de abril–julio están como "exento"; la factura de octubre lleva IVA español del 21 %. Revisar con la gestoría si las anteriores también.
+
+## 4b. 🟠 Numeración de facturas (V87): dejarla limpia
+
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V87-NUMERACION-FACTURAS.sql` (columnas de anulación y trigger que impide borrar facturas que no sean la última).
+- En Facturación → panel "🔢 Numeración de facturas": "Registrar como anulados" (huecos 0004–0008, 0012, 0013 y 0017) y "Cuadrar contabilidad" (8 asientos de facturas borradas = 363,70 € de ventas que no existen, asientos repetidos de la 0001, 0002 y 0010, la 0003 con otro importe y el cobro de la 0001 por 37,02 € en vez de 644,38 €).
+- Revisar a mano el cobro A139 (`COB-F-2026-0005`, 87,36 € de Frutas Vázquez) de una factura borrada: si el dinero entró, tiene que ir contra la factura que la sustituyó.
+- Avisar a la asesoría de los números anulados y de que el IVA repercutido del 3T cambia al quitar las ventas de facturas borradas (si ya presentó el 303 con esos importes).
+
+## 4c. 🟠 Aprovisionamientos (V88): ponerlos en marcha
+
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V88-APROVISIONAMIENTOS.sql` (tablas, carga de las 18 facturas de material y recategoriza los gastos 59, 86, 151 y 162 con su asiento).
+- **Facturas duplicadas** (borrarlas en Gastos tras confirmarlo): #116 (17-jun, 147,77 €) es la misma factura polaca FV/B2B 92/5/2026 que la #92; #152 (1-oct, 354,52 €) es la **proforma** PROF 4/10/2026 del pedido que se facturó como #162. Juntas inflan semillas en 415 € de base y el IVA soportado en 87 €.
+- **IVA de las semillas de Polonia** (HYDRO / MP Seeds, #92, #117, #162): llevan IVA polaco (5–8 %, 23 % el envío) y están registradas con IVA español del 21 %. El IVA polaco no es deducible en España; lo correcto es pedirles factura intracomunitaria sin IVA (con el NIF-IVA ESB27535137 dado de alta en el ROI/VIES) y declarar la adquisición intracomunitaria (modelo 303/349). Consultarlo con la asesoría.
+- Pesar y apuntar los **gramos de semilla por bandeja** de las variedades marcadas "estimado" (rábano red, daikon, amaranto, remolacha, rúcula, brócoli, guisante…) y hacer un **recuento** de sacos de sustrato (fija los litros por bandeja), semillas (pesar bolsas) y tarrinas/etiquetas.
+- Revisar en "Envase y etiquetas de cada producto" que el envase por formato es el bueno (por defecto: 30 g y mezclas → tarrina 750 cc; 15 g → oval 250 cc; 5 g → oval 150 cc).
+- La compra a Fronda de brotes de cilantro (#119) está como "sustratos"; se trata como mercadería para revender (coste directo del cilantro de junio).
 
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
