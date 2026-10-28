@@ -20,6 +20,7 @@ import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
+import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -762,6 +763,8 @@ const MainApp = () => {
   const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
   const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
+  const [rentTab, setRentTab] = useState('analisis'); // V88: 'analisis' | 'aprov' (aprovisionamientos)
+  const [aprovLeyendo, setAprovLeyendo] = useState(null); // V88: gasto cuyas líneas está leyendo la IA
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
   const [envioCargando, setEnvioCargando] = useState(false); // V83
   
@@ -1610,6 +1613,9 @@ const MainApp = () => {
   const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
   const { data: facturasRecibidasData, refetch: refetchFacturasRecibidas } = useRealtime('facturas_recibidas'); // V85
+  const { data: materialesData, refetch: refetchMateriales } = useRealtime('materiales'); // V88
+  const { data: comprasMaterialData, refetch: refetchComprasMaterial } = useRealtime('compras_material'); // V88
+  const { data: recuentosMaterialData, refetch: refetchRecuentosMaterial } = useRealtime('recuentos_material'); // V88
   const { data: lotesData, refetch: refetchLotes } = useRealtime('lotes');
   const { data: proveedoresData, refetch: refetchProveedores } = useRealtime('proveedores');
   // V80 - Compras a particulares (Wallapop)
@@ -1724,6 +1730,9 @@ const MainApp = () => {
   const facturas = facturasData || [];
   const gastos = gastosData || [];
   const facturasRecibidas = facturasRecibidasData || []; // V85
+  const materialesV88 = materialesData || []; // V88
+  const comprasMaterial = comprasMaterialData || []; // V88
+  const recuentosMaterial = recuentosMaterialData || []; // V88
   const lotes = lotesData || [];
   const proveedores = proveedoresData || [];
   const comprasParticulares = comprasParticularesData || [];
@@ -3864,10 +3873,344 @@ const MainApp = () => {
     return { desde: `${valor}-01`, hasta: finMes(y, m), label: new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('es-ES', { month: 'long', year: 'numeric', timeZone: 'UTC' }) };
   };
 
+  // ==================== V88 — APROVISIONAMIENTOS REALES ====================
+  // Semillas, sustrato, envases y etiquetas con stock FIFO a partir de las líneas de las facturas de gasto
+  // (compras_material), consumidos según lotes sembrados y unidades entregadas. Cálculo en src/aprovisionamientos.js.
+  const entregasAprov = () => {
+    const hoy = new Date().toISOString().split('T')[0];
+    const out = [];
+    for (const p of pedidos) {
+      const f = String(p.fecha_entrega || p.fecha || '').slice(0, 10);
+      if (p.estado === 'cancelado' || !f || f > hoy) continue;
+      for (const i of pedidoItems.filter(x => x.pedido_id === p.id)) out.push({ fecha: f, producto_id: i.producto_id, cantidad: Number(i.cantidad) || 0, cliente_id: p.cliente_id });
+    }
+    return out;
+  };
+  const calcularAprov = () => {
+    if (!materialesV88.length) return null;
+    return calcularAprovisionamientos({
+      materiales: materialesV88, compras: comprasMaterial, recuentos: recuentosMaterial, gastos, lotes, variedades, productos,
+      entregas: entregasAprov(), mezclas, parametros: { litrosSustratoBandeja: parseFloat(String(ajusteSistema('litros_sustrato_por_bandeja', '')).replace(',', '.')) || 0 },
+    }, { desgloseGasto, gramosPorUnidad });
+  };
+  const fmtCantidad = (n, unidad) => {
+    const v = Number(n) || 0;
+    if (unidad === 'g') return Math.abs(v) >= 1000 ? `${(v / 1000).toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg` : `${Math.round(v)} g`;
+    if (unidad === 'l') return `${v.toLocaleString('es-ES', { maximumFractionDigits: 1 })} L`;
+    return `${Math.round(v).toLocaleString('es-ES')} ud`;
+  };
+  const fmtCosteUnitario = (u, unidad) => u == null ? '—' : unidad === 'g' ? `${(u * 1000).toFixed(2)} €/kg` : unidad === 'l' ? `${u.toFixed(3)} €/L` : `${u.toFixed(3)} €/ud`;
+
+  // Guarda las líneas de material de un gasto (de la IA o a mano). Crea los materiales nuevos que haga falta.
+  const guardarLineasCompra = async (gastoId, lineas, origen = 'manual', silencioso = false) => {
+    const nuevos = {};
+    const filas = [];
+    for (const l of lineas) {
+      let mid = l.material_id && materialesV88.some(m => m.id === Number(l.material_id)) ? Number(l.material_id) : null;
+      const nombreNuevo = String(l.material_nuevo || '').trim();
+      if (!mid && nombreNuevo) {
+        const existente = materialesV88.find(m => m.nombre.toLowerCase() === nombreNuevo.toLowerCase());
+        if (existente) mid = existente.id;
+        else if (nuevos[nombreNuevo.toLowerCase()]) mid = nuevos[nombreNuevo.toLowerCase()];
+        else {
+          const tipo = TIPOS_MATERIAL[l.material_tipo] ? l.material_tipo : 'otro';
+          const { data, error } = await supabase.from('materiales').insert({ tipo, nombre: nombreNuevo, unidad: l.unidad_material || TIPOS_MATERIAL[tipo].unidad }).select().single();
+          if (error) { alert((error.code === '42P01' ? '⚠️ Falta la tabla materiales: ejecuta el SQL V88.\n\n' : '❌ No se pudo crear el material: ') + error.message); return false; }
+          mid = data.id; nuevos[nombreNuevo.toLowerCase()] = data.id;
+        }
+      }
+      if (!mid || !(Number(l.cantidad_material ?? l.cantidad) > 0)) continue;
+      filas.push({ gasto_id: gastoId, material_id: mid, cantidad: Number(l.cantidad_material ?? l.cantidad), importe_linea: Number(l.importe) || 0, descripcion: l.descripcion || null, origen });
+    }
+    if (!filas.length) { if (!silencioso) alert('No hay líneas de material que guardar.'); return false; }
+    const { error } = await supabase.from('compras_material').insert(filas);
+    if (error) { alert((error.code === '42P01' ? '⚠️ Falta la tabla compras_material: ejecuta el SQL V88.\n\n' : '❌ No se pudieron guardar las líneas: ') + error.message); return false; }
+    refetchMateriales(); refetchComprasMaterial();
+    if (!silencioso) alert(`✅ ${filas.length} línea(s) de material guardadas${Object.keys(nuevos).length ? ` (${Object.keys(nuevos).length} material(es) nuevo(s))` : ''}.`);
+    return true;
+  };
+
+  // La IA lee el PDF de un gasto ya registrado y propone sus líneas de material
+  const leerLineasGastoIA = async (g) => {
+    setAprovLeyendo(g.id);
+    const r = await invocarFuncion('leer-factura', { accion: 'lineas_gasto', gasto_id: g.id });
+    setAprovLeyendo(null);
+    if (r.error || !r.ok) { alert('❌ ' + (r.error || 'No se pudo leer la factura')); return; }
+    const ls = (r.lineas || []).filter(l => Number(l.cantidad_material) > 0);
+    if (!ls.length) { alert(`La IA no ha encontrado líneas de semillas, sustrato, envases ni etiquetas en esta factura.${r.notas ? `\n\nNotas: ${r.notas}` : ''}`); return; }
+    const nombreMat = (l) => materialesV88.find(m => m.id === Number(l.material_id))?.nombre || `🆕 ${l.material_nuevo || l.descripcion}`;
+    if (!window.confirm(`Líneas leídas de la factura ${r.numero_factura || ''} (${r.proveedor || ''}):\n\n${ls.map(l => `• ${nombreMat(l)}: ${fmtCantidad(l.cantidad_material, l.unidad_material)} · ${formatCurrency(l.importe || 0)}`).join('\n')}${r.notas ? `\n\nNotas de la IA: ${r.notas}` : ''}\n\n¿Guardarlas? (el coste se reparte con la base del gasto, incluidos portes)`)) return;
+    await guardarLineasCompra(g.id, ls, 'ia');
+  };
+
+  const anadirLineaManual = async (g) => {
+    const lista = materialesV88.filter(m => m.activo !== false).map((m, i) => `${i + 1}. ${m.nombre} (${m.unidad})`).join('\n');
+    const elegido = window.prompt(`Línea de material del gasto "${g.concepto}" (${formatCurrency(g.importe)}).\n\nEscribe el número del material o el nombre de uno nuevo (p. ej. "Semilla girasol"):\n\n${lista}`);
+    if (!elegido) return;
+    const activos = materialesV88.filter(m => m.activo !== false);
+    const idx = parseInt(elegido, 10);
+    let linea = { descripcion: 'Añadida a mano' };
+    if (idx >= 1 && idx <= activos.length && String(idx) === elegido.trim()) linea.material_id = activos[idx - 1].id;
+    else {
+      const tipo = window.prompt('Tipo del material nuevo: semilla, sustrato, envase, etiqueta, mercaderia u otro', 'semilla');
+      if (!tipo || !TIPOS_MATERIAL[tipo.trim()]) { alert('Tipo no válido.'); return; }
+      linea = { ...linea, material_nuevo: elegido.trim(), material_tipo: tipo.trim(), unidad_material: TIPOS_MATERIAL[tipo.trim()].unidad };
+    }
+    const unidad = linea.material_id ? activos[idx - 1].unidad : linea.unidad_material;
+    const cant = parseFloat(String(window.prompt(`Cantidad en ${unidad === 'g' ? 'gramos' : unidad === 'l' ? 'litros' : 'unidades'}:`) || '').replace(',', '.'));
+    if (!(cant > 0)) return;
+    const imp = parseFloat(String(window.prompt('Importe de esa línea en la factura (€). Si es la única línea, pon el total:', String(g.importe)) || '').replace(',', '.'));
+    if (!(imp >= 0)) return;
+    await guardarLineasCompra(g.id, [{ ...linea, cantidad_material: cant, importe: imp }], 'manual');
+  };
+
+  const borrarLineaCompra = async (l) => {
+    if (!window.confirm('¿Quitar esta línea de material? (el gasto no se toca)')) return;
+    const { error } = await supabase.from('compras_material').delete().eq('id', l.id);
+    if (error) alert('❌ ' + error.message); else refetchComprasMaterial();
+  };
+
+  const registrarRecuento = async (pm) => {
+    const m = pm.material;
+    const unidadTxt = m.unidad === 'g' ? 'gramos' : m.unidad === 'l' ? 'litros' : 'unidades';
+    const v = window.prompt(`📋 Recuento de "${m.nombre}"\n\nSegún compras y consumo debería haber ${fmtCantidad(pm.stock, m.unidad)}.\n\n¿Cuánto hay de verdad hoy? (en ${unidadTxt}${m.unidad === 'l' ? '; un saco = 100 L' : m.unidad === 'g' ? '; pesa la bolsa' : ''})`);
+    if (v === null) return;
+    const cant = parseFloat(String(v).replace(',', '.'));
+    if (!(cant >= 0)) { alert('Cantidad no válida.'); return; }
+    const { error } = await supabase.from('recuentos_material').insert({ material_id: m.id, fecha: new Date().toISOString().split('T')[0], cantidad: cant, hecho_por: user?.email || null });
+    if (error) { alert((error.code === '42P01' ? '⚠️ Ejecuta el SQL V88.\n\n' : '❌ ') + error.message); return; }
+    refetchRecuentosMaterial();
+    const dif = pm.stock - cant;
+    alert(`✅ Recuento guardado.${Math.abs(dif) > 0.0001 ? `\n\nDiferencia con lo teórico: ${fmtCantidad(dif, m.unidad)} (${dif > 0 ? 'se ha gastado más de lo calculado: merma o g/bandeja más altos' : 'se ha gastado menos de lo calculado'}). Se carga como ajuste en este mes.` : ''}`);
+  };
+
+  const editarSemillaVariedad = async (v, actual) => {
+    const val = window.prompt(`Gramos de semilla por bandeja de ${v.nombre} (los que pesáis al sembrar):`, actual ? String(actual) : '');
+    if (val === null) return;
+    const g = parseFloat(String(val).replace(',', '.'));
+    if (!(g >= 0)) return;
+    const { error } = await supabase.from('variedades').update({ gramos_semilla_por_bandeja: g }).eq('id', v.id);
+    if (error) alert('❌ ' + error.message); else refetchVariedades();
+  };
+
+  const cambiarEnvaseProducto = async (p, valor) => {
+    const envase_material_id = valor === 'auto' ? null : Number(valor);
+    const { error } = await supabase.from('productos').update({ envase_material_id }).eq('id', p.id);
+    if (error) alert((error.code === '42703' ? '⚠️ Ejecuta el SQL V88.\n\n' : '❌ ') + error.message); else refetchProductos();
+  };
+  const cambiarEtiquetasProducto = async (p) => {
+    const val = window.prompt(`Etiquetas por unidad de ${p.nombre} (vacío = 1 si lleva envase):`, p.etiquetas_por_unidad ?? '');
+    if (val === null) return;
+    const n = String(val).trim() === '' ? null : parseFloat(String(val).replace(',', '.'));
+    const { error } = await supabase.from('productos').update({ etiquetas_por_unidad: n }).eq('id', p.id);
+    if (error) alert((error.code === '42703' ? '⚠️ Ejecuta el SQL V88.\n\n' : '❌ ') + error.message); else refetchProductos();
+  };
+
+  // Posibles facturas de material registradas dos veces (mismo proveedor e importe en menos de 60 días)
+  const posiblesDuplicadosMaterial = () => {
+    const mats = gastos.filter(g => ['semillas', 'sustratos', 'embalajes'].includes(g.categoria) || comprasMaterial.some(c => c.gasto_id === g.id)).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+    const out = [];
+    for (let i = 0; i < mats.length; i++) for (let j = i + 1; j < mats.length; j++) {
+      const a = mats[i], b = mats[j];
+      const dias = (new Date(b.fecha) - new Date(a.fecha)) / 86400000;
+      if (dias > 60) break;
+      if (a.proveedor_id && a.proveedor_id === b.proveedor_id && Math.abs((parseFloat(a.importe) || 0) - (parseFloat(b.importe) || 0)) < 0.01
+        && !(a.numero_factura && b.numero_factura && a.numero_factura !== b.numero_factura)) out.push([a, b]);
+    }
+    return out;
+  };
+
+  const renderAprovisionamientos = (a) => {
+    if (!materialesV88.length) return (
+      <Card className="p-6 text-center space-y-2">
+        <p className="text-lg font-bold">📦 Aprovisionamientos</p>
+        <p className="text-neutral-600">Falta ejecutar el SQL V88 en Supabase (<code>supabase/sql/ROOTFLOW-SQL-V88-APROVISIONAMIENTOS.sql</code>): crea el catálogo de materiales y carga las facturas de semillas, sustrato y envases ya registradas.</p>
+      </Card>
+    );
+    const eur = (n) => (n == null ? '—' : formatCurrency(n));
+    const th = 'px-3 py-2 text-right text-[11px] font-bold uppercase text-neutral-500 whitespace-nowrap';
+    const td = 'px-3 py-1.5 text-right whitespace-nowrap tabular-nums';
+    const stockTotal = a.porMaterial.reduce((t, m) => t + m.valorStock, 0);
+    const consumoTotal = a.porMaterial.reduce((t, m) => t + m.costeConsumido, 0);
+    const ajusteTotal = a.porMaterial.reduce((t, m) => t + m.costeAjuste, 0);
+    const meses = [...new Set([...Object.keys(a.consumoTipoMes), ...Object.keys(a.comprasMes)])].sort();
+    const tipos = Object.keys(TIPOS_MATERIAL).filter(t => meses.some(m => a.consumoTipoMes[m]?.[t]));
+    const conAjustes = meses.some(m => a.consumoTipoMes[m]?.ajustes);
+    const gastosMaterial = gastos.filter(g => ['semillas', 'sustratos', 'embalajes'].includes(g.categoria)).sort((x, y) => String(y.fecha).localeCompare(String(x.fecha)));
+    const sinLineas = gastosMaterial.filter(g => !comprasMaterial.some(c => c.gasto_id === g.id));
+    const duplicados = posiblesDuplicadosMaterial();
+    const variedadesConLotes = variedades.filter(v => lotes.some(l => l.variedad_id === v.id) || materialesV88.some(m => m.tipo === 'semilla' && (Array.isArray(m.variedad_ids) ? m.variedad_ids : []).includes(v.id)));
+    const productosVendidos = productos.filter(p => pedidoItems.some(i => i.producto_id === p.id) && Number(p.formato_gramos) > 0 && p.unidad !== 'g');
+    const envasesMat = materialesV88.filter(m => m.tipo === 'envase');
+    const lineasDe = (gid) => comprasMaterial.filter(c => c.gasto_id === gid);
+    const nombreMat = (id) => materialesV88.find(m => m.id === id)?.nombre || '—';
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Card className="p-4"><p className="text-[11px] font-bold uppercase text-neutral-500">Existencias (stock valorado)</p><p className="text-2xl font-black mt-1">{eur(stockTotal)}</p><p className="text-xs text-neutral-500">comprado y aún sin usar · coste FIFO</p></Card>
+          <Card className="p-4"><p className="text-[11px] font-bold uppercase text-neutral-500">Consumido</p><p className="text-2xl font-black mt-1">{eur(consumoTotal)}</p><p className="text-xs text-neutral-500">lo que entra en el margen bruto</p></Card>
+          <Card className="p-4"><p className="text-[11px] font-bold uppercase text-neutral-500">Ajustes por recuento</p><p className={`text-2xl font-black mt-1 ${ajusteTotal > 0.005 ? 'text-red-600' : ''}`}>{eur(ajusteTotal)}</p><p className="text-xs text-neutral-500">mermas y diferencias con lo calculado</p></Card>
+          <Card className="p-4"><p className="text-[11px] font-bold uppercase text-neutral-500">Sustrato por bandeja</p><p className="text-2xl font-black mt-1">{a.parametros.litrosBandeja ? `${a.parametros.litrosBandeja.toFixed(2)} L` : '—'}</p><p className="text-xs text-neutral-500">{a.parametros.litrosOrigen === 'manual' ? 'fijado a mano' : a.parametros.litrosOrigen === 'compras' ? 'provisional: litros comprados ÷ bandejas (haz un recuento de sacos)' : `medido con el ${a.parametros.litrosOrigen}`} · <button className="underline text-orange-600" onClick={async () => { const v = window.prompt('Litros de sustrato por bandeja (vacío = calcularlo con compras ÷ bandejas):', ajusteSistema('litros_sustrato_por_bandeja', '')); if (v !== null && await guardarAjusteSistema('litros_sustrato_por_bandeja', String(v).trim())) alert('✅ Guardado'); }}>cambiar</button></p></Card>
+        </div>
+
+        {(duplicados.length > 0 || a.avisos.length > 0 || sinLineas.length > 0) && (
+          <Card className="p-4 border-2 border-amber-300 bg-amber-50/50 space-y-2 text-sm">
+            {duplicados.map(([x, y]) => <p key={`${x.id}-${y.id}`}>⚠️ <strong>¿Factura duplicada?</strong> Gastos #{x.id} ({formatDate(x.fecha)}) y #{y.id} ({formatDate(y.fecha)}): mismo proveedor e importe ({formatCurrency(x.importe)}). Si es la misma factura (o una proforma y su factura), borra uno en Gastos.</p>)}
+            {a.avisos.filter(v => v.tipo === 'stock_negativo').map(v => <p key={v.material}>⚠️ <strong>{v.material}</strong>: se ha consumido {fmtCantidad(v.cantidad, v.unidad)} más de lo comprado. Falta alguna factura, o los gramos por bandeja / el envase de algún producto están mal.</p>)}
+            {a.avisos.filter(v => v.tipo === 'sin_semilla').length > 0 && <p>🌱 Sembradas sin semilla en el catálogo: {a.avisos.filter(v => v.tipo === 'sin_semilla').map(v => `${v.variedad} (${v.bandejas.toFixed(0)} bandejas)`).join(', ')}. Asígnalas a una semilla abajo o añade su factura.</p>}
+            {sinLineas.length > 0 && <p>🧾 {sinLineas.length} factura(s) de semillas, sustrato o envases sin desglose: cuentan como gasto el mes de la compra (no como stock). Léelas con IA abajo.</p>}
+          </Card>
+        )}
+
+        {/* Materiales */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-bold">Stock de materiales</h3>
+              <p className="text-xs text-neutral-500">Comprado (facturas) − consumido (lotes sembrados y unidades entregadas) − ajustes = stock. Haz un recuento de vez en cuando: la diferencia se carga como merma y todo cuadra con la realidad.</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(a.porMaterial, 'aprovisionamientos_stock', [
+              { header: 'Tipo', accessor: x => TIPOS_MATERIAL[x.material.tipo]?.label },
+              { header: 'Material', accessor: x => x.material.nombre },
+              { header: 'Unidad', accessor: x => x.material.unidad },
+              { header: 'Comprado', accessor: x => Math.round(x.comprado * 100) / 100 },
+              { header: 'Coste compras (€)', accessor: x => Math.round(x.costeComprado * 100) / 100 },
+              { header: 'Consumido', accessor: x => Math.round(x.consumido * 100) / 100 },
+              { header: 'Coste consumido (€)', accessor: x => Math.round(x.costeConsumido * 100) / 100 },
+              { header: 'Ajustes', accessor: x => Math.round(x.ajuste * 100) / 100 },
+              { header: 'Stock', accessor: x => Math.round(x.stock * 100) / 100 },
+              { header: 'Valor stock (€)', accessor: x => Math.round(x.valorStock * 100) / 100 },
+            ])}><Download size={14} />Excel</Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 border-b"><tr>
+                <th className={`${th} text-left`}>Material</th><th className={th}>Comprado</th><th className={th}>Coste</th><th className={th}>Consumido</th><th className={th}>Coste</th><th className={th}>Ajustes</th><th className={th}>Stock</th><th className={th}>Valor</th><th className={th}>Coste actual</th><th className={th}>Último recuento</th><th className={th}></th>
+              </tr></thead>
+              <tbody>
+                {a.porMaterial.map(pm => (
+                  <tr key={pm.material.id} className="border-b hover:bg-neutral-50">
+                    <td className="px-3 py-1.5 whitespace-nowrap"><span className="mr-1">{TIPOS_MATERIAL[pm.material.tipo]?.icono}</span><span className="font-semibold">{pm.material.nombre}</span></td>
+                    <td className={td}>{fmtCantidad(pm.comprado, pm.material.unidad)}</td>
+                    <td className={td}>{eur(pm.costeComprado)}</td>
+                    <td className={td} title={pm.consumidoEstimado > 0 ? `${fmtCantidad(pm.consumidoEstimado, pm.material.unidad)} estimado (sin ficha de la variedad o antes de registrar lotes)` : ''}>{fmtCantidad(pm.consumido, pm.material.unidad)}{pm.consumidoEstimado > 0.5 && <span className="text-neutral-400"> ~</span>}</td>
+                    <td className={td}>{eur(pm.costeConsumido)}</td>
+                    <td className={`${td} ${pm.costeAjuste > 0.005 ? 'text-red-600' : ''}`}>{Math.abs(pm.ajuste) > 0.001 ? eur(pm.costeAjuste) : '—'}</td>
+                    <td className={`${td} font-bold ${pm.stock < -0.001 ? 'text-red-600' : ''}`}>{fmtCantidad(pm.stock, pm.material.unidad)}</td>
+                    <td className={td}>{eur(pm.valorStock)}</td>
+                    <td className={td}>{fmtCosteUnitario(pm.costeUnitario, pm.material.unidad)}</td>
+                    <td className={`${td} text-xs text-neutral-500`}>{pm.ultimoRecuento ? `${formatDate(pm.ultimoRecuento.fecha)} · ${fmtCantidad(pm.ultimoRecuento.cantidad, pm.material.unidad)}` : '—'}</td>
+                    <td className="px-2 py-1.5"><button onClick={() => registrarRecuento(pm)} className="px-2 py-1 rounded-lg border text-xs font-semibold hover:bg-neutral-50 whitespace-nowrap">📋 Recuento</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Consumo por mes */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b"><h3 className="font-bold">Coste de materiales por mes (consumo, no compras)</h3><p className="text-xs text-neutral-500">Lo que se gasta cada mes según lo sembrado y lo entregado. La diferencia con las compras es la variación de existencias (stock que queda para meses siguientes).</p></div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 border-b"><tr><th className={`${th} text-left`}>Concepto</th>{meses.map(m => <th key={m} className={th}>{new Date(`${m}-15`).toLocaleDateString('es-ES', { month: 'short', year: '2-digit' })}</th>)}<th className={`${th} bg-neutral-100`}>Total</th></tr></thead>
+              <tbody>
+                {[...tipos.map(t => ({ label: `${TIPOS_MATERIAL[t].icono} ${TIPOS_MATERIAL[t].label}`, v: (m) => a.consumoTipoMes[m]?.[t] || 0 })),
+                  ...(conAjustes ? [{ label: '📋 Mermas y ajustes de inventario', v: (m) => a.consumoTipoMes[m]?.ajustes || 0 }] : []),
+                  { label: 'Consumo total', v: (m) => Object.values(a.consumoTipoMes[m] || {}).reduce((t, x) => t + x, 0), fuerte: true },
+                  { label: 'Compras con desglose', v: (m) => a.comprasMes[m] || 0, gris: true },
+                  { label: 'Variación de existencias (compras − consumo)', v: (m) => (a.comprasMes[m] || 0) - Object.values(a.consumoTipoMes[m] || {}).reduce((t, x) => t + x, 0), gris: true },
+                ].map((f, i) => {
+                  const total = meses.reduce((t, m) => t + f.v(m), 0);
+                  return <tr key={i} className={`border-b ${f.fuerte ? 'bg-neutral-50 font-bold' : ''} ${f.gris ? 'text-neutral-500' : ''}`}><td className="px-3 py-1.5 whitespace-nowrap">{f.label}</td>{meses.map(m => <td key={m} className={td}>{Math.abs(f.v(m)) > 0.004 ? eur(f.v(m)) : '—'}</td>)}<td className={`${td} bg-neutral-100 font-semibold`}>{eur(total)}</td></tr>;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {/* Facturas de material y sus líneas */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b"><h3 className="font-bold">Facturas de aprovisionamiento</h3><p className="text-xs text-neutral-500">Cada factura de semillas, sustrato o envases con lo que trae. Las nuevas de la bandeja se desglosan solas al registrarlas; para las demás, "Leer con IA" o añade las líneas a mano.</p></div>
+          <div className="divide-y">
+            {gastosMaterial.map(g => {
+              const ls = lineasDe(g.id);
+              const prov = proveedores.find(p => p.id === g.proveedor_id)?.nombre;
+              return (
+                <div key={g.id} className="p-3 flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm"><span className="text-neutral-400">#{g.id}</span> <strong>{formatDate(g.fecha)}</strong> · {prov || 'Sin proveedor'} · {g.concepto} · <strong>{formatCurrency(g.importe)}</strong>{g.numero_factura ? <span className="text-neutral-400"> · nº {g.numero_factura}</span> : ''}</p>
+                    {ls.length > 0
+                      ? <p className="text-xs text-neutral-600 mt-0.5">{ls.map(l => <span key={l.id} className="inline-flex items-center gap-1 mr-3">{nombreMat(l.material_id)}: {fmtCantidad(l.cantidad, materialesV88.find(m => m.id === l.material_id)?.unidad)}<button onClick={() => borrarLineaCompra(l)} className="text-neutral-300 hover:text-red-600" title="Quitar línea">×</button></span>)}</p>
+                      : <p className="text-xs text-amber-700 mt-0.5">Sin desglose: cuenta como gasto del mes de compra</p>}
+                  </div>
+                  <div className="flex gap-1.5">
+                    {g.factura_url && <a href={g.factura_url} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold hover:bg-neutral-50 inline-flex items-center gap-1"><Eye size={13} />PDF</a>}
+                    {g.factura_url && <Button size="sm" variant="secondary" disabled={aprovLeyendo === g.id} onClick={() => leerLineasGastoIA(g)}>{aprovLeyendo === g.id ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}Leer con IA</Button>}
+                    <Button size="sm" variant="secondary" onClick={() => anadirLineaManual(g)}><Plus size={13} />Línea</Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        {/* Parámetros de consumo */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b"><h3 className="font-bold">🌱 Semilla por bandeja</h3><p className="text-xs text-neutral-500">Gramos que se siembran por bandeja. Las marcadas "estimado" usan la referencia del sector × {a.parametros.factorBandeja.toFixed(2)} (el tamaño de vuestras bandejas según las fichas que sí tenéis): pésalo y apúntalo.</p></div>
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 border-b"><tr><th className={`${th} text-left`}>Variedad</th><th className={th}>g/bandeja</th><th className={`${th} text-left`}>Semilla</th><th className={th}>€/bandeja</th></tr></thead>
+              <tbody>
+                {variedadesConLotes.map(v => {
+                  const gs = a.parametros.gramosSemilla[v.id] || { g: 0, estimado: true };
+                  const sem = materialesV88.find(m => m.tipo === 'semilla' && (Array.isArray(m.variedad_ids) ? m.variedad_ids : []).includes(v.id));
+                  const pm = sem && a.porMaterial.find(x => x.material.id === sem.id);
+                  return (
+                    <tr key={v.id} className="border-b">
+                      <td className="px-3 py-1.5 font-semibold">{v.nombre}</td>
+                      <td className={td}><button onClick={() => editarSemillaVariedad(v, gs.estimado ? '' : gs.g)} className={`underline decoration-dotted ${gs.estimado ? 'text-amber-700' : ''}`}>{gs.g ? `${gs.g} g` : '—'}{gs.estimado && gs.g ? ' (estimado)' : ''}</button></td>
+                      <td className="px-3 py-1.5 text-xs">{sem ? sem.nombre : <span className="text-red-600">sin semilla en el catálogo</span>}</td>
+                      <td className={td}>{pm?.costeUnitario && gs.g ? eur(pm.costeUnitario * gs.g) : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Card>
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b"><h3 className="font-bold">🥡 Envase y etiquetas de cada producto</h3><p className="text-xs text-neutral-500">"Automático" = el envase que corresponde a su formato en gramos. Coste por unidad con el precio actual de stock.</p></div>
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 border-b"><tr><th className={`${th} text-left`}>Producto</th><th className={`${th} text-left`}>Envase</th><th className={th}>Etiquetas</th></tr></thead>
+              <tbody>
+                {productosVendidos.map(p => (
+                  <tr key={p.id} className="border-b">
+                    <td className="px-3 py-1.5 font-semibold whitespace-nowrap">{p.nombre}</td>
+                    <td className="px-3 py-1.5">
+                      <select value={p.envase_material_id === null || p.envase_material_id === undefined ? 'auto' : String(p.envase_material_id)} onChange={e => cambiarEnvaseProducto(p, e.target.value)} className="px-2 py-1 rounded-lg border bg-white text-xs max-w-[220px]">
+                        <option value="auto">Automático ({envasesMat.find(m => (Array.isArray(m.formatos_gramos) ? m.formatos_gramos : []).map(Number).includes(Number(p.formato_gramos)))?.nombre || 'ninguno'})</option>
+                        {envasesMat.map(m => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+                        <option value="0">Sin envase</option>
+                      </select>
+                    </td>
+                    <td className={td}><button onClick={() => cambiarEtiquetasProducto(p)} className="underline decoration-dotted">{p.etiquetas_por_unidad ?? 'auto'}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
   const renderRentabilidad = () => {
     const per = periodoRentabilidad(rentPeriodo);
+    let aprov = null; // V88: materiales por consumo real (si hay catálogo y líneas de compra)
+    try { aprov = calcularAprov(); } catch (e) { console.error('Aprovisionamientos', e); }
+    const aprovActivo = !!aprov && comprasMaterial.length > 0;
     const r = calcularRentabilidad(
-      { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes },
+      { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovActivo ? aprov : null },
       { desde: per.desde, hasta: per.hasta, reparto: rentReparto, linea: lineaFiltro },
       { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
     );
@@ -3965,7 +4308,10 @@ const MainApp = () => {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-3xl font-black text-neutral-900">📈 Rentabilidad</h1>
-            <p className="text-neutral-500 font-medium">Margen bruto, EBITDA y EBIT por mes, variedad, línea de negocio y cliente · {per.label} · sin IVA</p>
+            <p className="text-neutral-500 font-medium">Margen bruto, EBITDA y EBIT por mes, variedad, producto, línea de negocio y cliente · {per.label} · sin IVA</p>
+            <div className="inline-flex mt-2 rounded-xl border bg-white p-0.5 text-sm font-semibold">{/* V88 */}
+              {[['analisis', '📊 Análisis'], ['aprov', '📦 Aprovisionamientos']].map(([k, l]) => <button key={k} onClick={() => setRentTab(k)} className={`px-3 py-1.5 rounded-lg ${rentTab === k ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{l}</button>)}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select value={rentPeriodo} onChange={e => setRentPeriodo(e.target.value)} className="px-3 py-2 rounded-xl border bg-white font-semibold text-sm">
@@ -3988,6 +4334,7 @@ const MainApp = () => {
           </div>
         </div>
 
+        {rentTab === 'aprov' ? renderAprovisionamientos(aprov) : <>
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <Kpi titulo="Ventas netas" valor={eur(t.ventas)} sub={`${eur(t.ventasMes)} al mes · ${kgf(t.kg)}`} />
@@ -4010,7 +4357,7 @@ const MainApp = () => {
         <Card className="overflow-hidden">
           <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-bold">Cuenta de resultados analítica</h3>
-            <span className="text-xs text-neutral-500">Ventas por fecha de factura · gastos por fecha de factura del proveedor · compras de semilla y envases en el mes en que se compran</span>
+            <span className="text-xs text-neutral-500">Ventas por fecha de factura · gastos por fecha de factura del proveedor · {aprovActivo ? <>materiales por <strong>consumo real</strong> (lo sembrado y lo entregado cada mes; lo comprado y no usado queda en existencias: {formatCurrency(aprov.porMaterial.reduce((t, m) => t + m.valorStock, 0))})</> : 'compras de semilla y envases en el mes en que se compran'}</span>
           </div>
           {mesesConDatos.length === 0 ? <p className="p-6 text-center text-neutral-500">No hay ventas ni gastos en este periodo.</p> : (
             <div className="overflow-x-auto">
@@ -4056,6 +4403,21 @@ const MainApp = () => {
           })}
         </Card>
 
+        {/* V88: Por producto (formato) */}
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-bold">Por producto</h3>
+              <p className="text-xs text-neutral-500">Cada formato con su envase: {aprovActivo ? 'materiales = cultivo (coste por gramo producido de la variedad) + envase y etiquetas de ese formato' : 'los envases se reparten por unidades vendidas de la variedad'}. Todas las líneas de negocio.</p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => exportToExcel(r.porProducto, `rentabilidad_productos_${rentPeriodo.replace(':', '_')}`, [...colsDetalle('Producto', 'producto'), { header: 'Unidades', accessor: x => x.unidades }, { header: '€/unidad', accessor: x => x.eurUnidad == null ? '' : Math.round(x.eurUnidad * 100) / 100 }, { header: 'Materiales/unidad', accessor: x => x.materialesUnidad == null ? '' : Math.round(x.materialesUnidad * 1000) / 1000 }, { header: 'EBITDA/unidad', accessor: x => x.ebitdaUnidad == null ? '' : Math.round(x.ebitdaUnidad * 100) / 100 }])}><Download size={14} />Excel</Button>
+          </div>
+          {r.porProducto.length === 0 ? <p className="p-6 text-center text-neutral-500">Sin ventas en este periodo.</p> : tablaDetalle(r.porProducto, 'Producto', x => x.producto, {
+            cabecera: <><th className={th}>Uds</th><th className={th}>€/ud</th><th className={th}>Mat./ud</th></>,
+            celdas: x => <><td className={td}>{x.unidades}</td><td className={td}>{x.eurUnidad == null ? '—' : formatCurrency(x.eurUnidad)}</td><td className={td}>{x.materialesUnidad == null ? '—' : formatCurrency(x.materialesUnidad)}</td></>,
+          })}
+        </Card>
+
         {/* Por línea de negocio */}
         <Card className="overflow-hidden">
           <div className="p-4 border-b"><h3 className="font-bold">Por línea de negocio</h3><p className="text-xs text-neutral-500">Cada kg vendido carga el coste por kg de su variedad en ese mes. Plan: distribución 44 €/kg, restaurantes 173 €/kg.</p></div>
@@ -4079,12 +4441,15 @@ const MainApp = () => {
           <p className="font-bold text-sm text-neutral-800">Cómo se calcula</p>
           <p>• <strong>Ventas</strong>: base imponible de las facturas emitidas (sin IVA ni recargo), repartida entre sus líneas de pedido o albarán; los portes van aparte.</p>
           <p>• <strong>Margen bruto</strong> = ventas − semillas, sustrato y envases. <strong>Margen de contribución</strong> = margen bruto − luz, agua y transporte. <strong>EBITDA</strong> = contribución − estructura (alquiler, asesoría, software, publicidad…). <strong>EBIT</strong> = EBITDA − amortización de las inversiones (CAPEX, lineal según su vida útil).</p>
-          <p>• Los gastos cuentan <strong>sin IVA</strong> (base del desglose del gasto). Las compras de semilla y envases cuentan el mes en que se compran: si se compra para varios meses, mira el trimestre o el año.</p>
+          {aprovActivo
+            ? <p>• <strong>Materiales por consumo real</strong> (pestaña Aprovisionamientos): cada factura de semillas, sustrato y envases entra en existencias y se carga cuando se usa (FIFO): la semilla y el sustrato de cada lote, a su variedad, el mes que se siembra; el envase y las etiquetas, al producto, el mes que se entrega. Cada venta lleva el coste por gramo producido de los lotes recientes de su variedad y el envase de su formato. Las facturas de material sin desglose siguen contando el mes de compra.</p>
+            : <p>• Los gastos cuentan <strong>sin IVA</strong> (base del desglose del gasto). Las compras de semilla y envases cuentan el mes en que se compran: si se compra para varios meses, mira el trimestre o el año (o ejecuta el SQL V88 para calcularlo por consumo real).</p>}
           {r.avisos.mesesSinLotes > 0 && <p className="text-amber-700">⚠️ {r.avisos.mesesSinLotes} mes(es) con ventas pero sin lotes sembrados registrados: ahí el reparto por variedad se hace con bandejas estimadas a partir de los kg vendidos.</p>}
           {r.avisos.facturasSinDetalle > 0 && <p className="text-amber-700">⚠️ {r.avisos.facturasSinDetalle} factura(s) sin líneas de pedido o albarán ({eur(r.avisos.importeSinDetalle)}): cuentan en la cuenta de resultados pero no se pueden asignar a ninguna variedad.</p>}
           {r.avisos.lineasSinGramos > 0 && <p className="text-amber-700">⚠️ {r.avisos.lineasSinGramos} línea(s) de productos sin formato en gramos: no suman kilos (rellena el formato del producto).</p>}
           {Math.abs(r.noAsignado) > 1 && <p>• {eur(r.noAsignado)} de costes no se cargan a ningún cliente: meses sin ventas (p. ej. antes de empezar a facturar), producción sembrada que no se vendió en el mes y facturas sin detalle. Sí están en la cuenta de resultados.</p>}
         </Card>
+        </>}
       </div>
     );
   };
@@ -31530,6 +31895,9 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           const { error } = await supabase.from('facturas_recibidas').update({ estado: 'registrada', gasto_id: gastoId, updated_at: new Date().toISOString() }).eq('id', facturaRecibidaId);
           if (error) alert('⚠️ Gasto guardado, pero la factura sigue en la bandeja: ' + error.message);
           refetchFacturasRecibidas();
+          // V88: las líneas de material que leyó la IA pasan a aprovisionamientos (stock de semillas, envases…)
+          const lineasIA = facturasRecibidas.find(f => f.id === facturaRecibidaId)?.datos_json?.lineas || [];
+          if (lineasIA.length && ['semillas', 'sustratos', 'embalajes'].includes(form.categoria)) await guardarLineasCompra(gastoId, lineasIA, 'ia', true);
         }
       }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'lote' && <Modal title={editingItem ? 'Editar Lote' : 'Nuevo Lote'} onClose={() => { setShowModal(null); setEditingItem(null); }}><LoteForm lote={editingItem} onSave={async (form) => {

@@ -12,6 +12,8 @@
 // Acciones (POST JSON):
 //   { accion: 'procesar', id }            → procesa una factura (usuario del ERP)
 //   { accion: 'estado' }                  → V87: { ia: true/false } si está el secret ANTHROPIC_API_KEY
+//   { accion: 'lineas_gasto', gasto_id }  → V88: lee el PDF de un gasto ya registrado y devuelve sus líneas de
+//                                           material (semillas, sustrato, envases…) con el material del catálogo
 //   { accion: 'procesar_pendientes' }     → procesa las que estén en estado 'nueva' (sin login: solo
 //                                           trabaja con filas que ya están en la tabla, que solo pueden
 //                                           crear usuarios del ERP o la revisión del correo)
@@ -70,8 +72,43 @@ const ESQUEMA = {
     moneda: txt,
     categoria: { type: "string", enum: CATEGORIAS },
     notas: txt,
+    // V88: líneas de material (aprovisionamientos) con su cantidad en la unidad del material
+    lineas: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["descripcion", "importe", "material_id", "material_nuevo", "material_tipo", "cantidad_material", "unidad_material"],
+        properties: {
+          descripcion: { type: "string" },
+          importe: num,
+          material_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
+          material_nuevo: txt,
+          material_tipo: { type: "string", enum: ["semilla", "sustrato", "envase", "etiqueta", "mercaderia", "otro"] },
+          cantidad_material: num,
+          unidad_material: { type: "string", enum: ["g", "l", "ud"] },
+        },
+      },
+    },
   },
 };
+ESQUEMA.required.push("lineas");
+
+// V88: instrucciones para las líneas de material, con el catálogo de materiales del ERP
+function textoLineas(catalogo: any[] | null) {
+  if (!catalogo) return "";
+  const lista = catalogo.length
+    ? catalogo.map((m) => `- id ${m.id}: ${m.nombre} [${m.tipo}, se mide en ${m.unidad}]`).join("\n")
+    : "(vacío)";
+  return `\n\nLÍNEAS DE MATERIAL (campo "lineas"): solo si la factura es de aprovisionamientos de producción (semillas, sustrato, envases/tarrinas, etiquetas, o producto comprado para revender). En otro caso, lineas = [].
+Una línea por artículo (sin portes, servicios ni descuentos: esos importes se reparten solos). Para cada una:
+- descripcion: el texto de la línea; importe: el importe de la línea tal como sale (con su IVA si la factura solo da importes con IVA).
+- material_id: el id del catálogo si es el mismo material (misma semilla/variedad, mismo envase y capacidad, misma etiqueta); si no está, null y en material_nuevo un nombre corto en español como los del catálogo (p. ej. "Semilla girasol", "Tarrina PET 500 cc").
+- material_tipo y unidad_material: semilla → g, sustrato → l, envase/etiqueta/mercaderia → ud.
+- cantidad_material: la cantidad convertida a esa unidad (p. ej. "2 kg" → 2000 g; "4 sacos de 100 L" → 400 l; "0,800 MIL" envases → 800 ud; "3 rollos de 1000 etiquetas" → 3000 ud).
+Catálogo de materiales del ERP:
+${lista}`;
+}
 
 const INSTRUCCIONES = `Eres el contable de ROOTFLOW HYDROPONICS SL (CIF B27535137), una empresa de microbrotes hidropónicos de Madrid. Te paso una factura o recibo de un proveedor que ha recibido la empresa. Extrae los datos tal como aparecen en el documento:
 
@@ -84,7 +121,7 @@ const INSTRUCCIONES = `Eres el contable de ROOTFLOW HYDROPONICS SL (CIF B2753513
 - retencion_pct y retencion_importe: la retención de IRPF si la hay (habitual en alquileres, 19 %, y profesionales, 15 % o 7 %); 0 si no hay.
 - total_a_pagar: el total del documento (base + IVA − retención).
 - categoria: la que mejor encaje de la lista. alquiler = arrendamiento del local; energia = luz, agua o gas; software = suscripciones y programas; asesoria = gestoría, abogados, notarios; capex_* solo para equipos o instalaciones que duren más de un año.
-- es_factura: false si no es una factura ni un recibo de compra (por ejemplo, un presupuesto, un aviso o un documento que no es de un proveedor).
+- es_factura: false si no es una factura ni un recibo de compra (por ejemplo, un presupuesto, una factura proforma o confirmación de pedido, un aviso o un documento que no es de un proveedor).
 - moneda: código ISO (EUR, USD…).
 - notas: cualquier cosa rara (moneda extranjera, IVA de otro país, importes que no cuadran, si es un recibo sin datos fiscales). null si no hay nada.
 Si un dato no aparece, usa null. No inventes importes.`;
@@ -106,6 +143,10 @@ Deno.serve(async (req) => {
       return json({ ok: true, procesadas: resultados.length, resultados });
     }
     if (body?.accion === "importar") return json(await importar(supabase, body));
+    if (body?.accion === "lineas_gasto") {
+      if (!(await usuarioERP(req, supabase))) return json({ error: "Solo para usuarios del ERP" }, 401);
+      return json(await lineasDeGasto(supabase, Number(body.gasto_id)));
+    }
     if (body?.accion === "procesar") {
       if (!(await usuarioERP(req, supabase))) return json({ error: "Solo para usuarios del ERP" }, 401);
       return json(await procesar(supabase, Number(body.id)));
@@ -214,7 +255,7 @@ async function procesar(supabase: any, id: number) {
         return { id, ok: true, estado: "pendiente", sin_ia: true };
       }
       if (mime !== MIME_PDF && !MIMES_IMAGEN.includes(mime)) throw new Error(`Formato no soportado (${mime || "desconocido"}): sube un PDF o una foto JPG/PNG`);
-      datos = await extraerConClaude(bytes!, mime, provPorCorreo ? { proveedor: provPorCorreo, gastos: await historialDe(provPorCorreo.id) } : null);
+      datos = await extraerConClaude(bytes!, mime, provPorCorreo ? { proveedor: provPorCorreo, gastos: await historialDe(provPorCorreo.id) } : null, await catalogoMateriales(supabase));
     }
 
     // 4. Proveedor conocido y factura ya registrada
@@ -277,7 +318,30 @@ export function proveedorPorRemitente(provs: any[], emailDe: any) {
   return provs.find((p) => String(p.email || "").toLowerCase().trim().endsWith("@" + dominio)) || null;
 }
 
-async function extraerConClaude(bytes: Uint8Array, mime: string, historial: any = null) {
+// V88: catálogo de materiales (null si la tabla no existe todavía: SQL V88 sin ejecutar)
+async function catalogoMateriales(supabase: any) {
+  const { data, error } = await supabase.from("materiales").select("id, tipo, nombre, unidad").eq("activo", true).order("tipo");
+  return error ? null : data || [];
+}
+
+// V88: líneas de material de un gasto ya registrado (no guarda nada: el ERP las enseña y las guarda)
+async function lineasDeGasto(supabase: any, gastoId: number) {
+  const { data: g, error } = await supabase.from("gastos").select("id, factura_url, concepto").eq("id", gastoId).maybeSingle();
+  if (error || !g) return { ok: false, error: "No encuentro el gasto" };
+  if (!g.factura_url) return { ok: false, error: "El gasto no tiene la factura adjunta" };
+  if (!Deno.env.get("ANTHROPIC_API_KEY")) return { ok: false, error: "Falta el secret ANTHROPIC_API_KEY" };
+  const r = await fetch(g.factura_url);
+  if (!r.ok) return { ok: false, error: `No se pudo descargar la factura (${r.status})` };
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const mime = mimeDeNombre(g.factura_url) || r.headers.get("content-type") || "";
+  if (mime !== MIME_PDF && !MIMES_IMAGEN.includes(mime)) return { ok: false, error: `Formato no soportado (${mime || "desconocido"})` };
+  const catalogo = await catalogoMateriales(supabase);
+  if (!catalogo) return { ok: false, error: "Falta ejecutar el SQL V88 (tabla materiales)" };
+  const datos = await extraerConClaude(bytes, mime, null, catalogo);
+  return { ok: true, lineas: datos.lineas || [], numero_factura: datos.numero_factura, proveedor: datos.proveedor_nombre, notas: datos.notas };
+}
+
+async function extraerConClaude(bytes: Uint8Array, mime: string, historial: any = null, catalogo: any[] | null = null) {
   const client = new Anthropic({ apiKey: Deno.env.get("ANTHROPIC_API_KEY") });
   const data = bytesABase64(bytes);
   const adjunto = mime === MIME_PDF
@@ -289,7 +353,7 @@ async function extraerConClaude(bytes: Uint8Array, mime: string, historial: any 
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: { effort: "low", format: { type: "json_schema", schema: ESQUEMA } },
-    messages: [{ role: "user", content: [adjunto, { type: "text", text: INSTRUCCIONES + textoHistorial(historial) }] }],
+    messages: [{ role: "user", content: [adjunto, { type: "text", text: INSTRUCCIONES + textoHistorial(historial) + textoLineas(catalogo) }] }],
   } as any);
   if (response.stop_reason === "refusal") throw new Error("La IA no ha podido leer este documento");
   if (response.stop_reason === "max_tokens") throw new Error("La respuesta de la IA se cortó");

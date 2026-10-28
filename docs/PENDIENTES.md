@@ -41,6 +41,15 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Revisar a mano el cobro A139 (`COB-F-2026-0005`, 87,36 € de Frutas Vázquez) de una factura borrada: si el dinero entró, tiene que ir contra la factura que la sustituyó.
 - Avisar a la asesoría de los números anulados y de que el IVA repercutido del 3T cambia al quitar las ventas de facturas borradas (si ya presentó el 303 con esos importes).
 
+## 4c. 🟠 Aprovisionamientos (V88): ponerlos en marcha
+
+- Ejecutar `supabase/sql/ROOTFLOW-SQL-V88-APROVISIONAMIENTOS.sql` (tablas, carga de las 18 facturas de material y recategoriza los gastos 59, 86, 151 y 162 con su asiento).
+- **Facturas duplicadas** (borrarlas en Gastos tras confirmarlo): #116 (17-jun, 147,77 €) es la misma factura polaca FV/B2B 92/5/2026 que la #92; #152 (1-oct, 354,52 €) es la **proforma** PROF 4/10/2026 del pedido que se facturó como #162. Juntas inflan semillas en 415 € de base y el IVA soportado en 87 €.
+- **IVA de las semillas de Polonia** (HYDRO / MP Seeds, #92, #117, #162): llevan IVA polaco (5–8 %, 23 % el envío) y están registradas con IVA español del 21 %. El IVA polaco no es deducible en España; lo correcto es pedirles factura intracomunitaria sin IVA (con el NIF-IVA ESB27535137 dado de alta en el ROI/VIES) y declarar la adquisición intracomunitaria (modelo 303/349). Consultarlo con la asesoría.
+- Pesar y apuntar los **gramos de semilla por bandeja** de las variedades marcadas "estimado" (rábano red, daikon, amaranto, remolacha, rúcula, brócoli, guisante…) y hacer un **recuento** de sacos de sustrato (fija los litros por bandeja), semillas (pesar bolsas) y tarrinas/etiquetas.
+- Revisar en "Envase y etiquetas de cada producto" que el envase por formato es el bueno (por defecto: 30 g y mezclas → tarrina 750 cc; 15 g → oval 250 cc; 5 g → oval 150 cc).
+- La compra a Fronda de brotes de cilantro (#119) está como "sustratos"; se trata como mercadería para revender (coste directo del cilantro de junio).
+
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
 - Rellenar en Producción las fichas de coste de cada variedad (gramos y €/kg de semilla, sustrato) y en Productos el coste de envase y etiqueta: permitirá comparar el coste real (compras) con el estándar y ver la merma.

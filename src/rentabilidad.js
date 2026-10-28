@@ -13,6 +13,9 @@
 //    estructura por bandeja-día (bandejas × días de ciclo), por kg o por ventas, a elegir.
 //  · Clientes y líneas de negocio heredan el coste por kg de cada variedad que compran. Lo que se
 //    produjo y no se vendió queda en "Producción no vendida" para que los totales cuadren.
+//  · V88: con datos.aprov (src/aprovisionamientos.js) los materiales se cargan por CONSUMO real y no por
+//    compra: las facturas con líneas de material pasan a existencias y cada mes lleva la semilla y el sustrato
+//    de lo sembrado (directo a su variedad) y los envases y etiquetas de lo entregado (directo a su producto).
 
 export const GRUPOS_PYG = {
   materiales: { label: 'Coste de materiales', orden: 1 },
@@ -84,6 +87,7 @@ const diasCiclo = (lote, variedad) => {
  */
 export function calcularRentabilidad(datos, op, h) {
   const { facturas = [], pedidoItems = [], albaranes = [], productos = [], variedades = [], clientes = [], gastos = [], lotes = [] } = datos;
+  const aprov = datos.aprov || null; // V88
   const meses = mesesEntre(op.desde, op.hasta);
   const enPeriodo = (f) => f && String(f) >= op.desde && String(f) <= op.hasta;
   const prodById = new Map(productos.map((p) => [p.id, p]));
@@ -135,7 +139,7 @@ export function calcularRentabilidad(datos, op, h) {
       const p = prodById.get(it.producto_id);
       const g = h.gramosPorUnidad(p) * it.cantidad;
       if (!g) avisos.lineasSinGramos++;
-      lineas.push({ mes, cliente_id: f.cliente_id, linea, variedad: variedadDeProducto(p, variedades), producto: p?.nombre, importe: baseProductos * (it.importe / sumaItems), gramos: g, unidades: it.cantidad, porte: false });
+      lineas.push({ mes, cliente_id: f.cliente_id, linea, variedad: variedadDeProducto(p, variedades), producto: p?.nombre, producto_id: p?.id ?? null, importe: baseProductos * (it.importe / sumaItems), gramos: g, unidades: it.cantidad, porte: false });
     }
   }
 
@@ -161,8 +165,27 @@ export function calcularRentabilidad(datos, op, h) {
       continue;
     }
     if (!enPeriodo(g.fecha)) continue;
+    if (aprov?.gastosConLineas?.has(g.id)) continue; // V88: compra de material con líneas → existencias (se carga al consumirse)
     const clave = c.sub || g.categoria || 'otros';
     sumarGasto(mesDe(g.fecha), CLASIFICACION_PYG[g.categoria] ? clave : 'otros', CLASIFICACION_PYG[g.categoria] ? { grupo: c.grupo, sub: c.sub, label: c.label } : { grupo: 'estructura', label: 'Otros gastos' }, base);
+  }
+  // V88: consumo real de materiales (directo a variedad o producto) y ajustes de inventario
+  const CONSUMO = {
+    semilla: { clave: 'cons_semillas', label: 'Semillas consumidas (sembrado)', sub: 'cultivo' },
+    sustrato: { clave: 'cons_sustrato', label: 'Sustrato consumido', sub: 'cultivo' },
+    mercaderia: { clave: 'cons_mercaderia', label: 'Producto comprado para revender', sub: 'cultivo' },
+    envase: { clave: 'cons_envases', label: 'Envases entregados', sub: 'envases' },
+    etiqueta: { clave: 'cons_etiquetas', label: 'Etiquetas', sub: 'envases' },
+    otro: { clave: 'cons_otros', label: 'Otros aprovisionamientos', sub: 'otros' },
+    ajustes: { clave: 'cons_ajustes', label: 'Mermas y ajustes de inventario', sub: 'cultivo' },
+  };
+  if (aprov) {
+    for (const mes of meses) {
+      for (const [tipo, v] of Object.entries(aprov.consumoTipoMes?.[mes] || {})) {
+        const c = CONSUMO[tipo] || CONSUMO.otro;
+        sumarGasto(mes, c.clave, { grupo: 'materiales', sub: c.sub, label: c.label, directo: tipo !== 'otro' }, v);
+      }
+    }
   }
   const totalGrupoMes = (mes, filtro) => Object.entries(gastosMes[mes] || {}).filter(([k]) => filtro(conceptos[k], k)).reduce((t, [, v]) => t + v, 0);
 
@@ -217,8 +240,18 @@ export function calcularRentabilidad(datos, op, h) {
       return c(v.importe || 0, tot.importe);
     };
     const g = (filtro) => totalGrupoMes(mes, filtro);
-    const cSemSus = g((c) => c?.grupo === 'materiales' && c.sub !== 'envases');
-    const cEnv = g((c) => c?.grupo === 'materiales' && c.sub === 'envases');
+    // V88: lo consumido con atribución directa no entra en el reparto; el resto (facturas sin líneas,
+    // otros aprovisionamientos y ajustes sin consumo previo) se reparte como antes
+    const cSemSus = g((c) => c?.grupo === 'materiales' && c.sub !== 'envases' && !c.directo);
+    const cEnv = g((c) => c?.grupo === 'materiales' && c.sub === 'envases' && !c.directo);
+    const directoCultivo = aprov?.cultivoMes?.[mes] || {};
+    const directoEnvase = {}; // variedad → € de envases y etiquetas de sus productos
+    for (const [pid, o] of Object.entries(aprov?.envaseMes?.[mes] || {})) {
+      const nombre = variedadDeProducto(prodById.get(Number(pid)), variedades);
+      directoEnvase[nombre] = (directoEnvase[nombre] || 0) + (o.envases || 0) + (o.etiquetas || 0) + (o.ajustes || 0);
+    }
+    // Lo atribuido a variedades sin ventas ni producción ese mes también se suma (producción no vendida)
+    for (const nombre of [...Object.keys(directoCultivo), ...Object.keys(directoEnvase)]) if (!prod[nombre] && !ventasVar[nombre]) prod[nombre] = { bandejas: 0, bandejaDias: 0 };
     const cVar = g((c) => c?.grupo === 'variables');
     const cEst = g((c) => c?.grupo === 'estructura');
     const cAm = g((c) => c?.grupo === 'amortizacion');
@@ -226,7 +259,12 @@ export function calcularRentabilidad(datos, op, h) {
     for (const nombre of new Set([...Object.keys(ventasVar), ...Object.keys(prod)])) {
       const v = ventasVar[nombre] || { importe: 0, gramos: 0, unidades: 0 };
       const p = prod[nombre] || { bandejas: 0, bandejaDias: 0 };
-      const mat = cSemSus * peso(nombre, 'bandejas') + cEnv * peso(nombre, 'unidades');
+      const dc = directoCultivo[nombre] || {};
+      const cultivoDirecto = (dc.semillas || 0) + (dc.sustrato || 0) + (dc.mercaderia || 0) + (dc.ajustes || 0);
+      const envDirecto = directoEnvase[nombre] || 0;
+      const matCultivo = cSemSus * peso(nombre, 'bandejas') + cultivoDirecto; // V88
+      const matEnvase = cEnv * peso(nombre, 'unidades') + envDirecto;
+      const mat = matCultivo + matEnvase;
       const varb = cVar * peso(nombre, op.reparto);
       const est = cEst * peso(nombre, op.reparto);
       const am = cAm * peso(nombre, op.reparto);
@@ -234,7 +272,15 @@ export function calcularRentabilidad(datos, op, h) {
       a.ventas += v.importe; a.gramos += v.gramos; a.unidades += v.unidades; a.bandejaDias += p.bandejaDias;
       if (estimadas.has(nombre)) a.bandejasEstimadas += p.bandejas; else a.bandejas += p.bandejas;
       a.materiales += mat; a.variables += varb; a.estructura += est; a.amortizacion += am;
-      if (v.gramos > 0) costeKgMes[mes][nombre] = { mat: mat / (v.gramos / 1000), varb: varb / (v.gramos / 1000), est: est / (v.gramos / 1000) };
+      // V88: con aprovisionamientos, el envase va por unidad de cada producto (no por kg de la variedad)
+      // V88: con aprovisionamientos, el cultivo se valora al coste real por gramo producido (lotes recientes de la
+      // variedad) y el envase por unidad de cada producto; lo sembrado y no vendido no encarece lo vendido
+      if (v.gramos > 0) {
+        const kg = v.gramos / 1000;
+        const cg = aprov ? (aprov.costeGramo?.[mes]?.[nombre] ?? aprov.costeGramoMedio?.[nombre] ?? aprov.costeGramoGeneral?.[mes] ?? undefined) : undefined;
+        const resto = aprov ? (cSemSus * peso(nombre, 'bandejas') + (dc.mercaderia || 0)) / kg : 0; // facturas sin líneas y mercadería
+        costeKgMes[mes][nombre] = { mat: aprov ? (cg !== undefined ? cg * 1000 + resto : matCultivo / kg) : mat / kg, envKg: aprov ? matEnvase / kg : 0, varb: varb / kg, est: est / kg };
+      }
     }
   }
   const porVariedad = Object.entries(acumVar).map(([nombre, a]) => {
@@ -251,7 +297,19 @@ export function calcularRentabilidad(datos, op, h) {
     };
   }).sort((x, y) => y.ventas - x.ventas);
 
-  // ---------- 5. Por cliente y por línea de negocio ----------
+  // ---------- 5. Por cliente, línea de negocio y producto ----------
+  // V88: envase y etiqueta de cada línea = coste por unidad de ese producto ese mes (o el medio del producto)
+  const envUnidadMedia = {};
+  if (aprov) {
+    const acc = {};
+    for (const porProd of Object.values(aprov.costeEnvaseUnidad || {})) for (const [pid, u] of Object.entries(porProd)) { (acc[pid] = acc[pid] || []).push(u); }
+    for (const [pid, us] of Object.entries(acc)) envUnidadMedia[pid] = us.reduce((t, x) => t + x, 0) / us.length;
+  }
+  const costeEnvaseLinea = (l, c) => {
+    if (!aprov) return 0;
+    const u = aprov.costeEnvaseUnidad?.[l.mes]?.[l.producto_id] ?? envUnidadMedia[l.producto_id];
+    return u !== undefined ? u * (l.unidades || 0) : (c.envKg || 0) * (l.gramos / 1000);
+  };
   const agrupar = (claveDe) => {
     const out = {};
     for (const l of lineas) {
@@ -263,7 +321,7 @@ export function calcularRentabilidad(datos, op, h) {
       if (l.variedad === 'Sin detalle') { o.sinDetalle += l.importe; continue; }
       o.gramos += l.gramos;
       const c = costeKgMes[l.mes]?.[l.variedad];
-      if (c) { const kg = l.gramos / 1000; o.materiales += c.mat * kg; o.variables += c.varb * kg; o.estructura += c.est * kg; }
+      if (c) { const kg = l.gramos / 1000; o.materiales += c.mat * kg + costeEnvaseLinea(l, c); o.variables += c.varb * kg; o.estructura += c.est * kg; }
     }
     return Object.values(out).map((o) => {
       const mb = o.ventas - o.materiales;
@@ -273,6 +331,11 @@ export function calcularRentabilidad(datos, op, h) {
   };
   const porCliente = agrupar((l) => l.cliente_id).map((o) => ({ ...o, cliente: cliById.get(o.clave)?.nombre || 'Cliente', linea: h.lineaDeCliente(cliById.get(o.clave)) }));
   const porLinea = agrupar((l) => l.linea);
+  const porProducto = agrupar((l) => l.producto || l.variedad || 'Sin detalle').filter((o) => o.clave !== 'null' && o.gramos + o.sinDetalle > 0).map((o) => {
+    const ls = lineas.filter((l) => !l.porte && (l.producto || l.variedad) === o.clave);
+    const unidades = ls.reduce((t, l) => t + (l.unidades || 0), 0);
+    return { ...o, producto: o.clave, variedad: ls[0]?.variedad || null, unidades, eurUnidad: unidades > 0 ? (o.ventas - o.portes) / unidades : null, materialesUnidad: unidades > 0 ? o.materiales / unidades : null, ebitdaUnidad: unidades > 0 ? o.ebitda / unidades : null };
+  }); // V88
 
   // Lo producido y no vendido (o vendido en facturas sin detalle) no se carga a ningún cliente
   const asignadoClientes = agrupar((l) => l.cliente_id).reduce((t, c) => t + c.materiales + c.variables + c.estructura, 0);
@@ -323,7 +386,8 @@ export function calcularRentabilidad(datos, op, h) {
 
   return {
     meses, pyg, tot, conceptos,
-    porVariedad, porCliente: porCliente.filter(filtroLinea), porLinea,
+    porVariedad, porCliente: porCliente.filter(filtroLinea), porLinea, porProducto, // V88
+    compras: aprov ? meses.reduce((t, m) => t + (aprov.comprasMes?.[m] || 0), 0) : null, // V88: compras con líneas (pasan a existencias)
     noAsignado,
     avisos: { ...avisos, importeSinDetalle: r2(avisos.importeSinDetalle), mesesSinLotes, bandejas: Object.values(prodMes).reduce((t, x) => t + sumaDe(x, 'bandejas'), 0) },
   };
