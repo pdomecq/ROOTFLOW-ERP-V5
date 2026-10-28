@@ -106,6 +106,7 @@ export function cuadreVentas(facturas, asientos) {
     lista.forEach((a, i) => {
       const imp = saldoCuenta(a, '572') || -saldoCuenta(a, '430');
       if (!f) cobrosHuerfanos.push({ asiento: a, facturaId: id, importe: imp, motivo: 'la factura ya no existe' });
+      else if (esNumeroAnulado(f)) cobrosHuerfanos.push({ asiento: a, facturaId: id, importe: imp, motivo: 'cobro de una factura borrada (número anulado)' }); // V88
       else if (f.estado !== 'pagada' && f.estado !== 'anulada') cobrosHuerfanos.push({ asiento: a, facturaId: id, importe: imp, motivo: `la factura está ${f.estado}` });
       else if (i > 0) cobrosHuerfanos.push({ asiento: a, facturaId: id, importe: imp, motivo: 'cobro repetido' });
       else if (Math.abs(imp - r2(f.total)) > 0.01) cobrosDescuadrados.push({ factura: f, asiento: a, importe: imp });

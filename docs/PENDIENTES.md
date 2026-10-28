@@ -34,21 +34,16 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Modelo 115: no consta en el ERP ningún pago de retenciones. Confirmar con la gestoría que se presentaron el 2T y 3T. El pago del modelo debe saldar la 4751 (asiento manual), no registrarse como gasto.
 - Los gastos de Claude de abril–julio están como "exento"; la factura de octubre lleva IVA español del 21 %. Revisar con la gestoría si las anteriores también.
 
-## 4b. 🟠 Numeración de facturas (V87): dejarla limpia
+## 4b. 🟠 Numeración de facturas y aprovisionamientos (V87–V88): lo que falta
 
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V87-NUMERACION-FACTURAS.sql` (columnas de anulación y trigger que impide borrar facturas que no sean la última).
-- En Facturación → panel "🔢 Numeración de facturas": "Registrar como anulados" (huecos 0004–0008, 0012, 0013 y 0017) y "Cuadrar contabilidad" (8 asientos de facturas borradas = 363,70 € de ventas que no existen, asientos repetidos de la 0001, 0002 y 0010, la 0003 con otro importe y el cobro de la 0001 por 37,02 € en vez de 644,38 €).
-- Revisar a mano el cobro A139 (`COB-F-2026-0005`, 87,36 € de Frutas Vázquez) de una factura borrada: si el dinero entró, tiene que ir contra la factura que la sustituyó.
+- ✅ (28/10) SQL V87 y V88 ejecutados y PR #5 en producción. Huecos 0004–0008, 0012, 0013 y 0017 registrados como números anulados; borrados los 8 asientos de ventas de facturas que ya no existían (363,70 €); rehechos los asientos de F-0001, 0002, 0003 y 0010 y el cobro de la F-0001 (644,38 €). Borrado el gasto #152 (proforma duplicada de la #162; queda en audit_log). Serie F-2026 correlativa y contabilidad de ventas cuadrada.
+- Revisar a mano el cobro A139 (`COB-F-2026-0005`, 87,36 € de Frutas Vázquez) de una factura borrada: si el dinero entró, tiene que ir contra la factura que la sustituyó (la F-0009 de Frutas Félix Vázquez tiene su propio cobro).
+- **Gasto #116** (17-jun, 147,77 €, HYDRO/MP Seeds): lleva adjunto el PDF de la factura de mayo (FV/B2B 92/5/2026, gasto #92). Mirar en el banco si hubo dos cargos de 147,77 € (20-may y 17-jun): si solo hubo uno, borrarlo; si hubo dos, pedir y adjuntar la factura de junio.
+- **F-2026-0023** (Café El Padrino, 9,15 €) se creó 4 segundos después de la F-2026-0022 (mismo cliente e importe, pedido #60) y su pedido ya no existe: parece un doble clic. Si es duplicada, bórrala con 🗑️ en Facturación **antes de crear otra factura** (mientras sea la última de la serie se puede borrar sin dejar hueco; después habría que anularla con rectificativa).
 - Avisar a la asesoría de los números anulados y de que el IVA repercutido del 3T cambia al quitar las ventas de facturas borradas (si ya presentó el 303 con esos importes).
-
-## 4c. 🟠 Aprovisionamientos (V88): ponerlos en marcha
-
-- Ejecutar `supabase/sql/ROOTFLOW-SQL-V88-APROVISIONAMIENTOS.sql` (tablas, carga de las 18 facturas de material y recategoriza los gastos 59, 86, 151 y 162 con su asiento).
-- **Facturas duplicadas** (borrarlas en Gastos tras confirmarlo): #116 (17-jun, 147,77 €) es la misma factura polaca FV/B2B 92/5/2026 que la #92; #152 (1-oct, 354,52 €) es la **proforma** PROF 4/10/2026 del pedido que se facturó como #162. Juntas inflan semillas en 415 € de base y el IVA soportado en 87 €.
-- **IVA de las semillas de Polonia** (HYDRO / MP Seeds, #92, #117, #162): llevan IVA polaco (5–8 %, 23 % el envío) y están registradas con IVA español del 21 %. El IVA polaco no es deducible en España; lo correcto es pedirles factura intracomunitaria sin IVA (con el NIF-IVA ESB27535137 dado de alta en el ROI/VIES) y declarar la adquisición intracomunitaria (modelo 303/349). Consultarlo con la asesoría.
-- Pesar y apuntar los **gramos de semilla por bandeja** de las variedades marcadas "estimado" (rábano red, daikon, amaranto, remolacha, rúcula, brócoli, guisante…) y hacer un **recuento** de sacos de sustrato (fija los litros por bandeja), semillas (pesar bolsas) y tarrinas/etiquetas.
+- **IVA de las semillas de Polonia** (HYDRO / MP Seeds, #92, #117, #162): llevan IVA polaco (5–8 %, 23 % el envío) y están registradas con IVA español del 21 %. El IVA polaco no es deducible en España; lo correcto es pedirles factura intracomunitaria sin IVA (con el NIF-IVA dado de alta en el ROI/VIES) y declarar la adquisición intracomunitaria. Consultarlo con la asesoría.
+- Pesar y apuntar los **gramos de semilla por bandeja** de las variedades marcadas "estimado" (Rentabilidad → Aprovisionamientos) y hacer un **recuento** de sacos de sustrato (fija los litros por bandeja), semillas (pesar bolsas) y tarrinas/etiquetas.
 - Revisar en "Envase y etiquetas de cada producto" que el envase por formato es el bueno (por defecto: 30 g y mezclas → tarrina 750 cc; 15 g → oval 250 cc; 5 g → oval 150 cc).
-- La compra a Fronda de brotes de cilantro (#119) está como "sustratos"; se trata como mercadería para revender (coste directo del cilantro de junio).
 
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
