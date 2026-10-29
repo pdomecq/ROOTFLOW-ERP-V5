@@ -21,6 +21,7 @@ import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
+import { FRECUENCIAS_RECURRENTE, DIAS_SEMANA, primeraEntrega, proximaEntregaDesde, proximasEntregas, entregasAGenerar, diaDeSemana, sumarDias } from './recurrentes.js'; // V90
 
 // ==================== SUPABASE CONFIG ====================
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL';
@@ -10552,6 +10553,11 @@ ${pedidoLinea ? `^FO260,258
       cliente_id: pedidoRecurrente?.cliente_id || (clientes.length > 0 ? clientes[0].id : ''),
       frecuencia: pedidoRecurrente?.frecuencia || 'semanal',
       dia_semana: pedidoRecurrente?.dia_semana ?? 1,
+      // V90: calendario de entregas
+      fecha_inicio: String(pedidoRecurrente?.fecha_inicio || pedidoRecurrente?.proxima_ejecucion || primeraEntrega(pedidoRecurrente?.dia_semana ?? 1, new Date().toISOString().split('T')[0])).slice(0, 10),
+      fecha_fin: pedidoRecurrente?.fecha_fin ? String(pedidoRecurrente.fecha_fin).slice(0, 10) : '',
+      horario_entrega: pedidoRecurrente?.horario_entrega || '',
+      dias_antelacion: pedidoRecurrente?.dias_antelacion ?? 2,
       notas: pedidoRecurrente?.notas || '',
       items: itemsExistentes.length > 0 
         ? itemsExistentes 
@@ -10577,11 +10583,10 @@ ${pedidoLinea ? `^FO260,258
       { value: 0, label: 'Domingo' }
     ];
 
-    const frecuencias = [
-      { value: 'semanal', label: 'Semanal (cada semana)' },
-      { value: 'quincenal', label: 'Quincenal (cada 2 semanas)' },
-      { value: 'mensual', label: 'Mensual (cada mes)' }
-    ];
+    const frecuencias = Object.entries(FRECUENCIAS_RECURRENTE).map(([value, f]) => ({ value, label: f.label })); // V90: mensual = cada 4 semanas, mismo día
+    const hoyForm = new Date().toISOString().split('T')[0];
+    const fechaInicioForm = primeraEntrega(form.dia_semana ?? 1, form.fecha_inicio || hoyForm); // V90: siempre cae en el día elegido
+    const previewEntregas = proximasEntregas({ ...form, dia_semana: Number(form.dia_semana), proxima_ejecucion: fechaInicioForm, fecha_fin: form.fecha_fin || null }, hoyForm, 4);
 
     // Funciones tipo PedidoForm: addItem, removeItem, updateItem
     const addItem = () => {
@@ -10638,7 +10643,18 @@ ${pedidoLinea ? `^FO260,258
           frecuencia: form.frecuencia,
           dia_semana: parseInt(form.dia_semana),
           notas: form.notas || '',
+          // V90
+          fecha_inicio: fechaInicioForm,
+          fecha_fin: form.fecha_fin || null,
+          horario_entrega: form.horario_entrega || null,
+          dias_antelacion: Math.max(0, parseInt(form.dias_antelacion, 10) || 0),
         };
+        if (form.fecha_fin && form.fecha_fin < fechaInicioForm) { alert('La fecha "Hasta" es anterior a la primera entrega.'); return; }
+        // V90: la próxima entrega se recalcula si cambia el calendario (o al crear)
+        const cambiaCalendario = !esEdicion || Number(pedidoRecurrente.dia_semana) !== dataPR.dia_semana || pedidoRecurrente.frecuencia !== dataPR.frecuencia
+          || String(pedidoRecurrente.fecha_inicio || '').slice(0, 10) !== fechaInicioForm;
+        if (cambiaCalendario) dataPR.proxima_ejecucion = proximaEntregaDesde({ ...dataPR, proxima_ejecucion: fechaInicioForm }, hoyForm);
+        const sinV90 = (d) => { const { fecha_inicio, fecha_fin, horario_entrega, dias_antelacion, ...resto } = d; return resto; };
 
         let prId = pedidoRecurrente?.id;
 
@@ -10650,16 +10666,18 @@ ${pedidoLinea ? `^FO260,258
             .map(k => `${nombreProd(k)} ${antes[k] || 0}→${despues[k] || 0}${!despues[k] ? ' (quitado)' : !antes[k] ? ' (nuevo)' : ''}`);
           if (cambios.length) dataPR.notas = [String(dataPR.notas || '').trim(), lineaHistorial(cambios, '')].filter(Boolean).join('\n');
           // Actualizar
-          const { error } = await supabase.from('pedidos_recurrentes').update(dataPR).eq('id', prId);
+          let { error } = await supabase.from('pedidos_recurrentes').update(dataPR).eq('id', prId);
+          if (error?.code === '42703') { ({ error } = await supabase.from('pedidos_recurrentes').update(sinV90(dataPR)).eq('id', prId)); if (!error) alert('⚠️ Ejecuta el SQL V90 para guardar primera entrega, fin, horario y antelación'); }
           if (error) throw error;
           // Eliminar items anteriores
           await supabase.from('pedidos_recurrentes_items').delete().eq('pedido_recurrente_id', prId);
         } else {
           // Insertar nuevo
-          const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
+          let { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
             ...dataPR,
             activo: true,
           }).select().single();
+          if (error?.code === '42703') { ({ data: pr, error } = await supabase.from('pedidos_recurrentes').insert({ ...sinV90(dataPR), activo: true }).select().single()); if (!error) alert('⚠️ Ejecuta el SQL V90 para guardar primera entrega, fin, horario y antelación'); }
           if (error) throw error;
           prId = pr.id;
         }
@@ -10712,9 +10730,19 @@ ${pedidoLinea ? `^FO260,258
           <Select 
             label="Día de entrega" 
             value={form.dia_semana} 
-            onChange={e => setForm({...form, dia_semana: e.target.value})} 
+            onChange={e => setForm({...form, dia_semana: e.target.value, fecha_inicio: primeraEntrega(e.target.value, hoyForm)})} 
             options={diasSemana} 
           />
+          {/* V90: calendario de entregas */}
+          <Input label="Primera entrega" type="date" value={form.fecha_inicio} onChange={e => setForm({...form, fecha_inicio: e.target.value})} />
+          <Input label="Hasta (opcional)" type="date" value={form.fecha_fin} onChange={e => setForm({...form, fecha_fin: e.target.value})} />
+          <Input label="Horario de entrega" value={form.horario_entrega} onChange={e => setForm({...form, horario_entrega: e.target.value})} placeholder="Ej: 9:00–11:00" />
+          <Input label="Generar el pedido (días antes)" type="number" min="0" max="14" value={form.dias_antelacion} onChange={e => setForm({...form, dias_antelacion: e.target.value})} />
+          <div className="col-span-2 text-xs bg-emerald-50 text-emerald-800 rounded-lg p-2">
+            📅 Próximas entregas: {previewEntregas.length ? previewEntregas.map(d => new Date(`${d}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })).join(' · ') : 'ninguna (revisa la fecha "Hasta")'}
+            {fechaInicioForm !== form.fecha_inicio && form.fecha_inicio && <span className="block text-amber-700">La primera entrega se ajusta al {formatDate(fechaInicioForm)} para que caiga en {DIAS_SEMANA[Number(form.dia_semana)]}.</span>}
+            <span className="block text-emerald-700">El pedido (y su factura si el cliente factura por pedido) se crea solo {parseInt(form.dias_antelacion, 10) || 0} día(s) antes de cada entrega.</span>
+          </div>
         </div>
 
         {/* Productos - misma UI que PedidoForm */}
@@ -12092,48 +12120,212 @@ ${pedidoLinea ? `^FO260,258
   const quienCambia = () => (user?.email || '').split('@')[0] || 'ERP';
   const nombreProd = (id) => productos.find(p => p.id === Number(id))?.nombre || `Producto ${id}`;
 
-  // Convierte pedidos en recurrentes: uno por cliente y día de entrega, con los productos del pedido más reciente
-  const convertirPedidosARecurrentes = async (ids) => {
+  // V90: convertir pedidos en recurrentes con un formulario (día de entrega, frecuencia, primera entrega,
+  // hasta cuándo, horario y antelación). Un recurrente por cliente y día, con los productos del pedido más reciente.
+  const [conversionRecurrente, setConversionRecurrente] = useState(null); // V90: [{ ...grupo editable }]
+  const hoyISO = () => new Date().toISOString().split('T')[0];
+  // Primera entrega propuesta: después de hoy y después de la entrega del pedido de origen (esa ya está pedida)
+  const desdeConversion = (fechaPedido) => { const man = sumarDias(hoyISO(), 1); const tras = fechaPedido ? sumarDias(fechaPedido, 1) : man; return tras > man ? tras : man; };
+  const convertirPedidosARecurrentes = (ids) => {
     const sel = pedidos.filter(p => ids.includes(p.id) && p.estado !== 'cancelado');
     if (!sel.length) { alert('Elige pedidos que no estén cancelados.'); return; }
     const grupos = {};
     for (const p of sel) {
       const f = String(p.fecha_entrega || p.fecha || '').slice(0, 10);
       if (!f) continue;
-      const dia = new Date(`${f}T12:00:00`).getDay();
+      const dia = diaDeSemana(f);
       const k = `${p.cliente_id}|${dia}`;
       if (!grupos[k] || grupos[k].f < f) grupos[k] = { p, f, dia };
     }
     const lista = Object.values(grupos)
-      .map(g => ({ ...g, cliente: clientes.find(c => c.id === g.p.cliente_id), items: pedidoItems.filter(i => i.pedido_id === g.p.id && Number(i.cantidad) > 0) }))
+      .map(g => {
+        const cliente = clientes.find(c => c.id === g.p.cliente_id);
+        const items = pedidoItems.filter(i => i.pedido_id === g.p.id && Number(i.cantidad) > 0).map(i => ({ producto_id: i.producto_id, cantidad: Math.max(1, Math.round(Number(i.cantidad) || 1)) }));
+        return {
+          pedidoId: g.p.id, fechaPedido: g.f, cliente_id: g.p.cliente_id, clienteNombre: cliente?.nombre || 'Cliente', items,
+          incluir: true, dia_semana: g.dia, frecuencia: 'semanal', fecha_inicio: primeraEntrega(g.dia, desdeConversion(g.f)), fecha_fin: '',
+          horario_entrega: g.p.horario_entrega || '', dias_antelacion: 2,
+        };
+      })
       .filter(g => g.items.length);
     if (!lista.length) { alert('Los pedidos elegidos no tienen productos.'); return; }
-    const yaTiene = (g) => pedidosRecurrentes.find(r => r.cliente_id === g.p.cliente_id && Number(r.dia_semana) === g.dia && r.activo !== false);
-    const frec = window.prompt(
-      `🔁 Se crearán ${lista.filter(g => !yaTiene(g)).length} pedido(s) recurrente(s), uno por cliente y día de entrega, con los productos y cantidades del pedido más reciente:\n\n` +
-      lista.map(g => `• ${g.cliente?.nombre || 'Cliente'} · cada ${DIAS_JS[g.dia]} · ${g.items.map(i => `${nombreProd(i.producto_id)} ×${i.cantidad}`).join(', ')}${yaTiene(g) ? `  ⚠️ ya tiene "${yaTiene(g).nombre}": se salta` : ''}`).join('\n') +
-      `\n\nFrecuencia (semanal, quincenal o mensual):`, 'semanal');
-    if (frec === null) return;
-    const frecuencia = String(frec).trim().toLowerCase();
-    if (!['semanal', 'quincenal', 'mensual'].includes(frecuencia)) { alert('Frecuencia no válida: escribe semanal, quincenal o mensual.'); return; }
+    setConversionRecurrente(lista);
+    setShowModal('convertir_recurrentes');
+  };
+  const recurrenteExistente = (g) => pedidosRecurrentes.find(r => r.cliente_id === g.cliente_id && Number(r.dia_semana) === Number(g.dia_semana) && r.activo !== false);
+  const crearRecurrentesDesdePedidos = async () => {
+    const lista = (conversionRecurrente || []).filter(g => g.incluir);
     let creados = 0; const saltados = []; const fallos = [];
     for (const g of lista) {
-      const ya = yaTiene(g);
-      if (ya) { saltados.push(`${g.cliente?.nombre} (${DIAS_JS[g.dia]}): ya tiene "${ya.nombre}" (cámbialo con ± Cantidades)`); continue; }
-      const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
-        nombre: `${g.cliente?.nombre || 'Cliente'} · ${DIAS_JS[g.dia]}`,
-        cliente_id: g.p.cliente_id, frecuencia, dia_semana: g.dia, activo: true,
-        proxima_ejecucion: proximaFechaDia(g.dia),
-        notas: `Creado a partir del pedido #${g.p.id} del ${formatDate(g.f)} (${quienCambia()}).`,
-      }).select().single();
-      if (error) { fallos.push(`${g.cliente?.nombre}: ${error.message}`); continue; }
-      const { error: e2 } = await supabase.from('pedidos_recurrentes_items').insert(g.items.map(i => ({ pedido_recurrente_id: pr.id, producto_id: i.producto_id, cantidad: Math.max(1, Math.round(Number(i.cantidad) || 1)) })));
-      if (e2) { fallos.push(`${g.cliente?.nombre} (productos): ${e2.message}`); await supabase.from('pedidos_recurrentes').delete().eq('id', pr.id); continue; }
+      const ya = recurrenteExistente(g);
+      if (ya) { saltados.push(`${g.clienteNombre} (${DIAS_SEMANA[g.dia_semana]}): ya tiene "${ya.nombre}"`); continue; }
+      if (diaDeSemana(g.fecha_inicio) !== Number(g.dia_semana)) { fallos.push(`${g.clienteNombre}: la primera entrega (${formatDate(g.fecha_inicio)}) no cae en ${DIAS_SEMANA[g.dia_semana]}`); continue; }
+      const datos = {
+        nombre: `${g.clienteNombre} · ${DIAS_SEMANA[g.dia_semana]}`, cliente_id: g.cliente_id, frecuencia: g.frecuencia, dia_semana: Number(g.dia_semana), activo: true,
+        fecha_inicio: g.fecha_inicio, fecha_fin: g.fecha_fin || null, horario_entrega: g.horario_entrega || null, dias_antelacion: Number(g.dias_antelacion) || 0,
+        proxima_ejecucion: g.fecha_inicio,
+        notas: `Creado a partir del pedido #${g.pedidoId} del ${formatDate(g.fechaPedido)} (${quienCambia()}).`,
+      };
+      let { data: pr, error } = await supabase.from('pedidos_recurrentes').insert(datos).select().single();
+      if (error?.code === '42703') { const { fecha_inicio, fecha_fin, horario_entrega, dias_antelacion, ...sin } = datos; ({ data: pr, error } = await supabase.from('pedidos_recurrentes').insert(sin).select().single()); if (!error) fallos.push('⚠️ Ejecuta el SQL V90 para guardar inicio, fin, horario y antelación'); }
+      if (error) { fallos.push(`${g.clienteNombre}: ${error.message}`); continue; }
+      const { error: e2 } = await supabase.from('pedidos_recurrentes_items').insert(g.items.map(i => ({ pedido_recurrente_id: pr.id, producto_id: i.producto_id, cantidad: i.cantidad })));
+      if (e2) { fallos.push(`${g.clienteNombre} (productos): ${e2.message}`); await supabase.from('pedidos_recurrentes').delete().eq('id', pr.id); continue; }
       creados++;
     }
     refetchPedidosRecurrentes(); refetchPedidosRecurrentesItems(); setSelectedPedidos([]);
-    alert(`${creados ? `✅ ${creados} pedido(s) recurrente(s) creado(s). Están en Pedidos → Recurrentes.` : 'No se ha creado ninguno.'}${saltados.length ? `\n\nSaltados:\n${saltados.join('\n')}` : ''}${fallos.length ? `\n\n❌ Errores:\n${fallos.join('\n')}` : ''}`);
+    setShowModal(null); setConversionRecurrente(null);
+    alert(`${creados ? `✅ ${creados} pedido(s) recurrente(s) creado(s). Están en Pedidos → Recurrentes; cada pedido se generará solo ${lista[0]?.dias_antelacion ?? 2} día(s) antes de cada entrega.` : 'No se ha creado ninguno.'}${saltados.length ? `\n\nSaltados (ya tenían recurrente ese día; cámbialo con ± Cantidades):\n${saltados.join('\n')}` : ''}${fallos.length ? `\n\n❌ Avisos:\n${fallos.join('\n')}` : ''}`);
   };
+  const renderConversionRecurrente = () => {
+    const lista = conversionRecurrente || [];
+    const set = (idx, cambios) => setConversionRecurrente(lista.map((g, i) => i === idx ? { ...g, ...cambios } : g));
+    const setTodos = (cambios) => setConversionRecurrente(lista.map(g => ({ ...g, ...cambios })));
+    const n = lista.filter(g => g.incluir && !recurrenteExistente(g)).length;
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2 text-sm bg-neutral-50 rounded-xl p-2">
+          <span className="font-semibold">Para todos:</span>
+          {Object.entries(FRECUENCIAS_RECURRENTE).map(([k, f]) => <button key={k} onClick={() => setTodos({ frecuencia: k })} className="px-2 py-1 rounded-lg border bg-white text-xs font-semibold hover:bg-orange-50">{f.label}</button>)}
+          <label className="text-xs ml-2">Generar el pedido <input type="number" min="0" max="14" defaultValue={2} onChange={e => setTodos({ dias_antelacion: parseInt(e.target.value, 10) || 0 })} className="w-12 px-1 py-0.5 rounded border text-center" /> días antes de entregar</label>
+        </div>
+        <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+          {lista.map((g, idx) => {
+            const ya = recurrenteExistente(g);
+            const prox = proximasEntregas({ ...g, proxima_ejecucion: g.fecha_inicio }, hoyISO(), 3);
+            return (
+              <div key={idx} className={`p-3 rounded-xl border ${!g.incluir || ya ? 'opacity-60 bg-neutral-50' : 'bg-white'}`}>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={g.incluir && !ya} disabled={!!ya} onChange={e => set(idx, { incluir: e.target.checked })} className="mt-1 w-4 h-4" />
+                  <div className="min-w-0">
+                    <p className="font-bold">{g.clienteNombre} <span className="text-xs font-normal text-neutral-500">· desde el pedido #{g.pedidoId} ({formatDate(g.fechaPedido)})</span></p>
+                    <p className="text-xs text-neutral-600 truncate">{g.items.map(i => `${nombreProd(i.producto_id)} ×${i.cantidad}`).join(', ')}</p>
+                    {ya && <p className="text-xs text-amber-700">Ya tiene "{ya.nombre}" ese día: cámbialo con ± Cantidades.</p>}
+                  </div>
+                </label>
+                {!ya && g.incluir && (
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-2 text-xs">
+                    <label className="flex flex-col gap-0.5">Día de entrega
+                      <select value={g.dia_semana} onChange={e => { const d = Number(e.target.value); set(idx, { dia_semana: d, fecha_inicio: primeraEntrega(d, desdeConversion(g.fechaPedido)) }); }} className="px-2 py-1.5 rounded-lg border bg-white">
+                        {[1, 2, 3, 4, 5, 6, 0].map(d => <option key={d} value={d}>{DIAS_SEMANA[d]}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5">Frecuencia
+                      <select value={g.frecuencia} onChange={e => set(idx, { frecuencia: e.target.value })} className="px-2 py-1.5 rounded-lg border bg-white">
+                        {Object.entries(FRECUENCIAS_RECURRENTE).map(([k, f]) => <option key={k} value={k}>{f.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-0.5">Primera entrega
+                      <input type="date" value={g.fecha_inicio} onChange={e => set(idx, { fecha_inicio: e.target.value ? primeraEntrega(g.dia_semana, e.target.value) : primeraEntrega(g.dia_semana, hoyISO()) })} className="px-2 py-1 rounded-lg border" />
+                    </label>
+                    <label className="flex flex-col gap-0.5">Hasta (opcional)
+                      <input type="date" value={g.fecha_fin} onChange={e => set(idx, { fecha_fin: e.target.value })} className="px-2 py-1 rounded-lg border" />
+                    </label>
+                    <label className="flex flex-col gap-0.5">Horario
+                      <input type="text" value={g.horario_entrega} onChange={e => set(idx, { horario_entrega: e.target.value })} placeholder="9:00–11:00" className="px-2 py-1 rounded-lg border" />
+                    </label>
+                    <p className="col-span-2 md:col-span-5 text-[11px] text-emerald-700">📅 Entregas: {prox.map(d => new Date(`${d}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })).join(' · ')}{g.fecha_fin ? ` … hasta el ${formatDate(g.fecha_fin)}` : ' …'} · el pedido se crea {g.dias_antelacion} día(s) antes</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <Button variant="secondary" onClick={() => { setShowModal(null); setConversionRecurrente(null); }}>Cancelar</Button>
+          <Button disabled={!n} onClick={crearRecurrentesDesdePedidos}><Repeat size={16} />Crear {n} recurrente(s)</Button>
+        </div>
+      </div>
+    );
+  };
+
+  // V90: genera el pedido (y su factura si el cliente factura por pedido) de una entrega de un recurrente.
+  // El índice único (recurrente_id, recurrente_fecha) del SQL V90 impide duplicarla.
+  const generarPedidoDeRecurrente = async (pr, fechaEntrega) => {
+    const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id && Number(i.cantidad) > 0);
+    if (!items.length) return { error: 'sin productos' };
+    const cliente = clientes.find(c => c.id === pr.cliente_id);
+    let subtotal = 0;
+    const itemsData = items.map(it => {
+      const precio = getPrecioCliente(it.producto_id, pr.cliente_id);
+      const sub = Math.round(precio * it.cantidad * 100) / 100;
+      subtotal += sub;
+      return { producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: precio, subtotal: sub };
+    });
+    const descuentoPct = descuentoClienteEnFecha(cliente, fechaEntrega);
+    const descuentoAplicado = subtotal * (descuentoPct / 100);
+    const total = subtotal - descuentoAplicado;
+    const datos = {
+      cliente_id: pr.cliente_id, fecha: hoyISO(), fecha_entrega: fechaEntrega, horario_entrega: pr.horario_entrega || null,
+      estado: 'pendiente', notas: `Pedido recurrente: ${pr.nombre}`, total, recurrente_id: pr.id, recurrente_fecha: fechaEntrega,
+    };
+    let { data: ped, error } = await supabase.from('pedidos').insert(datos).select().single();
+    if (error?.code === '23505') return { ya: true };
+    if (error?.code === '42703') {
+      if (pedidos.some(p => p.cliente_id === pr.cliente_id && String(p.fecha_entrega).slice(0, 10) === fechaEntrega && String(p.notas || '').includes(pr.nombre))) return { ya: true };
+      const { recurrente_id, recurrente_fecha, horario_entrega, ...sin } = datos;
+      ({ data: ped, error } = await supabase.from('pedidos').insert(sin).select().single());
+    }
+    if (error) return { error: error.message };
+    const { error: eIt } = await supabase.from('pedido_items').insert(itemsData.map(i => ({ pedido_id: ped.id, ...i })));
+    if (eIt) return { error: 'líneas: ' + eIt.message, pedido: ped };
+    // Factura como en un pedido normal, salvo clientes con facturación agrupada (se facturan por albaranes)
+    if (!['semanal', 'quincenal', 'mensual'].includes(cliente?.periodicidad_facturacion)) {
+      const year = new Date().getFullYear();
+      const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cliente?.plazo_pago_dias, 10) || 30));
+      const base = total;
+      const iva = base * (IVA_VENTAS / 100);
+      const re = cliente?.recargo_equivalencia ? base * (RE_VENTAS / 100) : 0;
+      const facturaData = {
+        id: await generarIdSecuencial('facturas', `F-${year}-`, 4), pedido_id: ped.id, cliente_id: pr.cliente_id, fecha: hoyISO(),
+        fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente', subtotal, descuento_aplicado: descuentoAplicado,
+        base_imponible: base, iva_porcentaje: IVA_VENTAS, iva, recargo_equivalencia: !!cliente?.recargo_equivalencia,
+        re_porcentaje: re > 0 ? RE_VENTAS : 0, re_importe: re, total: base + iva + re,
+      };
+      const resFac = await insertarConIdUnico('facturas', facturaData, `F-${year}-`, 4);
+      if (resFac.error) return { pedido: ped, error: 'factura: ' + resFac.error.message };
+      await crearAsientoDesdeFactura({ ...facturaData, id: resFac.id }, cliente, true);
+      return { pedido: ped, factura: resFac.id };
+    }
+    return { pedido: ped };
+  };
+
+  // V90: genera los pedidos de las entregas que tocan (automático al abrir el ERP y cada hora, y "Ejecutar ahora")
+  const generandoRecurrentes = useRef(false);
+  const generarPedidosRecurrentes = async ({ soloId = null, forzarSiguiente = false, silencioso = true } = {}) => {
+    if (generandoRecurrentes.current) return;
+    generandoRecurrentes.current = true;
+    const creados = []; const errores = [];
+    try {
+      for (const pr of pedidosRecurrentes.filter(r => r.activo !== false && (!soloId || r.id === soloId))) {
+        const { fechas, nuevaProxima, terminado } = entregasAGenerar(pr, hoyISO(), { forzarSiguiente });
+        for (const f of fechas) {
+          const r = await generarPedidoDeRecurrente(pr, f);
+          if (r.error) errores.push(`${pr.nombre} (${formatDate(f)}): ${r.error}`);
+          else if (!r.ya) creados.push(`${pr.nombre}: entrega ${formatDate(f)}${r.factura ? ` · factura ${r.factura}` : ''}`);
+        }
+        const cambios = {};
+        if (nuevaProxima !== String(pr.proxima_ejecucion || '').slice(0, 10)) cambios.proxima_ejecucion = nuevaProxima;
+        if (fechas.length) cambios.ultima_ejecucion = hoyISO();
+        if (terminado) cambios.activo = false;
+        if (Object.keys(cambios).length) await supabase.from('pedidos_recurrentes').update(cambios).eq('id', pr.id);
+      }
+    } finally { generandoRecurrentes.current = false; }
+    if (creados.length || errores.length) { refetchPedidos(); refetchPedidoItems(); refetchFacturas(); refetchPedidosRecurrentes(); }
+    if (!silencioso || errores.length) alert(`${creados.length ? `✅ Pedidos generados:\n${creados.join('\n')}` : 'No había ninguna entrega pendiente de generar.'}${errores.length ? `\n\n❌ Errores:\n${errores.join('\n')}` : ''}`);
+    else if (creados.length) enviarSlack({ titulo: '🔁 Pedidos recurrentes generados', mensaje: creados.join('\n'), prioridad: 'baja', tipoEvento: 'pedido_nuevo' }).catch(() => {});
+    return creados;
+  };
+  const generarRecurrentesRef = useRef(null);
+  generarRecurrentesRef.current = generarPedidosRecurrentes; // el intervalo usa siempre los datos actuales
+  const hayRecurrentesActivos = pedidosRecurrentes.some(r => r.activo !== false);
+  useEffect(() => {
+    if (!hayRecurrentesActivos || !pedidosRecurrentesItems.length || !clientes.length || !productos.length) return;
+    if (ajusteSistema('recurrentes_auto', 'true') === 'false') return;
+    const t0 = setTimeout(() => generarRecurrentesRef.current?.(), 8000);
+    const t = setInterval(() => generarRecurrentesRef.current?.(), 60 * 60 * 1000);
+    return () => { clearTimeout(t0); clearInterval(t); };
+  }, [hayRecurrentesActivos, pedidosRecurrentesItems.length, clientes.length, productos.length]);
 
   // Ajuste rápido de cantidades de un recurrente (ampliar o reducir), con historial en sus notas
   const abrirAjusteRecurrente = (pr) => {
@@ -12245,64 +12437,15 @@ ${pedidoLinea ? `^FO260,258
     const frecuenciaConfig = {
       semanal: { label: 'Semanal', color: 'bg-blue-100 text-blue-700' },
       quincenal: { label: 'Quincenal', color: 'bg-purple-100 text-purple-700' },
-      mensual: { label: 'Mensual', color: 'bg-green-100 text-green-700' }
+      mensual: { label: 'Cada 4 semanas', color: 'bg-green-100 text-green-700' } // V90
     };
     
     const diasSemana = ['', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
-    // Ejecutar pedido recurrente (crear pedido normal a partir del recurrente)
+    // V90: "Ejecutar ahora" genera ya el pedido de la próxima entrega (con su fecha de entrega, no hoy)
     const ejecutarPedidoRecurrente = async (pr) => {
-      const items = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
-      if (items.length === 0) {
-        alert('Este pedido recurrente no tiene productos');
-        return;
-      }
-      
-      const cliente = clientes.find(c => c.id === pr.cliente_id);
-      let total = 0;
-      const itemsData = items.map(item => {
-        // V72 FIX: aplicar tarifa especial del cliente también en pedidos recurrentes
-        const precioUnitario = getPrecioCliente(item.producto_id, pr.cliente_id);
-        const subtotal = precioUnitario * item.cantidad;
-        total += subtotal;
-        return { producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: precioUnitario, subtotal };
-      });
-
-      // Aplicar descuento del cliente (V79: el que toque por fecha; el pedido se entrega hoy)
-      const descuento = descuentoClienteEnFecha(cliente, new Date().toISOString().split('T')[0]);
-      total = total * (1 - descuento / 100);
-
-      // Crear pedido
-      const hoy = new Date().toISOString().split('T')[0];
-      const { data: newPedido, error: pedidoError } = await supabase.from('pedidos').insert({
-        cliente_id: pr.cliente_id,
-        fecha: hoy,
-        fecha_entrega: hoy,
-        estado: 'pendiente',
-        notas: `Generado desde pedido recurrente: ${pr.nombre}`,
-        total
-      }).select().single();
-
-      if (pedidoError) {
-        alert('Error al crear pedido: ' + pedidoError.message);
-        return;
-      }
-
-      // Insertar items
-      for (const item of itemsData) {
-        await supabase.from('pedido_items').insert({ pedido_id: newPedido.id, ...item });
-      }
-
-      // Actualizar fecha de última ejecución
-      await supabase.from('pedidos_recurrentes').update({ 
-        ultima_ejecucion: hoy,
-        proxima_ejecucion: calcularProximaEjecucion(pr.frecuencia, pr.dia_semana)
-      }).eq('id', pr.id);
-
-      refetchPedidos();
-      refetchPedidoItems();
-      refetchPedidosRecurrentes();
-      alert(`✅ Pedido #${newPedido.id} creado para ${cliente?.nombre}`);
+      if (!pedidosRecurrentesItems.some(i => i.pedido_recurrente_id === pr.id)) { alert('Este pedido recurrente no tiene productos'); return; }
+      await generarPedidosRecurrentes({ soloId: pr.id, forzarSiguiente: true, silencioso: false });
     };
 
     const calcularProximaEjecucion = (frecuencia, diaSemana) => {
@@ -12567,6 +12710,17 @@ ${pedidoLinea ? `^FO260,258
                             {diasSemana[Number(pr.dia_semana) === 0 ? 7 : pr.dia_semana] || 'Lunes'} • {frecConfig.label}{/* V89: 0 = domingo */}
                           </span>
                         </div>
+                        {(() => { // V90: calendario de entregas
+                          const prox = pr.activo ? proximasEntregas(pr, new Date().toISOString().split('T')[0], 3) : [];
+                          return (
+                            <div className="text-xs space-y-0.5">
+                              {pr.horario_entrega && <p className="text-neutral-500">🕘 Horario: {pr.horario_entrega}</p>}
+                              {prox.length > 0 && <p className="text-emerald-700">📅 Próximas: {prox.map(d => new Date(`${d}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })).join(' · ')}</p>}
+                              {pr.activo && !prox.length && <p className="text-amber-700">Sin más entregas (terminó el {formatDate(pr.fecha_fin)})</p>}
+                              <p className="text-neutral-400">{pr.fecha_fin ? `Hasta el ${formatDate(pr.fecha_fin)} · ` : ''}pedido {pr.dias_antelacion ?? 2} día(s) antes{pr.ultima_ejecucion ? ` · último generado ${formatDate(pr.ultima_ejecucion)}` : ''}</p>
+                            </div>
+                          );
+                        })()}
                         <div className={`p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
                           <p className={`text-xs font-medium mb-2 ${darkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Productos ({items.length})</p>
                           {items.slice(0, 3).map(item => {
@@ -12594,7 +12748,7 @@ ${pedidoLinea ? `^FO260,258
                             <button 
                               onClick={() => ejecutarPedidoRecurrente(pr)} 
                               className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
-                              title="Ejecutar ahora"
+                              title="Generar ya el pedido de la próxima entrega"
                             >
                               <Zap size={18} />
                             </button>
@@ -17689,10 +17843,10 @@ ${logoRootflow}^FS
           
           const diasCrecimiento = producto.dias_crecimiento || 7;
           
-          // Calcular próxima entrega
-          let proximaEntrega = new Date(hoy);
-          proximaEntrega.setDate(proximaEntrega.getDate() + (7 - proximaEntrega.getDay() + pr.dia_semana) % 7);
-          if (proximaEntrega <= hoy) proximaEntrega.setDate(proximaEntrega.getDate() + 7);
+          // V90: próxima entrega según el calendario del recurrente (frecuencia, primera entrega y fin)
+          const proxISO = proximasEntregas(pr, hoy.toISOString().split('T')[0], 1)[0];
+          if (!proxISO) return;
+          const proximaEntrega = new Date(`${proxISO}T12:00:00`);
           
           // Fecha de siembra necesaria
           const fechaSiembra = new Date(proximaEntrega);
@@ -32207,6 +32361,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       </Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'ajuste_recurrente' && ajusteRecurrente && <Modal title="± Cantidades del pedido recurrente" onClose={() => { setShowModal(null); setAjusteRecurrente(null); }} size="max-w-lg">{renderAjusteRecurrente()}</Modal>}{/* V89 */}
+      {showModal === 'convertir_recurrentes' && conversionRecurrente && <Modal title="🔁 Convertir en pedidos recurrentes" onClose={() => { setShowModal(null); setConversionRecurrente(null); }} size="max-w-4xl">{renderConversionRecurrente()}</Modal>}{/* V90 */}
       {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'variedad' && <Modal title={editingItem ? 'Editar Variedad' : 'Nueva Variedad'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
