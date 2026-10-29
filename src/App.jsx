@@ -10643,6 +10643,12 @@ ${pedidoLinea ? `^FO260,258
         let prId = pedidoRecurrente?.id;
 
         if (esEdicion) {
+          // V89: los cambios de cantidades quedan en el historial (notas)
+          const antes = {}; itemsExistentes.forEach(i => { antes[Number(i.producto_id)] = (antes[Number(i.producto_id)] || 0) + (Number(i.cantidad) || 0); });
+          const despues = {}; itemsValidos.forEach(i => { despues[Number(i.producto_id)] = (despues[Number(i.producto_id)] || 0) + (parseInt(i.cantidad) || 1); });
+          const cambios = [...new Set([...Object.keys(antes), ...Object.keys(despues)])].filter(k => (antes[k] || 0) !== (despues[k] || 0))
+            .map(k => `${nombreProd(k)} ${antes[k] || 0}→${despues[k] || 0}${!despues[k] ? ' (quitado)' : !antes[k] ? ' (nuevo)' : ''}`);
+          if (cambios.length) dataPR.notas = [String(dataPR.notas || '').trim(), lineaHistorial(cambios, '')].filter(Boolean).join('\n');
           // Actualizar
           const { error } = await supabase.from('pedidos_recurrentes').update(dataPR).eq('id', prId);
           if (error) throw error;
@@ -12073,6 +12079,146 @@ ${pedidoLinea ? `^FO260,258
 
   // Estado para pestaña de pedidos
   const [pedidosTab, setPedidosTab] = useState('lista');
+  const [ajusteRecurrente, setAjusteRecurrente] = useState(null); // V89: { prId, filas: [{ producto_id, cantidad, original }], motivo }
+
+  // ==================== V89 — PEDIDOS → RECURRENTES Y AJUSTE DE CANTIDADES ====================
+  // dia_semana sigue a Date.getDay() (0 = domingo), igual que calcularProximaEjecucion.
+  const DIAS_JS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const proximaFechaDia = (diaSemana) => {
+    const d = new Date(); d.setHours(12, 0, 0, 0);
+    do { d.setDate(d.getDate() + 1); } while (d.getDay() !== diaSemana);
+    return d.toISOString().split('T')[0];
+  };
+  const quienCambia = () => (user?.email || '').split('@')[0] || 'ERP';
+  const nombreProd = (id) => productos.find(p => p.id === Number(id))?.nombre || `Producto ${id}`;
+
+  // Convierte pedidos en recurrentes: uno por cliente y día de entrega, con los productos del pedido más reciente
+  const convertirPedidosARecurrentes = async (ids) => {
+    const sel = pedidos.filter(p => ids.includes(p.id) && p.estado !== 'cancelado');
+    if (!sel.length) { alert('Elige pedidos que no estén cancelados.'); return; }
+    const grupos = {};
+    for (const p of sel) {
+      const f = String(p.fecha_entrega || p.fecha || '').slice(0, 10);
+      if (!f) continue;
+      const dia = new Date(`${f}T12:00:00`).getDay();
+      const k = `${p.cliente_id}|${dia}`;
+      if (!grupos[k] || grupos[k].f < f) grupos[k] = { p, f, dia };
+    }
+    const lista = Object.values(grupos)
+      .map(g => ({ ...g, cliente: clientes.find(c => c.id === g.p.cliente_id), items: pedidoItems.filter(i => i.pedido_id === g.p.id && Number(i.cantidad) > 0) }))
+      .filter(g => g.items.length);
+    if (!lista.length) { alert('Los pedidos elegidos no tienen productos.'); return; }
+    const yaTiene = (g) => pedidosRecurrentes.find(r => r.cliente_id === g.p.cliente_id && Number(r.dia_semana) === g.dia && r.activo !== false);
+    const frec = window.prompt(
+      `🔁 Se crearán ${lista.filter(g => !yaTiene(g)).length} pedido(s) recurrente(s), uno por cliente y día de entrega, con los productos y cantidades del pedido más reciente:\n\n` +
+      lista.map(g => `• ${g.cliente?.nombre || 'Cliente'} · cada ${DIAS_JS[g.dia]} · ${g.items.map(i => `${nombreProd(i.producto_id)} ×${i.cantidad}`).join(', ')}${yaTiene(g) ? `  ⚠️ ya tiene "${yaTiene(g).nombre}": se salta` : ''}`).join('\n') +
+      `\n\nFrecuencia (semanal, quincenal o mensual):`, 'semanal');
+    if (frec === null) return;
+    const frecuencia = String(frec).trim().toLowerCase();
+    if (!['semanal', 'quincenal', 'mensual'].includes(frecuencia)) { alert('Frecuencia no válida: escribe semanal, quincenal o mensual.'); return; }
+    let creados = 0; const saltados = []; const fallos = [];
+    for (const g of lista) {
+      const ya = yaTiene(g);
+      if (ya) { saltados.push(`${g.cliente?.nombre} (${DIAS_JS[g.dia]}): ya tiene "${ya.nombre}" (cámbialo con ± Cantidades)`); continue; }
+      const { data: pr, error } = await supabase.from('pedidos_recurrentes').insert({
+        nombre: `${g.cliente?.nombre || 'Cliente'} · ${DIAS_JS[g.dia]}`,
+        cliente_id: g.p.cliente_id, frecuencia, dia_semana: g.dia, activo: true,
+        proxima_ejecucion: proximaFechaDia(g.dia),
+        notas: `Creado a partir del pedido #${g.p.id} del ${formatDate(g.f)} (${quienCambia()}).`,
+      }).select().single();
+      if (error) { fallos.push(`${g.cliente?.nombre}: ${error.message}`); continue; }
+      const { error: e2 } = await supabase.from('pedidos_recurrentes_items').insert(g.items.map(i => ({ pedido_recurrente_id: pr.id, producto_id: i.producto_id, cantidad: Math.max(1, Math.round(Number(i.cantidad) || 1)) })));
+      if (e2) { fallos.push(`${g.cliente?.nombre} (productos): ${e2.message}`); await supabase.from('pedidos_recurrentes').delete().eq('id', pr.id); continue; }
+      creados++;
+    }
+    refetchPedidosRecurrentes(); refetchPedidosRecurrentesItems(); setSelectedPedidos([]);
+    alert(`${creados ? `✅ ${creados} pedido(s) recurrente(s) creado(s). Están en Pedidos → Recurrentes.` : 'No se ha creado ninguno.'}${saltados.length ? `\n\nSaltados:\n${saltados.join('\n')}` : ''}${fallos.length ? `\n\n❌ Errores:\n${fallos.join('\n')}` : ''}`);
+  };
+
+  // Ajuste rápido de cantidades de un recurrente (ampliar o reducir), con historial en sus notas
+  const abrirAjusteRecurrente = (pr) => {
+    const its = pedidosRecurrentesItems.filter(i => i.pedido_recurrente_id === pr.id);
+    setAjusteRecurrente({ prId: pr.id, filas: its.map(i => ({ id: i.id, producto_id: i.producto_id, cantidad: Number(i.cantidad) || 0, original: Number(i.cantidad) || 0 })), motivo: '' });
+    setShowModal('ajuste_recurrente');
+  };
+  const lineaHistorial = (cambios, motivo) => `[${new Date().toLocaleDateString('es-ES')} ${quienCambia()}] ${cambios.join('; ')}${motivo ? ` — ${motivo}` : ''}`;
+  const guardarAjusteRecurrente = async () => {
+    const a = ajusteRecurrente;
+    const pr = pedidosRecurrentes.find(r => r.id === a.prId);
+    if (!pr) return;
+    const cambios = [];
+    for (const f of a.filas) {
+      const n = Math.max(0, Math.round(Number(f.cantidad) || 0));
+      if (f.id && n === f.original) continue;
+      if (!f.id && n === 0) continue;
+      let error;
+      if (f.id && n === 0) ({ error } = await supabase.from('pedidos_recurrentes_items').delete().eq('id', f.id));
+      else if (f.id) ({ error } = await supabase.from('pedidos_recurrentes_items').update({ cantidad: n }).eq('id', f.id));
+      else ({ error } = await supabase.from('pedidos_recurrentes_items').insert({ pedido_recurrente_id: pr.id, producto_id: Number(f.producto_id), cantidad: n }));
+      if (error) { alert('❌ No se pudo guardar ' + nombreProd(f.producto_id) + ': ' + error.message); refetchPedidosRecurrentesItems(); return; }
+      cambios.push(`${nombreProd(f.producto_id)} ${f.id ? f.original : 0}→${n}${n === 0 ? ' (quitado)' : !f.id ? ' (nuevo)' : ''}`);
+    }
+    if (!cambios.length) { setShowModal(null); setAjusteRecurrente(null); return; }
+    const notas = [String(pr.notas || '').trim(), lineaHistorial(cambios, a.motivo.trim())].filter(Boolean).join('\n');
+    const { error } = await supabase.from('pedidos_recurrentes').update({ notas }).eq('id', pr.id);
+    if (error) alert('⚠️ Cantidades guardadas, pero no el historial: ' + error.message);
+    refetchPedidosRecurrentes(); refetchPedidosRecurrentesItems();
+    setShowModal(null); setAjusteRecurrente(null);
+    alert(`✅ "${pr.nombre}" actualizado:\n${cambios.join('\n')}\n\nSe aplica desde el próximo pedido que se genere.`);
+  };
+  const historialRecurrente = (pr) => String(pr.notas || '').split('\n').filter(l => /^\[\d/.test(l.trim()));
+
+  const renderAjusteRecurrente = () => {
+    const a = ajusteRecurrente;
+    const pr = a && pedidosRecurrentes.find(r => r.id === a.prId);
+    if (!pr) return null;
+    const setFila = (idx, cantidad) => setAjusteRecurrente({ ...a, filas: a.filas.map((f, i) => i === idx ? { ...f, cantidad: Math.max(0, cantidad) } : f) });
+    const enLista = new Set(a.filas.map(f => Number(f.producto_id)));
+    const totalAntes = a.filas.reduce((t, f) => t + getPrecioCliente(f.producto_id, pr.cliente_id) * (f.id ? f.original : 0), 0);
+    const totalDespues = a.filas.reduce((t, f) => t + getPrecioCliente(f.producto_id, pr.cliente_id) * (Number(f.cantidad) || 0), 0);
+    const hist = historialRecurrente(pr);
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-neutral-600">{clientes.find(c => c.id === pr.cliente_id)?.nombre} · cada {DIAS_JS[Number(pr.dia_semana)] || ''} · {pr.frecuencia}. Pon a 0 lo que ya no quiere.</p>
+        <div className="divide-y border rounded-xl">
+          {a.filas.map((f, idx) => {
+            const cambiado = (f.id ? f.original : 0) !== (Number(f.cantidad) || 0);
+            return (
+              <div key={idx} className={`flex items-center justify-between gap-3 p-2.5 ${cambiado ? 'bg-amber-50' : ''}`}>
+                <div className="min-w-0">
+                  <p className={`font-semibold text-sm truncate ${Number(f.cantidad) === 0 ? 'line-through text-neutral-400' : ''}`}>{nombreProd(f.producto_id)}</p>
+                  <p className="text-xs text-neutral-500">{formatCurrency(getPrecioCliente(f.producto_id, pr.cliente_id))}/ud{f.id ? ` · antes ${f.original}` : ' · nuevo'}</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => setFila(idx, (Number(f.cantidad) || 0) - 1)} className="w-9 h-9 rounded-lg border text-lg font-bold hover:bg-neutral-50">−</button>
+                  <input type="number" min="0" value={f.cantidad} onChange={e => setFila(idx, parseInt(e.target.value, 10) || 0)} className="w-16 h-9 rounded-lg border text-center font-bold" />
+                  <button onClick={() => setFila(idx, (Number(f.cantidad) || 0) + 1)} className="w-9 h-9 rounded-lg border text-lg font-bold hover:bg-neutral-50">+</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <select value="" onChange={e => { if (e.target.value) setAjusteRecurrente({ ...a, filas: [...a.filas, { producto_id: Number(e.target.value), cantidad: 1, original: 0 }] }); }} className="w-full px-3 py-2 rounded-xl border bg-white text-sm">
+          <option value="">+ Añadir producto…</option>
+          {productos.filter(p => p.activo !== false && !enLista.has(p.id)).map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </select>
+        <Input label="Motivo (opcional, queda en el historial)" value={a.motivo} onChange={e => setAjusteRecurrente({ ...a, motivo: e.target.value })} placeholder="Ej: amplía por temporada, cierra los lunes…" />
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-neutral-500">Importe por entrega (sin IVA): {formatCurrency(totalAntes)} → <strong className={totalDespues > totalAntes ? 'text-emerald-600' : totalDespues < totalAntes ? 'text-red-600' : ''}>{formatCurrency(totalDespues)}</strong></span>
+        </div>
+        {hist.length > 0 && (
+          <div className="text-xs text-neutral-500 bg-neutral-50 rounded-lg p-2 space-y-0.5">
+            <p className="font-semibold text-neutral-600">Historial de cambios</p>
+            {hist.slice(-5).reverse().map((l, i) => <p key={i}>{l}</p>)}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <Button variant="secondary" onClick={() => { setShowModal(null); setAjusteRecurrente(null); }}>Cancelar</Button>
+          <Button onClick={guardarAjusteRecurrente}><Check size={16} />Guardar cambios</Button>
+        </div>
+      </div>
+    );
+  };
 
   const renderPedidos = () => {
     // Aplicar filtros
@@ -12261,6 +12407,7 @@ ${pedidoLinea ? `^FO260,258
                   <span className="font-semibold text-blue-700">{selectedPedidos.length} pedido(s) seleccionado(s)</span>
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setSelectedPedidos([])}>Deseleccionar</Button>
+                    <Button size="sm" onClick={() => convertirPedidosARecurrentes(selectedPedidos)} title="Crear un pedido recurrente por cliente y día de entrega"><Repeat size={14} /> Hacer recurrentes</Button>{/* V89 */}
                     <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('pedidos', selectedPedidos, refetchPedidos, setSelectedPedidos)}>
                       <Trash2 size={14} /> Eliminar
                     </Button>
@@ -12327,6 +12474,7 @@ ${pedidoLinea ? `^FO260,258
                           >
                             <FileText size={16} />
                           </button>
+                          <button onClick={() => convertirPedidosARecurrentes([pedido.id])} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Hacer recurrente (se repite cada semana, quincena o mes)"><Repeat size={16} /></button>{/* V89 */}
                           <button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
                           <button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
                         </div></td>
@@ -12416,7 +12564,7 @@ ${pedidoLinea ? `^FO260,258
                         <div className="flex items-center gap-2">
                           <Calendar size={16} className="text-neutral-400" />
                           <span className={`text-sm ${darkMode ? 'text-neutral-300' : 'text-neutral-600'}`}>
-                            {diasSemana[pr.dia_semana] || 'Lunes'} • {frecConfig.label}
+                            {diasSemana[Number(pr.dia_semana) === 0 ? 7 : pr.dia_semana] || 'Lunes'} • {frecConfig.label}{/* V89: 0 = domingo */}
                           </span>
                         </div>
                         <div className={`p-3 rounded-lg ${darkMode ? 'bg-neutral-700' : 'bg-neutral-50'}`}>
@@ -12431,6 +12579,8 @@ ${pedidoLinea ? `^FO260,258
                           })}
                           {items.length > 3 && <p className="text-xs text-neutral-400">+{items.length - 3} más...</p>}
                         </div>
+                        {historialRecurrente(pr).length > 0 && <p className="text-[11px] text-neutral-500 truncate" title={historialRecurrente(pr).join('\n')}>🕓 {historialRecurrente(pr).slice(-1)[0]}</p>}{/* V89 */}
+                        <Button size="sm" variant="secondary" className="w-full justify-center" onClick={() => abrirAjusteRecurrente(pr)}>± Ampliar o reducir cantidades</Button>{/* V89 */}
                         <div className="flex items-center justify-between pt-2 border-t border-neutral-200">
                           <span className={`text-lg font-black ${darkMode ? 'text-white' : ''}`}>{formatCurrency(totalEstimado)}</span>
                           <div className="flex gap-1">
@@ -32056,6 +32206,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
         />
       </Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
+      {showModal === 'ajuste_recurrente' && ajusteRecurrente && <Modal title="± Cantidades del pedido recurrente" onClose={() => { setShowModal(null); setAjusteRecurrente(null); }} size="max-w-lg">{renderAjusteRecurrente()}</Modal>}{/* V89 */}
       {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'variedad' && <Modal title={editingItem ? 'Editar Variedad' : 'Nueva Variedad'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl">
