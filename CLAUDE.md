@@ -28,19 +28,20 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V89**; la siguiente es **V90**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V90: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V90-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V90**; la siguiente es **V91**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V91: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V91-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V90 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V91 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V90: <resumen corto>`.
+- Mensaje de commit: `V91: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
 - `src/empresa.js` (V82): `EMPRESA`, `LOGO_URL` y `PORTAL_CLIENTE_URL`, importados por `App.jsx` y por `src/AreaCliente.jsx`.
 - `src/AreaCliente.jsx` (V82): área de cliente pública en `/area-cliente?t=<clientes.portal_token>` (la elige `src/main.jsx`; `vercel.json` reescribe la ruta). Solo habla con la Edge Function `portal-cliente`, que filtra por el token con la service role: no le des acceso a tablas con la clave anon.
+- `src/recurrentes.js` (V90): calendario de entregas de los pedidos recurrentes (`dia_semana` = `Date.getDay()`, 0 domingo; frecuencia cada 1/2/4 semanas desde `fecha_inicio` hasta `fecha_fin`; `proxima_ejecucion` = próxima entrega por generar). `generarPedidosRecurrentes()` en `MainApp` crea solos los pedidos `dias_antelacion` días antes (con `recurrente_id`/`recurrente_fecha`, índice único) y su factura si el cliente factura por pedido; la planificación usa `proximasEntregas()`.
 - `src/serieFacturas.js` (V87): numeración correlativa de facturas emitidas (huecos, orden de fechas, última de la serie, datos de la rectificativa) y cuadre facturas ↔ asientos `FAC-`/`COB-`; lo usan `anularFactura()` y `renderControlSerie()`. **Una factura emitida no se borra nunca**: se anula con `anularFactura(f)` (rectificativa `R-AAAA-NNNN`); solo la última de su serie sin enviar ni cobrar se puede borrar (lo impone un trigger del SQL V87). Si cambias los importes de una factura, llama a `rehacerAsientoFactura(id)`. Estados `anulada` y `rectificativa` (y `tipo: 'anulada'` = número anulado sin importes): exclúyelos en los análisis de ventas.
 - `src/aprovisionamientos.js` (V88): stock FIFO de materiales (`materiales`, `compras_material` = líneas de las facturas de gasto, `recuentos_material`) consumido por lotes sembrados (semilla y sustrato) y unidades entregadas (envase según `productos.envase_material_id` o el formato en gramos, etiquetas). Da el consumo por mes, el coste por gramo producido de cada variedad y el envase por unidad de producto; `renderRentabilidad()` se lo pasa a `calcularRentabilidad` como `datos.aprov` para cargar materiales por consumo. Una factura de material con líneas NO cuenta como gasto del mes de compra en rentabilidad (pasa a existencias). Pruébalo en Node con datos reales.
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
