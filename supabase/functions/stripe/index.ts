@@ -18,6 +18,7 @@
 // Acciones (POST JSON):
 //   Stripe:   webhook (cabecera Stripe-Signature)
 //   Cliente:  { token, accion: 'domiciliar' }                      → { url } de Stripe Checkout
+//             { token, accion: 'pagar', factura_ids | 'todas' }   → V93: { url } para pagar ya con tarjeta
 //   ERP:      { accion: 'admin_estado' }
 //             { accion: 'admin_enlace', cliente_id, enviar }      → { url } y, si enviar, email al cliente
 //             { accion: 'admin_cobrar', factura_id }              → cobra ya una factura
@@ -44,6 +45,10 @@ const hoyMadrid = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Mad
 const esEmail = (x: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x);
 const emailsCliente = (c: any) => String(c?.email_facturacion || c?.email || "").split(/[,;\s]+/).map((x) => x.trim()).filter(esEmail);
 const eur = (n: any) => `${r2(n).toFixed(2).replace(".", ",")} €`;
+// V93: botón "Pagar con tarjeta" con el logo de Stripe (el mismo que en los emails de portal-cliente)
+const LOGO_STRIPE = "https://rootflow-erp.vercel.app/stripe-logo.png";
+const LOGO_STRIPE_BLANCO = "https://rootflow-erp.vercel.app/stripe-logo-blanco.png";
+const botonPagoTarjeta = (url: string, texto = "Pagar ahora con tarjeta") => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">💳 ${texto} <img src="${LOGO_STRIPE_BLANCO}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table><p style="margin:4px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay y Google Pay</p>`;
 const esc = (t: any) => String(t ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as any)[ch]);
 
 Deno.serve(async (req) => {
@@ -59,6 +64,7 @@ Deno.serve(async (req) => {
     const accion = String(body?.accion || "");
     if (accion === "cron_cobros") return json({ ok: true, ...(await cobrarPendientes(supabase, "automatico")) });
     if (accion === "domiciliar") return json(await domiciliarDesdePortal(supabase, body));
+    if (accion === "pagar") return json(await pagarDesdePortal(supabase, body)); // V93
     if (!accion.startsWith("admin_")) return json({ error: "Acción no válida" }, 400);
     const usuario = await usuarioERP(req, supabase);
     if (!usuario) return json({ error: "Solo para usuarios del ERP" }, 401);
@@ -161,6 +167,34 @@ async function domiciliarDesdePortal(supabase: any, body: any) {
   return { url: await crearEnlace(supabase, c) };
 }
 
+// V93: pagar ya con tarjeta una o varias facturas pendientes (Checkout en modo pago). El enlace de los
+// emails va al área de cliente (?pagar=…), que llama aquí: así nunca caduca (las sesiones de Stripe duran 24 h).
+async function pagarDesdePortal(supabase: any, body: any) {
+  const c = await clientePorToken(supabase, body.token);
+  if (!c) return { error: "Este enlace no es válido o ha caducado" };
+  const { data: pend } = await supabase.from("facturas").select("*").eq("cliente_id", c.id).in("estado", ESTADOS_PENDIENTE).order("fecha");
+  const pagables = (pend || []).filter((f: any) => r2(f.total) > 0 && f.tipo !== "anulada" && f.tipo !== "rectificativa" && !/^R-/.test(String(f.id)) && !["processing", "succeeded"].includes(f.stripe_estado));
+  const pedidas = body.factura_ids === "todas" ? null : new Set((Array.isArray(body.factura_ids) ? body.factura_ids : String(body.factura_ids || "").split(",")).map((x: any) => String(x).trim()).filter(Boolean));
+  const lista = pagables.filter((f: any) => !pedidas || pedidas.has(String(f.id))).slice(0, 20);
+  if (!lista.length) return { error: "Esa factura ya está pagada o tiene un cobro en curso. ¡Gracias!" };
+  const customer = await asegurarCustomer(supabase, c);
+  const vuelta = `${PORTAL_URL()}?t=${encodeURIComponent(c.portal_token)}`;
+  const ids = lista.map((f: any) => f.id).join(",");
+  const s = await st("POST", "/checkout/sessions", {
+    mode: "payment",
+    customer,
+    adaptive_pricing: { enabled: false }, // siempre en euros (cuadra con la factura y el asiento)
+    locale: "es",
+    allowed_payment_method_types: ["card"],
+    line_items: lista.map((f: any) => ({ quantity: 1, price_data: { currency: "eur", unit_amount: Math.round(r2(f.total) * 100), product_data: { name: `Factura ${f.id}`, description: `RootFlow Hydroponics · factura del ${String(f.fecha).split("-").reverse().join("/")}` } } })),
+    payment_intent_data: { description: `Factura${lista.length > 1 ? "s" : ""} ${ids} · RootFlow Hydroponics`, metadata: { factura_ids: ids, cliente_id: String(c.id), origen: "pago_tarjeta" } },
+    metadata: { factura_ids: ids, cliente_id: String(c.id) },
+    success_url: `${vuelta}&pago=ok`,
+    cancel_url: `${vuelta}&pago=cancelado`,
+  }, `pagar-${ids}-${Math.floor(Date.now() / 600000)}`); // la misma sesión durante 10 min si pulsa dos veces
+  return { url: s.url };
+}
+
 async function enlaceAdmin(supabase: any, body: any, usuario: string) {
   const { data: c } = await supabase.from("clientes").select("*").eq("id", Number(body.cliente_id)).maybeSingle();
   if (!c) throw new Error("Cliente no encontrado");
@@ -168,6 +202,14 @@ async function enlaceAdmin(supabase: any, body: any, usuario: string) {
   if (!body.enviar) return { ok: true, url };
   const para = emailsCliente(c);
   if (!para.length) throw new Error("El cliente no tiene email");
+  // V93: si tiene facturas pendientes, también se pueden pagar ya con tarjeta
+  const { data: pend } = await supabase.from("facturas").select("id, total, fecha_vencimiento, stripe_estado, tipo").eq("cliente_id", c.id).in("estado", ESTADOS_PENDIENTE).order("fecha");
+  const pagables = (pend || []).filter((f: any) => r2(f.total) > 0 && f.tipo !== "anulada" && !["processing", "succeeded"].includes(f.stripe_estado));
+  const pendientesHtml = pagables.length && c.portal_token ? `
+    <div style="margin:18px 0;padding:14px;border:1px solid #e0defe;border-radius:10px;background:#f7f7ff;">
+      <p style="margin:0 0 8px;font-size:14px;"><strong>Tienes ${pagables.length} factura${pagables.length > 1 ? "s" : ""} pendiente${pagables.length > 1 ? "s" : ""}</strong> (${eur(pagables.reduce((t: number, f: any) => t + r2(f.total), 0))}). Si quieres, puedes pagarla${pagables.length > 1 ? "s" : ""} ya con tarjeta:</p>
+      ${botonPagoTarjeta(`${PORTAL_URL()}?t=${encodeURIComponent(c.portal_token)}&pagar=todas`, pagables.length > 1 ? "Pagar todas con tarjeta" : "Pagar ahora con tarjeta")}
+    </div>` : "";
   const html = `<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;margin:0;padding:0;">
   <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
     <p style="font-size:22px;font-weight:800;">Root<span style="color:#F97316;">Flow</span></p>
@@ -175,6 +217,7 @@ async function enlaceAdmin(supabase: any, body: any, usuario: string) {
     <p style="font-size:15px;">Para que no tengas que estar pendiente de las transferencias, a partir de ahora podemos cobrarte cada factura automáticamente el día de su vencimiento, con tarjeta o con adeudo en tu cuenta (SEPA).</p>
     <p style="font-size:15px;">Solo tienes que hacerlo una vez, en la página segura de Stripe, nuestra plataforma de pagos:</p>
     <p style="margin:22px 0;"><a href="${url}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:8px;">Domiciliar mis pagos</a></p>
+    ${pendientesHtml}
     <p style="font-size:13px;color:#555;">Seguirás recibiendo cada factura por email antes del cobro y las tienes todas en tu área de cliente. Puedes cancelar la domiciliación cuando quieras escribiéndonos. El enlace caduca en 24 horas: si se te pasa, pídenos otro o hazlo desde tu área de cliente.</p>
     <p style="font-size:14px;margin-top:20px;">Gracias 🌱<br>RootFlow Hydroponics · info@rootflow.es</p>
   </div></body></html>`;
@@ -313,36 +356,53 @@ const traducirError = (err: any) => ({
   incorrect_cvc: "CVC incorrecto",
 } as any)[err?.decline_code || err?.code] || err?.message || "";
 
-// Pago confirmado: factura pagada + asiento (5721 Stripe / 430) + comisión (626 / 5721). Idempotente.
+// Pago confirmado: facturas pagadas + asiento por factura (5721 Stripe / 430) + comisión (626 / 5721)
+// repartida entre ellas por importe. Idempotente. V93: un pago puede ser de varias facturas (factura_ids).
 async function pagoCorrecto(supabase: any, piId: string) {
   const pi = await st("GET", `/payment_intents/${piId}`, { expand: ["latest_charge.balance_transaction"] });
-  const facturaId = pi.metadata?.factura_id;
-  if (!facturaId) return "sin factura";
-  const { data: f } = await supabase.from("facturas").select("*").eq("id", facturaId).maybeSingle();
-  if (!f) return "factura no encontrada";
+  const ids = String(pi.metadata?.factura_id || pi.metadata?.factura_ids || "").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!ids.length) return "sin factura";
+  const { data: fs } = await supabase.from("facturas").select("*").in("id", ids);
+  if (!fs?.length) return "factura no encontrada";
   const bt = pi.latest_charge?.balance_transaction;
-  const comision = bt?.fee != null ? r2(bt.fee / 100) : null;
+  const comisionTotal = bt?.fee != null ? r2(bt.fee / 100) : 0;
   const fecha = pi.latest_charge?.created ? new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date(pi.latest_charge.created * 1000)) : hoyMadrid();
   const cobrado = r2(pi.amount_received / 100);
-  if (f.estado === "pagada" && f.stripe_estado === "succeeded") return "ya estaba";
-  const { error } = await supabase.from("facturas").update({ estado: "pagada", fecha_cobro: fecha, metodo_cobro: "stripe", stripe_estado: "succeeded", stripe_error: null, stripe_payment_intent_id: pi.id, stripe_comision: comision }).eq("id", f.id);
-  if (error) throw new Error(error.message);
-  const { data: c } = await supabase.from("clientes").select("nombre").eq("id", f.cliente_id).maybeSingle();
-  const lineas = [
-    { cuenta: "5721", concepto: "Stripe (cobro pendiente de liquidar)", debe: cobrado, haber: 0 },
-    { cuenta: "430", concepto: "Clientes", debe: 0, haber: cobrado },
-    ...(comision ? [
-      { cuenta: "626", concepto: "Comisión Stripe", debe: comision, haber: 0 },
-      { cuenta: "5721", concepto: "Stripe (comisión)", debe: 0, haber: comision },
-    ] : []),
-  ];
-  await guardarAsiento(supabase, `COB-${f.id}`, fecha, `Cobro Factura ${f.id}${c?.nombre ? " - " + c.nombre : ""} (Stripe)`, lineas);
-  if (Math.abs(cobrado - r2(f.total)) > 0.01) await slack(supabase, `⚠️ Stripe ha cobrado ${eur(cobrado)} por la factura ${f.id}, que es de ${eur(f.total)}. Revísalo.`);
-  return "pagada";
+  const sumaFacturas = r2(fs.reduce((t: number, f: any) => t + r2(f.total), 0));
+  const ordenadas = ids.map((id) => fs.find((f: any) => f.id === id)).filter(Boolean);
+  let comisionRepartida = 0;
+  const pagadas: string[] = [];
+  for (let i = 0; i < ordenadas.length; i++) {
+    const f: any = ordenadas[i];
+    const parte = i === ordenadas.length - 1 ? r2(comisionTotal - comisionRepartida) : r2(comisionTotal * r2(f.total) / (sumaFacturas || 1));
+    comisionRepartida = r2(comisionRepartida + parte);
+    if (f.estado === "pagada" && f.stripe_estado === "succeeded") continue;
+    if (f.estado !== "pendiente" && f.estado !== "vencida") { // ya cobrada por otra vía (transferencia…) o anulada: posible pago doble
+      await slack(supabase, `⚠️ *Posible pago doble*: la factura ${f.id} ya estaba ${f.estado} y el cliente la ha pagado también con Stripe (${eur(f.total)}). Devuélvelo desde el panel de Stripe o déjalo a cuenta.`);
+      continue;
+    }
+    const importe = ordenadas.length === 1 ? cobrado : r2(f.total);
+    const { error } = await supabase.from("facturas").update({ estado: "pagada", fecha_cobro: fecha, metodo_cobro: "stripe", stripe_estado: "succeeded", stripe_error: null, stripe_payment_intent_id: pi.id, stripe_comision: parte || null }).eq("id", f.id);
+    if (error) throw new Error(error.message);
+    const { data: c } = await supabase.from("clientes").select("nombre").eq("id", f.cliente_id).maybeSingle();
+    const lineas = [
+      { cuenta: "5721", concepto: "Stripe (cobro pendiente de liquidar)", debe: importe, haber: 0 },
+      { cuenta: "430", concepto: "Clientes", debe: 0, haber: importe },
+      ...(parte ? [
+        { cuenta: "626", concepto: "Comisión Stripe", debe: parte, haber: 0 },
+        { cuenta: "5721", concepto: "Stripe (comisión)", debe: 0, haber: parte },
+      ] : []),
+    ];
+    await guardarAsiento(supabase, `COB-${f.id}`, fecha, `Cobro Factura ${f.id}${c?.nombre ? " - " + c.nombre : ""} (Stripe)`, lineas);
+    pagadas.push(f.id);
+  }
+  if (Math.abs(cobrado - sumaFacturas) > 0.01) await slack(supabase, `⚠️ Stripe ha cobrado ${eur(cobrado)} por ${ids.join(", ")}, que suman ${eur(sumaFacturas)}. Revísalo.`);
+  if (pagadas.length && pi.metadata?.origen === "pago_tarjeta") await slack(supabase, `💳 Pago con tarjeta recibido: ${pagadas.join(", ")} (${eur(cobrado)}). Marcadas como cobradas en el ERP.`);
+  return pagadas.length ? "pagada" : "ya estaba";
 }
 
 async function pagoFallido(supabase: any, pi: any) {
-  const facturaId = pi.metadata?.factura_id;
+  const facturaId = pi.metadata?.factura_id; // V93: los pagos con tarjeta desde el área de cliente (factura_ids) no se marcan como fallidos: el cliente lo reintenta allí
   if (!facturaId) return "sin factura";
   const msg = traducirError(pi.last_payment_error) || pi.last_payment_error?.message || "Pago rechazado";
   const { data: f } = await supabase.from("facturas").select("id, estado, total, cliente_id").eq("id", facturaId).maybeSingle();
@@ -392,7 +452,7 @@ async function webhook(supabase: any, raw: string, cabecera: string) {
   let resultado = "ignorado";
   try {
     const o = ev.data?.object || {};
-    if (ev.type === "checkout.session.completed") resultado = await domiciliacionCompletada(supabase, o);
+    if (ev.type === "checkout.session.completed") resultado = o.mode === "payment" ? (o.payment_status === "paid" && o.payment_intent ? await pagoCorrecto(supabase, o.payment_intent) : "pago pendiente") : await domiciliacionCompletada(supabase, o); // V93
     else if (ev.type === "payment_intent.succeeded") resultado = await pagoCorrecto(supabase, o.id);
     else if (ev.type === "payment_intent.processing") {
       if (o.metadata?.factura_id) await supabase.from("facturas").update({ stripe_estado: "processing", stripe_payment_intent_id: o.id }).eq("id", o.metadata.factura_id).neq("estado", "pagada");

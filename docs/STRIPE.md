@@ -47,6 +47,28 @@ Nunca pegues estas claves en el chat, en GitHub ni en el código.
 5. En Supabase cambia `STRIPE_SECRET_KEY` por la `sk_live_…` y `STRIPE_WEBHOOK_SECRET` por el `whsec_…` del webhook real.
 6. Los clientes domiciliados en pruebas no valen en real: hay que mandar el enlace de nuevo.
 
+## 3b. Al pasar de pruebas a real
+
+Los clientes y tarjetas creados en el sandbox no existen en la cuenta real. Antes de poner las claves reales, ejecuta en el SQL Editor de Supabase (o pídeselo a Claude):
+
+```sql
+UPDATE clientes SET stripe_customer_id = NULL, stripe_payment_method_id = NULL, stripe_mandate_id = NULL,
+  stripe_metodo = NULL, stripe_metodo_detalle = NULL, stripe_activo = FALSE, stripe_domiciliado_at = NULL;
+UPDATE facturas SET stripe_estado = NULL, stripe_error = NULL, stripe_payment_intent_id = NULL
+  WHERE estado IN ('pendiente', 'vencida');
+```
+
+## Pagar ya con tarjeta (V93)
+
+- En los emails de factura y de recordatorio, y en el de domiciliación, aparece el botón morado **«💳 Pagar ahora con tarjeta»** con el logo de Stripe. En el área de cliente aparece en cada factura pendiente, y en el resumen sale **«Pagar las N con tarjeta»**.
+- El botón abre la página de pago de Stripe con la factura o facturas. Al pagar:
+  - quedan **cobradas** en el ERP con su asiento;
+  - llega un aviso a Slack;
+  - el cliente vuelve a su área con «✓ Pago recibido».
+- A las facturas domiciliadas no se les pone el botón, porque se cobran solas.
+- Si una factura ya estaba cobrada (por ejemplo, por transferencia) y además la pagan con tarjeta, avisa en Slack de **posible pago doble**: devuélvelo desde el panel de Stripe.
+- Prueba en el sandbox con la tarjeta `4242 4242 4242 4242`.
+
 ## 4. Día a día
 
 - **Domiciliar a un restaurante:** 🏦 Banco y cobros → 💳 Stripe → **Enviar enlace** (email con botón) o **Copiar enlace** (para WhatsApp; caduca en 24 h). El cliente también puede hacerlo desde su área de cliente.
