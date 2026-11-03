@@ -1,4 +1,4 @@
-// Supabase Edge Function: portal-cliente (V82 + V83 + V91 recordatorios de pago)
+// Supabase Edge Function: portal-cliente (V82 + V83 + V91 recordatorios de pago + V92 Stripe)
 // 1) Backend del área de cliente (src/AreaCliente.jsx). El cliente entra con el enlace
 //    https://…/area-cliente?t=<clientes.portal_token> y esta función, con la service role,
 //    le devuelve SOLO sus datos. El navegador del cliente nunca lee las tablas directamente.
@@ -113,7 +113,7 @@ Deno.serve(async (req) => {
     }
     const { data: cliente, error: errCli } = await supabase
       .from("clientes")
-      .select("id, nombre, contacto, email, telefono, direccion, codigo_postal, ciudad, cif, recargo_equivalencia, sepa_activo, plazo_pago_dias, portal_activo, activo")
+      .select("*") // V92: incluye las columnas de Stripe (antes: lista fija; select * no falla si falta alguna)
       .eq("portal_token", token)
       .maybeSingle();
     if (errCli) {
@@ -201,6 +201,7 @@ const mapFactura = (f: any, grupos: any[]) => ({
   total: Number(f.total) || 0,
   metodo_cobro: f.metodo_cobro,
   plazo_pago_dias: f.plazo_pago_dias,
+  stripe_estado: f.stripe_estado || null, // V92
   fecha_cobro: f.fecha_cobro,
   enviada_at: f.enviada_at || null,
   factura_rectificada_id: f.factura_rectificada_id || (String(f.concepto || "").match(/rectificativa de la factura (\S+) de /) || [])[1] || null, // V87
@@ -288,6 +289,9 @@ async function cargarDatos(supabase: any, cliente: any) {
       cif: cliente.cif,
       sepa_activo: !!cliente.sepa_activo,
       plazo_pago_dias: cliente.plazo_pago_dias || 30,
+      stripe_activo: !!(cliente.stripe_activo && cliente.stripe_payment_method_id), // V92
+      stripe_metodo_detalle: cliente.stripe_activo ? cliente.stripe_metodo_detalle || null : null, // V92
+      stripe_desde: cliente.stripe_domiciliado_at ? String(cliente.stripe_domiciliado_at).slice(0, 7) + "-01" : null, // V92: se cobran las facturas de ese mes en adelante
     },
     facturas,
     pedidos: pedidos.map((p: any) => ({ ...p, total: Number(p.total) || 0, lineas: lineasPedido(p.id) })),
@@ -561,6 +565,7 @@ export async function pdfFactura(f: any, cliente: any) {
 
   // Pago
   const sepa = cliente?.sepa_activo && f.metodo_cobro === "sepa_b2b";
+  const stripe = cliente?.stripe_activo && cliente?.stripe_payment_method_id && String(f.fecha) >= String(cliente.stripe_domiciliado_at || "9999").slice(0, 7) + "-01"; // V92
   const plazo = f.plazo_pago_dias || cliente?.plazo_pago_dias || 30;
   const pago: string[] = rect
     ? [`Anula por completo la factura ${f.factura_rectificada_id || ""}${f.motivo_anulacion ? ". Motivo: " + f.motivo_anulacion : ""}.`, `Si ya la habías pagado, te devolvemos ${eur(-f.total)} o lo descontamos de tu próxima factura.`]
@@ -568,6 +573,8 @@ export async function pdfFactura(f: any, cliente: any) {
     ? [`Esta factura está ANULADA${f.rectificada_por ? " por la factura rectificativa " + f.rectificada_por : ""}. No hay que pagarla.`]
     : f.estado === "pagada"
     ? [`Factura pagada${f.fecha_cobro ? " el " + fechaES(f.fecha_cobro) : ""}. Gracias.`]
+    : stripe
+      ? [`Pago domiciliado: se cobrará automáticamente el ${fechaES(f.fecha_vencimiento)} con ${cliente.stripe_metodo_detalle || "el método de pago domiciliado"} (Stripe).`]
     : sepa
       ? [`Cobro por domiciliación SEPA B2B el ${fechaES(f.fecha_vencimiento)} en la cuenta del mandato firmado${cliente?.sepa_mandato_ref ? " (mandato " + cliente.sepa_mandato_ref + ")" : ""}.`]
       : [`Pago por transferencia · Titular: ${EMPRESA.nombre} · Banco: ${EMPRESA.banco}`, `IBAN: ${EMPRESA.iban} · BIC: ${EMPRESA.swift} · Concepto: ${f.id}`];
@@ -576,7 +583,7 @@ export async function pdfFactura(f: any, cliente: any) {
   ctx.necesita(alto + 10);
   ctx.rect(M, ctx.y - alto, W - 2 * M, alto, rgb(0.93, 0.98, 0.95));
   ctx.rect(M, ctx.y - alto, 3, alto, VERDE);
-  ctx.texto(rect ? "FACTURA RECTIFICATIVA (art. 15 RD 1619/2012)" : f.estado === "anulada" ? "ANULADA" : f.estado === "pagada" ? "PAGADA" : sepa ? "DOMICILIACIÓN SEPA" : "DATOS DE PAGO", M + 12, ctx.y - 13, { bold: true, size: 7.5, color: VERDE });
+  ctx.texto(rect ? "FACTURA RECTIFICATIVA (art. 15 RD 1619/2012)" : f.estado === "anulada" ? "ANULADA" : f.estado === "pagada" ? "PAGADA" : stripe ? "PAGO DOMICILIADO" : sepa ? "DOMICILIACIÓN SEPA" : "DATOS DE PAGO", M + 12, ctx.y - 13, { bold: true, size: 7.5, color: VERDE });
   pago.forEach((l, i) => ctx.texto(l, M + 12, ctx.y - 27 - i * 12, { size: 9, bold: i === 1 }));
   legal.forEach((l: string, i: number) => ctx.texto(l, M + 12, ctx.y - 27 - pago.length * 12 - 2 - i * 9.5, { size: 7.5, color: GRIS }));
   ctx.y -= alto + 10;
@@ -800,6 +807,7 @@ const urlPortal = (token: string, facturaId?: string) => `${PORTAL_URL()}?t=${en
 export function htmlEmailFactura(f: any, c: any, token: string, pendientes: any[]) {
   const fila = (l: string, v: string, extra = "") => `<tr><td style="padding:6px 0;color:#555;${extra}">${l}</td><td style="padding:6px 0;text-align:right;${extra}">${v}</td></tr>`;
   const sepa = c?.sepa_activo && f.metodo_cobro === "sepa_b2b";
+  const stripe = c?.stripe_activo && c?.stripe_payment_method_id && String(f.fecha) >= String(c.stripe_domiciliado_at || "9999").slice(0, 7) + "-01"; // V92
   const otras = pendientes.filter((p) => p.id !== f.id);
   const totalPend = pendientes.reduce((s, p) => s + (Number(p.total) || 0), 0);
   const hoy = new Date().toISOString().slice(0, 10);
@@ -820,6 +828,8 @@ export function htmlEmailFactura(f: any, c: any, token: string, pendientes: any[
     </table>
     <p style="font-size:14px;">${rect
       ? `Si ya habías pagado la factura ${esc(f.factura_rectificada_id || "")}, te devolvemos ${eur(-f.total)} o lo descontamos de tu próxima factura.`
+      : stripe
+      ? `Se cobrará automáticamente el ${fechaES(f.fecha_vencimiento)} con tu ${esc(c.stripe_metodo_detalle || "método de pago domiciliado")} (Stripe). No tienes que hacer nada.`
       : sepa
       ? `Se cobrará por domiciliación SEPA B2B el ${fechaES(f.fecha_vencimiento)} en la cuenta del mandato firmado.`
       : `Pago por transferencia a ${esc(EMPRESA.nombre)} (${esc(EMPRESA.banco)}) · IBAN <strong>${esc(EMPRESA.iban)}</strong> · Concepto: ${esc(f.id)}.`}</p>
@@ -869,6 +879,8 @@ export function motivoNoRecordar(f: any, c: any, hoy: string, cfg: { dias: numbe
   if (!c) return "sin cliente";
   if (!destinatariosCliente(c).length) return "el cliente no tiene email";
   if (c.sepa_activo && f.metodo_cobro === "sepa_b2b") return "se cobra por domiciliación SEPA";
+  if (f.stripe_estado === "processing") return "cobro con Stripe en curso"; // V92
+  if (c.stripe_activo && c.stripe_payment_method_id && f.stripe_estado !== "failed" && String(f.fecha) >= String(c.stripe_domiciliado_at || "9999").slice(0, 7) + "-01") return "se cobra solo con Stripe (domiciliado)"; // V92
   if (conIngresoSinConfirmar.has(f.id)) return "hay un ingreso en el banco que puede ser este pago: confírmalo en 🏦 Banco y cobros";
   if (manual) return null;
   if (c.recordatorios_auto === false) return "recordatorios desactivados en la ficha del cliente";

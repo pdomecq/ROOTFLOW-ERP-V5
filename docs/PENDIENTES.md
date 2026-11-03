@@ -45,6 +45,15 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Pesar y apuntar los **gramos de semilla por bandeja** de las variedades marcadas "estimado" (Rentabilidad → Aprovisionamientos) y hacer un **recuento** de sacos de sustrato (fija los litros por bandeja), semillas (pesar bolsas) y tarrinas/etiquetas.
 - Revisar en "Envase y etiquetas de cada producto" que el envase por formato es el bueno (por defecto: 30 g y mezclas → tarrina 750 cc; 15 g → oval 250 cc; 5 g → oval 150 cc).
 
+## 4c. 🟠 Banco, recordatorios y Stripe (V91–V92): ponerlos en marcha
+
+- **Stripe (pruebas)**: poner en Supabase → Edge Functions → Secrets `STRIPE_SECRET_KEY` (sk_test_… del Stripe sandbox) y `STRIPE_WEBHOOK_SECRET` (Stripe → Developers → Webhooks → endpoint `…/functions/v1/stripe` → Signing secret). Probar con un cliente de prueba y la tarjeta 4242 4242 4242 4242. Pasos en `docs/STRIPE.md`.
+- **Stripe (real)**: activar la cuenta (Nico, administrador único, con su DNI), crear el mismo webhook en modo real y cambiar las dos claves por las `sk_live_…` / `whsec_…` reales. Después mandar el enlace de domiciliación a los restaurantes.
+- **Banco**: hasta que se dé de alta Enable Banking (`docs/BANCO.md`), subir el extracto del BBVA al menos 2 veces por semana: sin movimientos de los últimos 3 días los recordatorios no salen (avisa en Slack).
+- Primeras facturas que vencen: F-2026-0016 (Gold Gourmet) y F-2026-0018 (Soto del Lugar) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
+- Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
+- F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el extracto del 5-ago al 3-nov: confirmar si se cobró antes de agosto.
+
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
 - Rellenar en Producción las fichas de coste de cada variedad (gramos y €/kg de semilla, sustrato) y en Productos el coste de envase y etiqueta: permitirá comparar el coste real (compras) con el estándar y ver la merma.

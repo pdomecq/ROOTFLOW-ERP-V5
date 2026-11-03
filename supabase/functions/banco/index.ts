@@ -288,7 +288,9 @@ async function insertarMovimientos(supabase: any, entrantes: any[], origen: stri
   const porRef = entrantes.filter((m) => !m.ref_externa || !refs.has(m.ref_externa));
   const refsEntrantes = new Set(entrantes.map((m) => m.ref_externa).filter(Boolean));
   const comparables = (existentes || []).filter((e: any) => !(e.origen === origen && e.ref_externa && refsEntrantes.has(e.ref_externa)));
-  const nuevos = movimientosNuevos(comparables, porRef).map((m: any) => ({ ...m, origen, estado: r2(m.importe) > 0 ? "pendiente" : "cargo" }));
+  // Números de tarjeta completos que trae el extracto ("RECOBRO DEUDA … TARJETA 5478…"): solo los 4 últimos
+  const enmascarar = (t: any) => (t == null ? t : String(t).replace(/\b\d{12,15}(\d{4})\b/g, "************$1"));
+  const nuevos = movimientosNuevos(comparables, porRef).map((m: any) => ({ ...m, concepto: enmascarar(m.concepto), origen, estado: r2(m.importe) > 0 ? "pendiente" : "cargo" }));
   for (let i = 0; i < nuevos.length; i += 200) {
     const { error: e2 } = await supabase.from("movimientos_banco").insert(nuevos.slice(i, i + 200));
     if (e2) throw new Error("No se pudieron guardar los movimientos: " + e2.message);

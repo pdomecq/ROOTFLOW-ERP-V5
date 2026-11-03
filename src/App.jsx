@@ -1281,6 +1281,7 @@ const MainApp = () => {
     '555': { nombre: 'Partidas pendientes de aplicación', tipo: 'A', grupo: '5' },
     '570': { nombre: 'Caja, euros', tipo: 'A', grupo: '5' },
     '572': { nombre: 'Bancos c/c vista, euros', tipo: 'A', grupo: '5' },
+    '5721': { nombre: 'Stripe (cobros pendientes de liquidar al banco)', tipo: 'A', grupo: '5' }, // V92
     '573': { nombre: 'Bancos c/c moneda extranjera', tipo: 'A', grupo: '5' },
     // Grupo 6 - Compras y gastos
     '600': { nombre: 'Compras de mercaderías', tipo: 'G', grupo: '6' },
@@ -4523,6 +4524,7 @@ const MainApp = () => {
   const [bancoCargando, setBancoCargando] = useState('');
   const [bancoFiltro, setBancoFiltro] = useState('revisar');
   const [bancoAsignar, setBancoAsignar] = useState(null); // { movimiento, ids: [] }
+  const [stripeEstado, setStripeEstado] = useState(null); // V92
   const invocarBanco = async (body) => {
     const { data, error } = await supabase.functions.invoke('banco', { body });
     if (error) {
@@ -4532,6 +4534,91 @@ const MainApp = () => {
     }
     return data || {};
   };
+  // V92: Stripe (domiciliación y cobro automático de facturas)
+  const invocarStripe = async (body) => {
+    const { data, error } = await supabase.functions.invoke('stripe', { body });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      return { error: msg };
+    }
+    return data || {};
+  };
+  const accionStripe = async (etiqueta, body) => {
+    setBancoCargando(etiqueta);
+    const r = await invocarStripe(body);
+    setBancoCargando('');
+    if (r.error) { alert('❌ ' + r.error); return null; }
+    refetchFacturas(); refetchClientes(); cargarBancoEstado();
+    return r;
+  };
+  const enlaceStripe = async (c, enviar) => {
+    if (enviar && !window.confirm(`¿Enviar a ${c.nombre} (${emailsFacturacion(c) || 'sin email'}) el email para domiciliar sus pagos con Stripe?`)) return;
+    const r = await accionStripe('stripe_enlace', { accion: 'admin_enlace', cliente_id: c.id, enviar });
+    if (!r) return;
+    if (enviar) alert(`📨 Enviado a ${r.enviado_a?.join(', ')}. Cuando lo complete, aparecerá como domiciliado y te avisará Slack.`);
+    else { try { await navigator.clipboard.writeText(r.url); alert('🔗 Enlace copiado (caduca en 24 h). Pégalo por WhatsApp o email al cliente.'); } catch { window.prompt('Copia este enlace (caduca en 24 h):', r.url); } }
+  };
+  const cobrarStripeYa = async (f) => {
+    if (!window.confirm(`¿Cobrar ya ${formatCurrency(f.total)} de la factura ${f.id} con Stripe?`)) return;
+    const r = await accionStripe('stripe_cobrar', { accion: 'admin_cobrar', factura_id: f.id });
+    if (r) alert(r.estado === 'succeeded' ? '✅ Cobrada.' : r.estado === 'processing' ? '⏳ Cobro en curso (los adeudos SEPA tardan unos días en confirmarse).' : `❌ No se ha podido cobrar: ${r.error || r.estado}`);
+  };
+  const quitarStripe = async (c) => {
+    if (!window.confirm(`¿Quitar la domiciliación de ${c.nombre}? Sus facturas volverán a pagarse por transferencia.`)) return;
+    await accionStripe('stripe_quitar', { accion: 'admin_quitar', cliente_id: c.id });
+  };
+  const renderStripe = () => {
+    const st = stripeEstado;
+    if (!st) return <p className="text-sm text-neutral-500">Cargando Stripe…</p>;
+    if (st.error) return <p className="text-sm text-red-600">Stripe: {st.error}</p>;
+    const activos = clientes.filter(c => c.activo !== false && c.nombre);
+    const orden = [...activos].sort((a, b) => (b.stripe_activo ? 1 : 0) - (a.stripe_activo ? 1 : 0) || (lineaDeCliente(a) === 'restaurantes' ? -1 : 0) - (lineaDeCliente(b) === 'restaurantes' ? -1 : 0) || a.nombre.localeCompare(b.nombre));
+    const pendientesDomiciliados = facturas.filter(f => ['pendiente', 'vencida'].includes(f.estado) && clientes.find(c => c.id === f.cliente_id)?.stripe_activo);
+    const ESTADO_ST = { processing: ['⏳ En curso', 'text-amber-700'], succeeded: ['✅ Cobrada', 'text-green-700'], failed: ['❌ Fallido', 'text-red-600'] };
+    return (
+      <div className="p-4 rounded-xl border bg-white space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-bold">💳 Cobro automático con Stripe {st.modo && <span className={`ml-1 text-xs px-2 py-0.5 rounded-full ${st.modo === 'real' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'}`}>{st.modo === 'real' ? 'modo real' : 'modo pruebas'}</span>}</p>
+          <label className="text-sm flex items-center gap-2">Cobrar
+            <select value={st.momento} onChange={e => guardarAjusteCobros('stripe_cobro_momento', e.target.value)} className="px-2 py-1 border rounded-lg text-sm">
+              <option value="vencimiento">el día que vence la factura</option>
+              <option value="emision">al emitir la factura</option>
+            </select>
+          </label>
+        </div>
+        {!st.configurado || !st.webhook ? <p className="text-xs p-2 rounded bg-amber-50 text-amber-800">⚠️ Falta configurar Stripe en Supabase ({[!st.configurado && 'STRIPE_SECRET_KEY', !st.webhook && 'STRIPE_WEBHOOK_SECRET'].filter(Boolean).join(' y ')}). Ver docs/STRIPE.md.</p> : null}
+        <p className="text-xs text-neutral-600">El cliente domicilia una vez (tarjeta o cuenta SEPA) con el enlace o desde su área de cliente. Desde ese mes, cada factura se cobra sola (cada día a las 8:20) y se marca pagada con su asiento; la transferencia semanal de Stripe al BBVA se contabiliza sola. Si un cobro falla, avisa en Slack y la factura vuelve a los recordatorios.</p>
+        <div className="max-h-56 overflow-y-auto border rounded-lg divide-y">
+          {orden.map(c => (
+            <div key={c.id} className="p-2 text-sm flex flex-wrap items-center gap-2">
+              <span className="flex-1 min-w-[160px] font-semibold">{c.nombre} <BadgeLinea linea={lineaDeCliente(c)} /></span>
+              <span className={`text-xs ${c.stripe_activo ? 'text-green-700 font-semibold' : 'text-neutral-400'}`}>{c.stripe_activo ? `✓ ${c.stripe_metodo_detalle || 'domiciliado'}` : 'sin domiciliar'}</span>
+              <Button size="sm" variant="secondary" disabled={!!bancoCargando || !st.configurado} onClick={() => enlaceStripe(c, true)}>{c.stripe_activo ? 'Pedir cambio' : 'Enviar enlace'}</Button>
+              <button className="text-xs text-neutral-500 hover:text-neutral-800" disabled={!!bancoCargando || !st.configurado} onClick={() => enlaceStripe(c, false)}>Copiar enlace</button>
+              {c.stripe_activo && <button className="text-xs text-red-500 hover:text-red-700" onClick={() => quitarStripe(c)}>Quitar</button>}
+            </div>
+          ))}
+        </div>
+        {pendientesDomiciliados.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-semibold">Facturas pendientes de clientes domiciliados</p>
+            {pendientesDomiciliados.map(f => {
+              const [lbl, cls] = ESTADO_ST[f.stripe_estado] || ['Se cobrará ' + (st.momento === 'emision' ? 'hoy' : `el ${formatDate(f.fecha_vencimiento)}`), 'text-neutral-500'];
+              return (
+                <div key={f.id} className="text-xs flex flex-wrap items-center gap-2">
+                  <span className="font-mono">{f.id}</span><span>{clientes.find(c => c.id === f.cliente_id)?.nombre}</span><span>{formatCurrency(f.total)}</span>
+                  <span className={cls}>{lbl}{f.stripe_error ? ` · ${f.stripe_error}` : ''}</span>
+                  {f.stripe_estado !== 'processing' && <button className="text-orange-600 font-semibold" disabled={!!bancoCargando} onClick={() => cobrarStripeYa(f)}>{f.stripe_estado === 'failed' ? 'Reintentar' : 'Cobrar ya'}</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const textoConciliacion = (c) => !c ? '' : [
     c.cobradas?.length ? `✅ Marcadas como cobradas: ${c.cobradas.join(', ')}` : 'No hay cobros nuevos que marcar.',
     c.enlazadas?.length ? `🔗 Enlazadas con facturas ya cobradas: ${c.enlazadas.length}` : '',
@@ -4539,8 +4626,8 @@ const MainApp = () => {
     c.errores?.length ? `❌ ${c.errores.join('\n')}` : '',
   ].filter(Boolean).join('\n');
   const cargarBancoEstado = async () => {
-    const [b, r] = await Promise.all([invocarBanco({ accion: 'admin_estado' }), invocarPortal({ accion: 'admin_estado_recordatorios' })]);
-    setBancoEstado(b); setRecordatoriosEstado(r);
+    const [b, r, st] = await Promise.all([invocarBanco({ accion: 'admin_estado' }), invocarPortal({ accion: 'admin_estado_recordatorios' }), invocarStripe({ accion: 'admin_estado' })]);
+    setBancoEstado(b); setRecordatoriosEstado(r); setStripeEstado(st);
   };
   const abrirBanco = () => { setShowModal('banco'); cargarBancoEstado(); refetchMovimientosBanco(); };
   const accionBanco = async (etiqueta, body, { refrescar = true } = {}) => {
@@ -4753,6 +4840,8 @@ const MainApp = () => {
             </div>
           )}
         </div>
+
+        {renderStripe()}{/* V92 */}
 
         {/* Recordatorios */}
         <div className="p-4 rounded-xl border bg-white space-y-3">

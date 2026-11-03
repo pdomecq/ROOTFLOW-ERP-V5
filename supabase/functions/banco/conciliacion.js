@@ -18,8 +18,8 @@ const dias = (a, b) => Math.round((Date.parse(`${String(a).slice(0, 10)}T12:00:0
 export const ESTADOS_PENDIENTE = ['pendiente', 'vencida'];
 const esFacturaDeVenta = (f) => f && f.tipo !== 'anulada' && f.tipo !== 'rectificativa' && !/^R-/.test(String(f.id)) && r2(f.total) > 0;
 
-// Ingresos que no son cobros de clientes
-const RE_OTRO = /APORTACI|FONDOS PROPIOS|TRASPASO DESDE TARJ|ABO\.? POR TRASPASO|CASHBACK|PROMOCI[OÓ]N COMERCIAL|ANULACI[OÓ]N ADEUDO|BONIF/;
+// Ingresos que no son cobros de clientes (STRIPE = transferencia semanal de Stripe: esos cobros ya se casan por el webhook)
+const RE_OTRO = /STRIPE|APORTACI|FONDOS PROPIOS|TRASPASO DESDE TARJ|ABO\.? POR TRASPASO|CASHBACK|PROMOCI[OÓ]N COMERCIAL|ANULACI[OÓ]N ADEUDO|BONIF/;
 const RE_TPV = /REMESA DE COMERCIOS|LIQUIDACI[OÓ]N REMESA|TPV/;
 
 export const normalizar = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
