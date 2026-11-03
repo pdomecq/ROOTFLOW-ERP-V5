@@ -11,7 +11,7 @@
 //     transferencia de Stripe al banco (payout.paid) → asiento STR-<id> (572 / 5721).
 //
 // Despliegue:  supabase functions deploy stripe --no-verify-jwt
-// Secrets:     STRIPE_SECRET_KEY      sk_test_… (pruebas) o sk_live_… (real) — Stripe → Developers → API keys
+// Secrets:     STRIPE_SECRET_KEY      sk_test_… (pruebas) o sk_live_… / rk_live_… (real; mejor restringida: «Full access—except sensitive operations») — Stripe → Developers → API keys
 //              STRIPE_WEBHOOK_SECRET  whsec_… del endpoint https://<proyecto>.supabase.co/functions/v1/stripe
 //              RESEND_API_KEY / FROM_EMAIL (ya están, para mandar el enlace de domiciliación)
 //
@@ -122,7 +122,7 @@ async function st(metodo: string, ruta: string, params: any = null, idempotencia
   }
   return data;
 }
-const modo = () => (env("STRIPE_SECRET_KEY").startsWith("sk_live") ? "real" : env("STRIPE_SECRET_KEY") ? "pruebas" : null);
+const modo = () => (/^(sk|rk)_live_/.test(env("STRIPE_SECRET_KEY")) ? "real" : env("STRIPE_SECRET_KEY") ? "pruebas" : null); // V94: rk_live_ = clave restringida real
 
 // ==================== DOMICILIACIÓN ====================
 async function clientePorToken(supabase: any, token: string) {
