@@ -67,6 +67,36 @@ const domiciliarPagos = async (token) => {
   }
 };
 
+// V93: pagar ya con tarjeta una o varias facturas pendientes (página segura de Stripe)
+const pagarConTarjeta = async (token, ids) => {
+  const res = await fetch(STRIPE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` },
+    body: JSON.stringify({ token, accion: 'pagar', factura_ids: ids }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.url) throw new Error(data?.error || `Error ${res.status}`);
+  window.location.href = data.url;
+};
+// Se puede pagar con tarjeta si Stripe está activo y no es una factura que se cobra sola (domiciliada)
+const pagableConTarjeta = (f, cliente) => cliente.pago_tarjeta && ['pendiente', 'vencida'].includes(f.estado) && f.total > 0
+  && f.stripe_estado !== 'processing' && !(cliente.stripe_activo && f.stripe_estado !== 'failed' && (!cliente.stripe_desde || String(f.fecha) >= cliente.stripe_desde))
+  && !(cliente.sepa_activo && f.metodo_cobro === 'sepa_b2b');
+
+function BotonPagoTarjeta({ token, ids, texto = 'Pagar ahora con tarjeta', className = '' }) {
+  const [abriendo, setAbriendo] = useState(false);
+  return (
+    <div className={className}>
+      <button disabled={abriendo} onClick={async (e) => { e.stopPropagation(); setAbriendo(true); try { await pagarConTarjeta(token, ids); } catch (err) { alert(err.message); setAbriendo(false); } }}
+        className="inline-flex items-center gap-2 bg-[#635BFF] hover:bg-[#5249e6] disabled:opacity-60 text-white font-bold rounded-xl px-4 py-2 text-sm">
+        {abriendo ? <Loader2 size={16} className="animate-spin" /> : <span>💳</span>}{abriendo ? 'Abriendo pago seguro…' : texto}
+        <img src="https://rootflow-erp.vercel.app/stripe-logo-blanco.svg" alt="Stripe" className="h-4 ml-1" />
+      </button>
+      <p className="text-[11px] text-neutral-500 mt-1 flex items-center gap-1">Pago seguro con <img src="https://rootflow-erp.vercel.app/stripe-logo.svg" alt="Stripe" className="h-3 inline" /> · Visa, Mastercard, Apple Pay y Google Pay</p>
+    </div>
+  );
+}
+
 function BloqueDomiciliacion({ cliente, token }) {
   const vuelta = new URLSearchParams(window.location.search).get('domiciliacion');
   if (cliente.stripe_activo) {
@@ -146,6 +176,20 @@ export default function AreaCliente() {
 
   useEffect(() => { document.title = 'Área de cliente · RootFlow'; cargar(); }, []);
 
+  // V93: el botón "Pagar con tarjeta" de los emails trae ?pagar=F-…|todas: se abre directamente el pago de Stripe
+  const [pagoDesdeEnlace, setPagoDesdeEnlace] = useState('');
+  useEffect(() => {
+    if (!datos) return;
+    const q = new URLSearchParams(window.location.search);
+    const ids = q.get('pagar');
+    if (!ids) return;
+    q.delete('pagar');
+    window.history.replaceState({}, '', `${window.location.pathname}?${q}`);
+    setPagoDesdeEnlace('abriendo');
+    pagarConTarjeta(token, ids === 'todas' ? 'todas' : ids.split(',')).catch((e) => setPagoDesdeEnlace(e.message));
+  }, [datos]);
+  const vueltaPago = new URLSearchParams(window.location.search).get('pago');
+
   // Abrir directamente la factura del enlace del email (?factura=ID)
   useEffect(() => {
     if (!datos) return;
@@ -218,7 +262,12 @@ export default function AreaCliente() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 no-print">
-        {tab === 'resumen' && <Resumen datos={datos} irA={setTab} abrirFactura={(f) => { setTab('facturas'); setFacturaAbierta(f); }} />}
+        {/* V93: pago con tarjeta */}
+        {pagoDesdeEnlace === 'abriendo' && <Tarjeta className="p-4 mb-4 flex items-center gap-2"><Loader2 size={18} className="animate-spin text-[#635BFF]" />Abriendo el pago seguro con tarjeta…</Tarjeta>}
+        {pagoDesdeEnlace && pagoDesdeEnlace !== 'abriendo' && <Tarjeta className="p-4 mb-4 text-sm text-amber-800 bg-amber-50 border-amber-200">{pagoDesdeEnlace}</Tarjeta>}
+        {vueltaPago === 'ok' && <Tarjeta className="p-4 mb-4 bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold">✓ ¡Pago recibido, gracias! En unos segundos verás la factura como pagada.</Tarjeta>}
+        {vueltaPago === 'cancelado' && <Tarjeta className="p-4 mb-4 text-sm text-neutral-600">No se ha hecho ningún cargo. Puedes pagar cuando quieras desde aquí.</Tarjeta>}
+        {tab === 'resumen' && <Resumen datos={datos} token={token} irA={setTab} abrirFactura={(f) => { setTab('facturas'); setFacturaAbierta(f); }} />}
         {tab === 'resumen' && <div className="mt-4"><BloqueDomiciliacion cliente={datos.cliente} token={token} /></div>}{/* V92 */}
         {tab === 'facturas' && <Facturas datos={datos} token={token} abrir={setFacturaAbierta} />}
         {tab === 'albaranes' && <Albaranes datos={datos} token={token} />}
@@ -247,7 +296,7 @@ export default function AreaCliente() {
 }
 
 // ==================== RESUMEN ====================
-function Resumen({ datos, irA, abrirFactura }) {
+function Resumen({ datos, token, irA, abrirFactura }) {
   const porPagar = datos.facturas.filter(f => f.estado === 'pendiente' || f.estado === 'vencida');
   const proximos = datos.pedidos.filter(p => ['pendiente', 'en_preparacion', 'enviado'].includes(p.estado));
   const tresMeses = new Date(); tresMeses.setMonth(tresMeses.getMonth() - 3);
@@ -277,6 +326,12 @@ function Resumen({ datos, irA, abrirFactura }) {
               <span className="font-bold">{eur(f.total)}</span>
             </button>
           ))}
+          {(() => { // V93
+            const pagables = porPagar.filter(f => pagableConTarjeta(f, datos.cliente));
+            if (!pagables.length) return null;
+            const total = pagables.reduce((t, f) => t + f.total, 0);
+            return <BotonPagoTarjeta className="mt-3 pt-3 border-t border-neutral-100" token={token} ids={pagables.length === porPagar.length ? 'todas' : pagables.map(f => f.id)} texto={pagables.length > 1 ? `Pagar las ${pagables.length} con tarjeta (${eur(total)})` : `Pagar ${eur(total)} con tarjeta`} />;
+          })()}
         </Tarjeta>
       )}
 
@@ -422,6 +477,7 @@ function FacturaDetalle({ factura: f, cliente, token, onClose }) {
                 <p><strong>Titular:</strong> {EMPRESA.nombre} · <strong>Banco:</strong> {EMPRESA.banco}</p>
                 <p><strong>IBAN:</strong> <span className="font-mono">{EMPRESA.iban}</span> · <strong>BIC:</strong> <span className="font-mono">{EMPRESA.swift}</span></p>
                 <p><strong>Concepto:</strong> {f.id}</p>
+                {pagableConTarjeta(f, cliente) && <BotonPagoTarjeta className="pt-3 no-print" token={token} ids={[f.id]} />}{/* V93 */}
               </div>
             )}
             <p className="text-xs text-neutral-600 mt-2">Plazo de pago: {plazo} días desde la fecha de factura (Ley 15/2010, productos perecederos). El impago en plazo devengará intereses de demora conforme al art. 7 de la Ley 3/2004.</p>
