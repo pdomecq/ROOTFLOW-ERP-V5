@@ -38,6 +38,7 @@ const DOMINIO_ERP = "@rootflow.es";
 const PORTAL_URL = () => env("PORTAL_URL") || "https://www.rootflow.es/area-cliente";
 const ESTADOS_PENDIENTE = ["pendiente", "vencida"];
 const MAX_COBROS_POR_EJECUCION = 40;
+const STRIPE_VERSION = "2026-09-30.endive"; // versión de la API fijada (los parámetros cambian entre versiones)
 const r2 = (x: any) => Math.round((parseFloat(x) || 0) * 100) / 100;
 const hoyMadrid = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date());
 const esEmail = (x: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x);
@@ -102,6 +103,7 @@ async function st(metodo: string, ruta: string, params: any = null, idempotencia
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/x-www-form-urlencoded",
+      "Stripe-Version": STRIPE_VERSION,
       ...(idempotencia ? { "Idempotency-Key": idempotencia } : {}),
     },
     body: metodo === "GET" ? undefined : form(params || {}).toString(),
@@ -143,7 +145,7 @@ async function crearEnlace(supabase: any, c: any) {
     currency: "eur",
     customer,
     locale: "es",
-    payment_method_types: ["sepa_debit", "card"],
+    allowed_payment_method_types: ["sepa_debit", "card"], // V92: payment_method_types ya no se admite (API 2026-09-30)
     billing_address_collection: "required",
     success_url: `${vuelta}${vuelta.includes("?") ? "&" : "?"}domiciliacion=ok`,
     cancel_url: `${vuelta}${vuelta.includes("?") ? "&" : "?"}domiciliacion=cancelada`,
@@ -285,7 +287,7 @@ async function cobrarFactura(supabase: any, f: any, c: any, origen: string) {
       currency: "eur",
       customer: c.stripe_customer_id,
       payment_method: c.stripe_payment_method_id,
-      payment_method_types: [c.stripe_metodo || "card"],
+      allowed_payment_method_types: [c.stripe_metodo || "card"],
       mandate: c.stripe_metodo === "sepa_debit" && c.stripe_mandate_id ? c.stripe_mandate_id : undefined,
       off_session: true,
       confirm: true,
