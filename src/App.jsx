@@ -4496,6 +4496,28 @@ const MainApp = () => {
     </div>
     <p style="margin-top:24px;font-size:12px;color:#888;">${escHtml(EMPRESA.nombre)} · CIF ${escHtml(EMPRESA.cif)} · ${escHtml(EMPRESA.direccion)}, ${escHtml(EMPRESA.cp)} ${escHtml(EMPRESA.ciudad)} · ${escHtml(EMPRESA.telefono)} · ${escHtml(EMPRESA.email)}</p>`;
 
+  // V94: bloque de pagos con Stripe para los emails al cliente (domiciliar + pagar ya con tarjeta).
+  // Los enlaces van al área de cliente (?domiciliar=1 / ?pagar=todas), que abre Stripe: no caducan.
+  const LOGO_STRIPE_EMAIL = 'https://rootflow-erp.vercel.app/stripe-logo.png';
+  const LOGO_STRIPE_BLANCO_EMAIL = 'https://rootflow-erp.vercel.app/stripe-logo-blanco.png';
+  const botonStripeEmail = (url, texto, emoji = '💳') => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">${emoji} ${texto} <img src="${LOGO_STRIPE_BLANCO_EMAIL}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table>`;
+  const bloqueStripeEmailCliente = (cliente, token) => {
+    const base = urlAreaCliente(token);
+    const sep = base.includes('?') ? '&' : '?';
+    const pend = facturas.filter(f => f.cliente_id === cliente.id && ['pendiente', 'vencida'].includes(f.estado) && (parseFloat(f.total) || 0) > 0 && f.tipo !== 'anulada' && !['processing', 'succeeded'].includes(f.stripe_estado));
+    const totalPend = pend.reduce((t, f) => t + (parseFloat(f.total) || 0), 0);
+    const domiciliado = cliente.stripe_activo && cliente.stripe_payment_method_id;
+    return `
+    <div style="margin:20px 0;padding:16px;background:#f7f7ff;border:1px solid #e0defe;border-radius:10px;font-size:14px;color:#333;">
+      <p style="margin:0 0 6px;"><strong>Paga tus facturas sin transferencias</strong> <img src="${LOGO_STRIPE_EMAIL}" alt="Stripe" width="38" height="16" style="vertical-align:middle;border:0;margin-left:4px;"></p>
+      ${domiciliado
+        ? `<p style="margin:0 0 8px;">✓ Ya tienes los pagos domiciliados${cliente.stripe_metodo_detalle ? ` (${escHtml(cliente.stripe_metodo_detalle)})` : ''}: cada factura se cobra sola el día de su vencimiento.</p>`
+        : `<p style="margin:0 0 8px;"><strong>Domicilia tus pagos</strong> con tarjeta o con adeudo en tu cuenta (SEPA) y te cobramos cada factura automáticamente el día que vence. Se hace una sola vez y puedes cancelarlo cuando quieras.</p>${botonStripeEmail(`${base}${sep}domiciliar=1`, 'Domiciliar mis pagos', '🔁')}`}
+      ${pend.length && !domiciliado ? `<p style="margin:14px 0 6px;">Tienes ${pend.length} factura${pend.length > 1 ? 's' : ''} pendiente${pend.length > 1 ? 's' : ''} (${escHtml(formatCurrency(totalPend))}): págala${pend.length > 1 ? 's' : ''} ya con tarjeta en un momento.</p>${botonStripeEmail(`${base}${sep}pagar=todas`, pend.length > 1 ? `Pagar las ${pend.length} con tarjeta` : 'Pagar ahora con tarjeta')}` : ''}
+      <p style="margin:8px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE_EMAIL}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay, Google Pay y adeudo SEPA</p>
+    </div>`;
+  };
+
   const envolverEmailCliente = (contenido) => `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,Helvetica,sans-serif;">
     <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
       <div style="margin-bottom:20px;"><img src="${LOGO_URL}" alt="RootFlow" width="44" style="vertical-align:middle;"> <span style="font-size:22px;font-weight:800;vertical-align:middle;">Root<span style="color:#F97316;">Flow</span></span></div>
@@ -4995,7 +5017,7 @@ const MainApp = () => {
     const res = await enviarEmail({
       to: destinatarios,
       subject: 'Tu área de cliente RootFlow',
-      html: envolverEmailCliente(`<p style="font-size:15px;">Hola ${escHtml(cliente.contacto || cliente.nombre)},</p><p style="font-size:15px;">Ya tienes acceso a tu área de cliente de RootFlow.</p>${pieEmailCliente(urlAreaCliente(token))}`),
+      html: envolverEmailCliente(`<p style="font-size:15px;">Hola ${escHtml(cliente.contacto || cliente.nombre)},</p><p style="font-size:15px;">Ya tienes acceso a tu área de cliente de RootFlow.</p>${bloqueStripeEmailCliente(cliente, token)}${pieEmailCliente(urlAreaCliente(token))}`), // V94: + domiciliar / pagar con Stripe
     });
     if (res.success) alert(`✅ Enlace enviado a ${destinatarios.join(', ')}`);
     else alert(`❌ No se pudo enviar el email: ${res.error}\n\nCopia el enlace desde el botón "Copiar enlace" y envíalo tú.`);
