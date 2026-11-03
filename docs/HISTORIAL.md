@@ -7,6 +7,7 @@ Los SQL de cada versión están en `supabase/sql/historico/`. "Ejecutado" = comp
 
 | Versión | Cambio | SQL |
 |---|---|---|
+| V94 | Emails de **acceso al área de cliente** y de **domiciliación** con el mismo bloque de Stripe (logo incluido): «🔁 Domiciliar mis pagos» y, si tiene facturas pendientes, «💳 Pagar con tarjeta». El de domiciliación añade además el acceso a su área de cliente. Los botones van al área de cliente (`?domiciliar=1` / `?pagar=todas`), que abre Stripe, así que ya no caducan a las 24 h. | — (sin SQL) |
 | V93 | **Pagar ya con tarjeta (Stripe)** las facturas pendientes, de una en una o todas de golpe. Botón morado «💳 Pagar ahora con tarjeta» con el logo de Stripe:
 - en el email de cada factura (salvo las domiciliadas);
 - en los recordatorios de pago;

@@ -48,7 +48,7 @@ const eur = (n: any) => `${r2(n).toFixed(2).replace(".", ",")} €`;
 // V93: botón "Pagar con tarjeta" con el logo de Stripe (el mismo que en los emails de portal-cliente)
 const LOGO_STRIPE = "https://rootflow-erp.vercel.app/stripe-logo.png";
 const LOGO_STRIPE_BLANCO = "https://rootflow-erp.vercel.app/stripe-logo-blanco.png";
-const botonPagoTarjeta = (url: string, texto = "Pagar ahora con tarjeta") => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">💳 ${texto} <img src="${LOGO_STRIPE_BLANCO}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table><p style="margin:4px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay y Google Pay</p>`;
+const botonPagoTarjeta = (url: string, texto = "Pagar ahora con tarjeta", emoji = "💳") => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">${emoji} ${texto} <img src="${LOGO_STRIPE_BLANCO}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table><p style="margin:4px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay, Google Pay y adeudo SEPA</p>`;
 const esc = (t: any) => String(t ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as any)[ch]);
 
 Deno.serve(async (req) => {
@@ -132,6 +132,18 @@ async function clientePorToken(supabase: any, token: string) {
   return data && data.portal_activo !== false ? data : null;
 }
 
+// V94: enlace personal al área de cliente (igual que asegurarToken() de portal-cliente)
+async function asegurarToken(supabase: any, c: any) {
+  if (c.portal_token) return c.portal_token;
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const { error } = await supabase.from("clientes").update({ portal_token: token, portal_activo: true }).eq("id", c.id).is("portal_token", null);
+  if (error) throw new Error("No se pudo crear el enlace del área de cliente: " + error.message);
+  const { data } = await supabase.from("clientes").select("portal_token").eq("id", c.id).maybeSingle();
+  return data?.portal_token || token;
+}
+
 async function asegurarCustomer(supabase: any, c: any) {
   if (c.stripe_customer_id) return c.stripe_customer_id;
   const cus = await st("POST", "/customers", {
@@ -202,13 +214,15 @@ async function enlaceAdmin(supabase: any, body: any, usuario: string) {
   if (!body.enviar) return { ok: true, url };
   const para = emailsCliente(c);
   if (!para.length) throw new Error("El cliente no tiene email");
+  c.portal_token = await asegurarToken(supabase, c); // V94: los botones del email van a su área de cliente (no caducan)
+  const area = `${PORTAL_URL()}?t=${encodeURIComponent(c.portal_token)}`;
   // V93: si tiene facturas pendientes, también se pueden pagar ya con tarjeta
   const { data: pend } = await supabase.from("facturas").select("id, total, fecha_vencimiento, stripe_estado, tipo").eq("cliente_id", c.id).in("estado", ESTADOS_PENDIENTE).order("fecha");
   const pagables = (pend || []).filter((f: any) => r2(f.total) > 0 && f.tipo !== "anulada" && !["processing", "succeeded"].includes(f.stripe_estado));
-  const pendientesHtml = pagables.length && c.portal_token ? `
+  const pendientesHtml = pagables.length ? `
     <div style="margin:18px 0;padding:14px;border:1px solid #e0defe;border-radius:10px;background:#f7f7ff;">
       <p style="margin:0 0 8px;font-size:14px;"><strong>Tienes ${pagables.length} factura${pagables.length > 1 ? "s" : ""} pendiente${pagables.length > 1 ? "s" : ""}</strong> (${eur(pagables.reduce((t: number, f: any) => t + r2(f.total), 0))}). Si quieres, puedes pagarla${pagables.length > 1 ? "s" : ""} ya con tarjeta:</p>
-      ${botonPagoTarjeta(`${PORTAL_URL()}?t=${encodeURIComponent(c.portal_token)}&pagar=todas`, pagables.length > 1 ? "Pagar todas con tarjeta" : "Pagar ahora con tarjeta")}
+      ${botonPagoTarjeta(`${area}&pagar=todas`, pagables.length > 1 ? "Pagar todas con tarjeta" : "Pagar ahora con tarjeta")}
     </div>` : "";
   const html = `<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;background:#f5f5f5;margin:0;padding:0;">
   <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
@@ -216,9 +230,15 @@ async function enlaceAdmin(supabase: any, body: any, usuario: string) {
     <p style="font-size:15px;">Hola ${esc(c.contacto || c.nombre)},</p>
     <p style="font-size:15px;">Para que no tengas que estar pendiente de las transferencias, a partir de ahora podemos cobrarte cada factura automáticamente el día de su vencimiento, con tarjeta o con adeudo en tu cuenta (SEPA).</p>
     <p style="font-size:15px;">Solo tienes que hacerlo una vez, en la página segura de Stripe, nuestra plataforma de pagos:</p>
-    <p style="margin:22px 0;"><a href="${url}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:8px;">Domiciliar mis pagos</a></p>
+    ${botonPagoTarjeta(`${area}&domiciliar=1`, "Domiciliar mis pagos", "🔁")}<!-- V94 -->
     ${pendientesHtml}
-    <p style="font-size:13px;color:#555;">Seguirás recibiendo cada factura por email antes del cobro y las tienes todas en tu área de cliente. Puedes cancelar la domiciliación cuando quieras escribiéndonos. El enlace caduca en 24 horas: si se te pasa, pídenos otro o hazlo desde tu área de cliente.</p>
+    <p style="font-size:13px;color:#555;">Seguirás recibiendo cada factura por email antes del cobro. Puedes cancelar la domiciliación cuando quieras escribiéndonos.</p>
+    <div style="margin-top:22px;padding:16px;background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;font-size:14px;color:#333;">
+      <p style="margin:0 0 8px;"><strong>Tu área de cliente RootFlow</strong></p>
+      <p style="margin:0 0 12px;">Ahí tienes todas tus facturas y albaranes en PDF, tus pedidos con sus variedades y cantidades, tu histórico y, si lo necesitas, puedes pedir una ampliación de tu pedido fijo. También puedes domiciliar o pagar con tarjeta desde allí.</p>
+      <a href="${area}" style="display:inline-block;background:#F97316;color:#fff;text-decoration:none;font-weight:700;padding:10px 18px;border-radius:8px;">Entrar en mi área de cliente</a>
+      <p style="margin:10px 0 0;font-size:12px;color:#888;">Este enlace es personal: no lo compartas fuera de tu equipo.</p>
+    </div>
     <p style="font-size:14px;margin-top:20px;">Gracias 🌱<br>RootFlow Hydroponics · info@rootflow.es</p>
   </div></body></html>`;
   const key = env("RESEND_API_KEY");

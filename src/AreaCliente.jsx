@@ -181,6 +181,13 @@ export default function AreaCliente() {
   useEffect(() => {
     if (!datos) return;
     const q = new URLSearchParams(window.location.search);
+    // V94: ?domiciliar=1 (botón "Domiciliar mis pagos" de los emails): abre la domiciliación de Stripe
+    if (q.get('domiciliar')) {
+      q.delete('domiciliar');
+      window.history.replaceState({}, '', `${window.location.pathname}?${q}`);
+      if (!datos.cliente.stripe_activo) { setPagoDesdeEnlace('abriendo'); domiciliarPagos(token); }
+      return;
+    }
     const ids = q.get('pagar');
     if (!ids) return;
     q.delete('pagar');
