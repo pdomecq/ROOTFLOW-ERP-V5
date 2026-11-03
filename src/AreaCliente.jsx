@@ -10,6 +10,7 @@ import {
 import { EMPRESA, LOGO_URL } from './empresa.js';
 
 const FUNCION_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/portal-cliente`;
+const STRIPE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/stripe`; // V92: domiciliación de pagos
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const LS_TOKEN = 'rootflow_portal_token';
 
@@ -49,6 +50,42 @@ const llamar = async (payload) => {
   if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
   return data;
 };
+
+// V92: abre la página segura de Stripe para domiciliar los pagos (tarjeta o cuenta SEPA)
+const domiciliarPagos = async (token) => {
+  try {
+    const res = await fetch(STRIPE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` },
+      body: JSON.stringify({ token, accion: 'domiciliar' }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.url) throw new Error(data?.error || `Error ${res.status}`);
+    window.location.href = data.url;
+  } catch (e) {
+    alert('No se ha podido abrir la domiciliación: ' + e.message + '. Escríbenos a ' + EMPRESA.email);
+  }
+};
+
+function BloqueDomiciliacion({ cliente, token }) {
+  const vuelta = new URLSearchParams(window.location.search).get('domiciliacion');
+  if (cliente.stripe_activo) {
+    return (
+      <Tarjeta className="p-4 border-emerald-200 bg-emerald-50">
+        <p className="font-bold text-emerald-800">✓ Pagos domiciliados{cliente.stripe_metodo_detalle ? ` (${cliente.stripe_metodo_detalle})` : ''}</p>
+        <p className="text-sm text-emerald-900">Cada factura se cobra sola el día de su vencimiento. No tienes que hacer nada. <button onClick={() => domiciliarPagos(token)} className="underline font-semibold">Cambiar tarjeta o cuenta</button></p>
+      </Tarjeta>
+    );
+  }
+  return (
+    <Tarjeta className="p-4">
+      {vuelta === 'ok' && <p className="text-sm text-emerald-700 font-semibold mb-1">✓ Recibido. En unos segundos aparecerá aquí como domiciliado.</p>}
+      <p className="font-bold">Domicilia tus pagos y olvídate de las transferencias</p>
+      <p className="text-sm text-neutral-600 mb-3">Te cobramos cada factura automáticamente el día de su vencimiento, con tarjeta o con adeudo en tu cuenta. Se hace una sola vez en la página segura de Stripe y puedes cancelarlo cuando quieras.</p>
+      <button onClick={() => domiciliarPagos(token)} className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl px-4 py-2 text-sm">Domiciliar mis pagos</button>
+    </Tarjeta>
+  );
+}
 
 // V83: descarga el PDF de una factura o un albarán (lo genera la Edge Function)
 const descargarPdf = async (token, tipo, id) => {
@@ -182,6 +219,7 @@ export default function AreaCliente() {
 
       <main className="max-w-5xl mx-auto px-4 py-6 no-print">
         {tab === 'resumen' && <Resumen datos={datos} irA={setTab} abrirFactura={(f) => { setTab('facturas'); setFacturaAbierta(f); }} />}
+        {tab === 'resumen' && <div className="mt-4"><BloqueDomiciliacion cliente={datos.cliente} token={token} /></div>}{/* V92 */}
         {tab === 'facturas' && <Facturas datos={datos} token={token} abrir={setFacturaAbierta} />}
         {tab === 'albaranes' && <Albaranes datos={datos} token={token} />}
         {tab === 'pedidos' && <Pedidos datos={datos} />}
@@ -372,6 +410,10 @@ function FacturaDetalle({ factura: f, cliente, token, onClose }) {
               <p className="font-semibold text-neutral-600">Factura anulada: no hay que pagarla.</p>
             ) : f.estado === 'pagada' ? (
               <p className="font-semibold text-green-700">✓ Pagada{f.fecha_cobro ? ` el ${fecha(f.fecha_cobro)}` : ''}. ¡Gracias!</p>
+            ) : f.stripe_estado === 'processing' ? (
+              <p>Cobro domiciliado <strong>en curso</strong> (los adeudos en cuenta tardan unos días en confirmarse).</p>
+            ) : cliente.stripe_activo && f.stripe_estado !== 'failed' && (!cliente.stripe_desde || String(f.fecha) >= cliente.stripe_desde) ? (
+              <p>Se cobrará automáticamente el {fecha(f.fecha_vencimiento)}{cliente.stripe_metodo_detalle ? ` con tu ${cliente.stripe_metodo_detalle}` : ''}. No tienes que hacer nada.</p>
             ) : sepa ? (
               <p>Se cobrará por <strong>domiciliación SEPA B2B</strong> el {fecha(f.fecha_vencimiento)} en la cuenta del mandato firmado.</p>
             ) : (

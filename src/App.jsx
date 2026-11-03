@@ -1281,6 +1281,7 @@ const MainApp = () => {
     '555': { nombre: 'Partidas pendientes de aplicación', tipo: 'A', grupo: '5' },
     '570': { nombre: 'Caja, euros', tipo: 'A', grupo: '5' },
     '572': { nombre: 'Bancos c/c vista, euros', tipo: 'A', grupo: '5' },
+    '5721': { nombre: 'Stripe (cobros pendientes de liquidar al banco)', tipo: 'A', grupo: '5' }, // V92
     '573': { nombre: 'Bancos c/c moneda extranjera', tipo: 'A', grupo: '5' },
     // Grupo 6 - Compras y gastos
     '600': { nombre: 'Compras de mercaderías', tipo: 'G', grupo: '6' },
@@ -1614,6 +1615,7 @@ const MainApp = () => {
   const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
   const { data: facturasRecibidasData, refetch: refetchFacturasRecibidas } = useRealtime('facturas_recibidas'); // V85
+  const { data: movimientosBancoData, refetch: refetchMovimientosBanco } = useRealtime('movimientos_banco'); // V91
   const { data: materialesData, refetch: refetchMateriales } = useRealtime('materiales'); // V88
   const { data: comprasMaterialData, refetch: refetchComprasMaterial } = useRealtime('compras_material'); // V88
   const { data: recuentosMaterialData, refetch: refetchRecuentosMaterial } = useRealtime('recuentos_material'); // V88
@@ -1731,6 +1733,7 @@ const MainApp = () => {
   const facturas = facturasData || [];
   const gastos = gastosData || [];
   const facturasRecibidas = facturasRecibidasData || []; // V85
+  const movimientosBanco = movimientosBancoData || []; // V91
   const materialesV88 = materialesData || []; // V88
   const comprasMaterial = comprasMaterialData || []; // V88
   const recuentosMaterial = recuentosMaterialData || []; // V88
@@ -4512,6 +4515,367 @@ const MainApp = () => {
     return data || {};
   };
 
+  // ==================== V91: BANCO Y COBROS ====================
+  // Movimientos del BBVA (Enable Banking o extracto PDF/Excel) conciliados con las facturas por la
+  // Edge Function `banco`, y recordatorios de facturas vencidas (portal-cliente). Aquí solo se ve,
+  // se confirma lo dudoso y se configura.
+  const [bancoEstado, setBancoEstado] = useState(null);
+  const [recordatoriosEstado, setRecordatoriosEstado] = useState(null);
+  const [bancoCargando, setBancoCargando] = useState('');
+  const [bancoFiltro, setBancoFiltro] = useState('revisar');
+  const [bancoAsignar, setBancoAsignar] = useState(null); // { movimiento, ids: [] }
+  const [stripeEstado, setStripeEstado] = useState(null); // V92
+  const invocarBanco = async (body) => {
+    const { data, error } = await supabase.functions.invoke('banco', { body });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      return { error: msg };
+    }
+    return data || {};
+  };
+  // V92: Stripe (domiciliación y cobro automático de facturas)
+  const invocarStripe = async (body) => {
+    const { data, error } = await supabase.functions.invoke('stripe', { body });
+    if (error) {
+      let msg = error.message;
+      try { const j = await error.context?.json?.(); if (j?.error) msg = j.error; } catch { /* sin cuerpo */ }
+      return { error: msg };
+    }
+    return data || {};
+  };
+  const accionStripe = async (etiqueta, body) => {
+    setBancoCargando(etiqueta);
+    const r = await invocarStripe(body);
+    setBancoCargando('');
+    if (r.error) { alert('❌ ' + r.error); return null; }
+    refetchFacturas(); refetchClientes(); cargarBancoEstado();
+    return r;
+  };
+  const enlaceStripe = async (c, enviar) => {
+    if (enviar && !window.confirm(`¿Enviar a ${c.nombre} (${emailsFacturacion(c) || 'sin email'}) el email para domiciliar sus pagos con Stripe?`)) return;
+    const r = await accionStripe('stripe_enlace', { accion: 'admin_enlace', cliente_id: c.id, enviar });
+    if (!r) return;
+    if (enviar) alert(`📨 Enviado a ${r.enviado_a?.join(', ')}. Cuando lo complete, aparecerá como domiciliado y te avisará Slack.`);
+    else { try { await navigator.clipboard.writeText(r.url); alert('🔗 Enlace copiado (caduca en 24 h). Pégalo por WhatsApp o email al cliente.'); } catch { window.prompt('Copia este enlace (caduca en 24 h):', r.url); } }
+  };
+  const cobrarStripeYa = async (f) => {
+    if (!window.confirm(`¿Cobrar ya ${formatCurrency(f.total)} de la factura ${f.id} con Stripe?`)) return;
+    const r = await accionStripe('stripe_cobrar', { accion: 'admin_cobrar', factura_id: f.id });
+    if (r) alert(r.estado === 'succeeded' ? '✅ Cobrada.' : r.estado === 'processing' ? '⏳ Cobro en curso (los adeudos SEPA tardan unos días en confirmarse).' : `❌ No se ha podido cobrar: ${r.error || r.estado}`);
+  };
+  const quitarStripe = async (c) => {
+    if (!window.confirm(`¿Quitar la domiciliación de ${c.nombre}? Sus facturas volverán a pagarse por transferencia.`)) return;
+    await accionStripe('stripe_quitar', { accion: 'admin_quitar', cliente_id: c.id });
+  };
+  const renderStripe = () => {
+    const st = stripeEstado;
+    if (!st) return <p className="text-sm text-neutral-500">Cargando Stripe…</p>;
+    if (st.error) return <p className="text-sm text-red-600">Stripe: {st.error}</p>;
+    const activos = clientes.filter(c => c.activo !== false && c.nombre);
+    const orden = [...activos].sort((a, b) => (b.stripe_activo ? 1 : 0) - (a.stripe_activo ? 1 : 0) || (lineaDeCliente(a) === 'restaurantes' ? -1 : 0) - (lineaDeCliente(b) === 'restaurantes' ? -1 : 0) || a.nombre.localeCompare(b.nombre));
+    const pendientesDomiciliados = facturas.filter(f => ['pendiente', 'vencida'].includes(f.estado) && clientes.find(c => c.id === f.cliente_id)?.stripe_activo);
+    const ESTADO_ST = { processing: ['⏳ En curso', 'text-amber-700'], succeeded: ['✅ Cobrada', 'text-green-700'], failed: ['❌ Fallido', 'text-red-600'] };
+    return (
+      <div className="p-4 rounded-xl border bg-white space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-bold">💳 Cobro automático con Stripe {st.modo && <span className={`ml-1 text-xs px-2 py-0.5 rounded-full ${st.modo === 'real' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'}`}>{st.modo === 'real' ? 'modo real' : 'modo pruebas'}</span>}</p>
+          <label className="text-sm flex items-center gap-2">Cobrar
+            <select value={st.momento} onChange={e => guardarAjusteCobros('stripe_cobro_momento', e.target.value)} className="px-2 py-1 border rounded-lg text-sm">
+              <option value="vencimiento">el día que vence la factura</option>
+              <option value="emision">al emitir la factura</option>
+            </select>
+          </label>
+        </div>
+        {!st.configurado || !st.webhook ? <p className="text-xs p-2 rounded bg-amber-50 text-amber-800">⚠️ Falta configurar Stripe en Supabase ({[!st.configurado && 'STRIPE_SECRET_KEY', !st.webhook && 'STRIPE_WEBHOOK_SECRET'].filter(Boolean).join(' y ')}). Ver docs/STRIPE.md.</p> : null}
+        <p className="text-xs text-neutral-600">El cliente domicilia una vez (tarjeta o cuenta SEPA) con el enlace o desde su área de cliente. Desde ese mes, cada factura se cobra sola (cada día a las 8:20) y se marca pagada con su asiento; la transferencia semanal de Stripe al BBVA se contabiliza sola. Si un cobro falla, avisa en Slack y la factura vuelve a los recordatorios.</p>
+        <div className="max-h-56 overflow-y-auto border rounded-lg divide-y">
+          {orden.map(c => (
+            <div key={c.id} className="p-2 text-sm flex flex-wrap items-center gap-2">
+              <span className="flex-1 min-w-[160px] font-semibold">{c.nombre} <BadgeLinea linea={lineaDeCliente(c)} /></span>
+              <span className={`text-xs ${c.stripe_activo ? 'text-green-700 font-semibold' : 'text-neutral-400'}`}>{c.stripe_activo ? `✓ ${c.stripe_metodo_detalle || 'domiciliado'}` : 'sin domiciliar'}</span>
+              <Button size="sm" variant="secondary" disabled={!!bancoCargando || !st.configurado} onClick={() => enlaceStripe(c, true)}>{c.stripe_activo ? 'Pedir cambio' : 'Enviar enlace'}</Button>
+              <button className="text-xs text-neutral-500 hover:text-neutral-800" disabled={!!bancoCargando || !st.configurado} onClick={() => enlaceStripe(c, false)}>Copiar enlace</button>
+              {c.stripe_activo && <button className="text-xs text-red-500 hover:text-red-700" onClick={() => quitarStripe(c)}>Quitar</button>}
+            </div>
+          ))}
+        </div>
+        {pendientesDomiciliados.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs font-semibold">Facturas pendientes de clientes domiciliados</p>
+            {pendientesDomiciliados.map(f => {
+              const [lbl, cls] = ESTADO_ST[f.stripe_estado] || ['Se cobrará ' + (st.momento === 'emision' ? 'hoy' : `el ${formatDate(f.fecha_vencimiento)}`), 'text-neutral-500'];
+              return (
+                <div key={f.id} className="text-xs flex flex-wrap items-center gap-2">
+                  <span className="font-mono">{f.id}</span><span>{clientes.find(c => c.id === f.cliente_id)?.nombre}</span><span>{formatCurrency(f.total)}</span>
+                  <span className={cls}>{lbl}{f.stripe_error ? ` · ${f.stripe_error}` : ''}</span>
+                  {f.stripe_estado !== 'processing' && <button className="text-orange-600 font-semibold" disabled={!!bancoCargando} onClick={() => cobrarStripeYa(f)}>{f.stripe_estado === 'failed' ? 'Reintentar' : 'Cobrar ya'}</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const textoConciliacion = (c) => !c ? '' : [
+    c.cobradas?.length ? `✅ Marcadas como cobradas: ${c.cobradas.join(', ')}` : 'No hay cobros nuevos que marcar.',
+    c.enlazadas?.length ? `🔗 Enlazadas con facturas ya cobradas: ${c.enlazadas.length}` : '',
+    c.sugeridos ? `🟡 ${c.sugeridos} ingreso(s) para revisar (posible cobro)` : '',
+    c.errores?.length ? `❌ ${c.errores.join('\n')}` : '',
+  ].filter(Boolean).join('\n');
+  const cargarBancoEstado = async () => {
+    const [b, r, st] = await Promise.all([invocarBanco({ accion: 'admin_estado' }), invocarPortal({ accion: 'admin_estado_recordatorios' }), invocarStripe({ accion: 'admin_estado' })]);
+    setBancoEstado(b); setRecordatoriosEstado(r); setStripeEstado(st);
+  };
+  const abrirBanco = () => { setShowModal('banco'); cargarBancoEstado(); refetchMovimientosBanco(); };
+  const accionBanco = async (etiqueta, body, { refrescar = true } = {}) => {
+    setBancoCargando(etiqueta);
+    const r = await invocarBanco(body);
+    setBancoCargando('');
+    if (r.error) { alert('❌ ' + r.error); return null; }
+    if (refrescar) { refetchMovimientosBanco(); refetchFacturas(); refetchAsientos(); refetchAsientoLineas(); cargarBancoEstado(); }
+    return r;
+  };
+  const conectarBBVA = async () => {
+    const r = await accionBanco('conectar', { accion: 'admin_conectar', redirect_url: `${window.location.origin}/` }, { refrescar: false });
+    if (!r?.url) return;
+    try { localStorage.setItem('rootflow_banco_conectando', '1'); } catch { /* sin almacenamiento */ }
+    window.location.href = r.url;
+  };
+  const sincronizarBanco = async () => {
+    const r = await accionBanco('sincronizar', { accion: 'admin_sincronizar' });
+    if (r) alert(`${r.sync?.conectado ? `🏦 ${r.sync.insertados} movimiento(s) nuevo(s) del BBVA.` : `⚠️ ${r.sync?.mensaje || 'El BBVA no está conectado.'}`}\n\n${textoConciliacion(r.conciliacion)}`);
+  };
+  const subirExtracto = async (file) => {
+    if (!file) return;
+    let body;
+    try {
+      if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        body = { accion: 'admin_importar', nombre: file.name, base64: btoa(bin) };
+      } else {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+        body = { accion: 'admin_importar', nombre: file.name, texto: wb.SheetNames.map(n => XLSX.utils.sheet_to_csv(wb.Sheets[n], { FS: ';', dateNF: 'yyyy-mm-dd' })).join('\n\n') };
+      }
+    } catch (e) { alert('❌ No se ha podido abrir el archivo: ' + e.message); return; }
+    const r = await accionBanco('importar', body);
+    if (r) alert(`📄 Extracto leído: ${r.leidos} movimientos del ${formatDate(r.desde)} al ${formatDate(r.hasta)} (${r.insertados} nuevos; el resto ya estaban).\n\n${textoConciliacion(r.conciliacion)}`);
+  };
+  const confirmarCobroBanco = async () => {
+    const { movimiento, ids } = bancoAsignar || {};
+    if (!movimiento || !ids?.length) return;
+    const suma = ids.reduce((t, id) => t + (parseFloat(facturas.find(f => f.id === id)?.total) || 0), 0);
+    if (Math.abs(suma - movimiento.importe) > 0.01 && !window.confirm(`Las facturas suman ${formatCurrency(suma)} y el ingreso es de ${formatCurrency(movimiento.importe)}.\n\n¿Las marco cobradas igualmente?`)) return;
+    const r = await accionBanco('confirmar', { accion: 'admin_confirmar', movimiento_id: movimiento.id, factura_ids: ids });
+    if (r) { setBancoAsignar(null); alert(`✅ Cobrada(s): ${ids.join(', ')}. La próxima vez que pague este ordenante se casará solo.`); }
+  };
+  const marcarMovimientoBanco = (m, estado) => accionBanco('marcar', { accion: 'admin_marcar', movimiento_id: m.id, estado });
+  const recordatorioAhora = async (clienteId, nombre) => {
+    if (!window.confirm(`¿Enviar ya a ${nombre} un recordatorio de todas sus facturas vencidas?`)) return;
+    setBancoCargando('recordatorio');
+    const r = await invocarPortal({ accion: 'admin_enviar_recordatorio', cliente_id: clienteId });
+    setBancoCargando('');
+    if (r.error || r.ok === false) { alert('❌ ' + (r.error || 'No enviado')); return; }
+    alert(`📨 Recordatorio enviado a ${r.para?.join(', ')} (${r.facturas?.join(', ')}).`);
+    refetchFacturas(); cargarBancoEstado();
+  };
+  const guardarAjusteCobros = async (clave, valor) => {
+    const fila = ajustesSistema.find(a => a.clave === clave);
+    const { error } = fila
+      ? await supabase.from('ajustes_sistema').update({ valor, updated_at: new Date().toISOString() }).eq('id', fila.id)
+      : await supabase.from('ajustes_sistema').insert({ clave, valor, tipo: 'text', descripcion: 'V91: cobros y recordatorios' });
+    if (error) { alert('❌ ' + error.message); return; }
+    refetchAjustesSistema(); cargarBancoEstado();
+  };
+  // Vuelta del BBVA tras autorizar (Enable Banking redirige a la raíz con ?code=…&state=…)
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    let esperando = false;
+    try { esperando = localStorage.getItem('rootflow_banco_conectando') === '1'; } catch { /* sin almacenamiento */ }
+    if (!esperando || !(q.get('code') || q.get('error'))) return;
+    try { localStorage.removeItem('rootflow_banco_conectando'); } catch { /* sin almacenamiento */ }
+    window.history.replaceState({}, '', window.location.pathname);
+    if (q.get('error')) { alert('⚠️ El BBVA no ha dado permiso: ' + (q.get('error_description') || q.get('error'))); return; }
+    (async () => {
+      const r = await invocarBanco({ accion: 'admin_callback', code: q.get('code'), state: q.get('state') });
+      if (r.error) { alert('❌ No se ha podido conectar el BBVA: ' + r.error); return; }
+      alert(`🏦 BBVA conectado (${(r.cuentas || []).map(c => `${c.nombre} ${c.iban}`).join(', ')}). ${r.sync?.insertados ?? 0} movimientos traídos.\n\n${textoConciliacion(r.conciliacion)}`);
+      setActiveSection('facturacion'); abrirBanco();
+    })();
+  }, []);
+
+  const ESTADOS_MOV_BANCO = {
+    sugerido: { label: 'Revisar', color: 'bg-amber-100 text-amber-800' },
+    sin_casar: { label: 'Sin factura', color: 'bg-neutral-100 text-neutral-600' },
+    pendiente: { label: 'Por conciliar', color: 'bg-neutral-100 text-neutral-600' },
+    conciliado: { label: 'Cobrado', color: 'bg-green-100 text-green-700' },
+    ya_cobrada: { label: 'Ya cobrada', color: 'bg-green-50 text-green-700' },
+    otro: { label: 'No es cobro', color: 'bg-blue-50 text-blue-700' },
+    ignorado: { label: 'Ignorado', color: 'bg-neutral-100 text-neutral-400' },
+    cargo: { label: 'Cargo', color: 'bg-red-50 text-red-600' },
+  };
+  const resumenBanco = () => {
+    const revisar = movimientosBanco.filter(m => m.estado === 'sugerido').length;
+    let alDia = bancoEstado?.al_dia?.hasta || null;
+    if (!alDia) { try { alDia = JSON.parse(ajusteSistema('banco_al_dia', 'null'))?.hasta || null; } catch { alDia = null; } }
+    return { revisar, alDia };
+  };
+  const renderTarjetaBanco = () => {
+    const { revisar, alDia } = resumenBanco();
+    const hoy = new Date().toISOString().split('T')[0];
+    const viejo = !alDia || (new Date(hoy) - new Date(alDia)) / 86400000 > 3;
+    return (
+      <button onClick={abrirBanco} className={`w-full text-left p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-3 ${viejo ? 'bg-amber-50 border-amber-200' : 'bg-white border-neutral-200'} hover:shadow`}>
+        <div>
+          <p className="font-bold">🏦 Banco y cobros</p>
+          <p className="text-sm text-neutral-600">{alDia ? `Movimientos cargados hasta el ${formatDate(alDia)}` : 'Todavía no hay movimientos del banco'}{viejo ? ' · ⚠️ sin actualizar: los recordatorios de pago no salen hasta que el banco esté al día' : ''}</p>
+        </div>
+        <div className="flex items-center gap-2 text-sm">
+          {revisar > 0 && <span className="px-2 py-1 rounded-full bg-amber-500 text-white font-bold">{revisar} por revisar</span>}
+          <span className="px-3 py-1.5 rounded-xl bg-neutral-900 text-white font-semibold">Abrir</span>
+        </div>
+      </button>
+    );
+  };
+  const renderBancoCobros = () => {
+    const b = bancoEstado; const r = recordatoriosEstado;
+    const nombreCli = (id) => clientes.find(c => c.id === id)?.nombre || '—';
+    const filtros = {
+      revisar: m => m.estado === 'sugerido' || m.estado === 'pendiente',
+      ingresos: m => m.importe > 0,
+      cobrados: m => ['conciliado', 'ya_cobrada'].includes(m.estado),
+      sin_casar: m => m.estado === 'sin_casar',
+      todos: () => true,
+    };
+    const lista = [...movimientosBanco].filter(filtros[bancoFiltro] || filtros.todos).sort((a, b2) => String(b2.fecha).localeCompare(String(a.fecha)) || b2.id - a.id).slice(0, 200);
+    const pendientesCobro = facturas.filter(f => ['pendiente', 'vencida'].includes(f.estado) && (parseFloat(f.total) || 0) > 0 && f.tipo !== 'anulada');
+    const autoRec = ajusteSistema('cobros_recordatorios_auto', 'true') !== 'false';
+    const diasRec = ajusteSistema('cobros_recordatorios_dias', '1,7,15');
+    const vencidas = (r?.facturas || []);
+    const porCliente = {};
+    vencidas.forEach(f => { (porCliente[f.cliente_id] = porCliente[f.cliente_id] || { nombre: f.cliente, fs: [] }).fs.push(f); });
+    return (
+      <div className="space-y-5">
+        {/* Conexión */}
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="p-4 rounded-xl border bg-white space-y-2">
+            <p className="font-bold">Conexión con el BBVA</p>
+            {!b ? <p className="text-sm text-neutral-500">Cargando…</p> : b.error ? <p className="text-sm text-red-600">{b.error}</p> : (
+              <>
+                <p className="text-sm">{b.conectado ? `✅ Conectado${b.cuentas?.length ? ` (${b.cuentas.map(c => c.iban).join(', ')})` : ''} · permiso hasta el ${formatDate(b.valid_until)}` : b.configurado ? '⚪ Sin conectar' : '⚪ Falta dar de alta la app de Enable Banking (ver docs/BANCO.md)'}</p>
+                <p className="text-xs text-neutral-500">{b.ultima_sync ? `Última sincronización: ${new Date(b.ultima_sync).toLocaleString('es-ES')}. ` : ''}Se sincroniza solo a las 8:40 y a las 15:40.</p>
+                <div className="flex flex-wrap gap-2">
+                  {b.configurado && <Button size="sm" onClick={conectarBBVA} disabled={!!bancoCargando}>{b.conectado ? '🔄 Renovar permiso' : '🔗 Conectar BBVA'}</Button>}
+                  {b.conectado && <Button size="sm" variant="secondary" onClick={sincronizarBanco} disabled={!!bancoCargando}>{bancoCargando === 'sincronizar' ? 'Sincronizando…' : '⟳ Sincronizar ahora'}</Button>}
+                </div>
+              </>
+            )}
+          </div>
+          <div className="p-4 rounded-xl border bg-white space-y-2">
+            <p className="font-bold">Subir extracto</p>
+            <p className="text-xs text-neutral-500">PDF o Excel descargado de la web del BBVA (Cuentas → Movimientos → Descargar). Se meten solo los movimientos nuevos y se concilian.</p>
+            <label className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-dashed cursor-pointer text-sm font-semibold ${bancoCargando === 'importar' ? 'opacity-60' : 'hover:bg-orange-50'}`}>
+              <Upload size={16} />{bancoCargando === 'importar' ? 'Leyendo el extracto…' : 'Elegir PDF o Excel'}
+              <input type="file" accept=".pdf,.xlsx,.xls,.csv" className="hidden" disabled={!!bancoCargando} onChange={e => { subirExtracto(e.target.files?.[0]); e.target.value = ''; }} />
+            </label>
+            {b?.al_dia?.hasta && <p className="text-xs text-neutral-600">Banco al día hasta el <strong>{formatDate(b.al_dia.hasta)}</strong> ({b.al_dia.origen}).</p>}
+            <Button size="sm" variant="secondary" onClick={async () => { const x = await accionBanco('conciliar', { accion: 'admin_conciliar' }); if (x) alert(textoConciliacion(x.conciliacion)); }} disabled={!!bancoCargando}>Volver a conciliar</Button>
+          </div>
+        </div>
+
+        {/* Movimientos */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2 items-center">
+            <p className="font-bold mr-2">Movimientos</p>
+            {[['revisar', 'Por revisar'], ['ingresos', 'Ingresos'], ['cobrados', 'Cobros casados'], ['sin_casar', 'Sin factura'], ['todos', 'Todos']].map(([k, l]) => (
+              <button key={k} onClick={() => setBancoFiltro(k)} className={`px-3 py-1 rounded-lg text-xs font-semibold ${bancoFiltro === k ? 'bg-orange-500 text-white' : 'bg-neutral-100'}`}>{l}{k === 'revisar' ? ` (${movimientosBanco.filter(filtros.revisar).length})` : ''}</button>
+            ))}
+          </div>
+          {!lista.length ? <p className="text-sm text-neutral-500 p-3">No hay movimientos en esta vista.</p> : (
+            <div className="max-h-[45vh] overflow-y-auto border rounded-xl divide-y">
+              {lista.map(m => {
+                const est = ESTADOS_MOV_BANCO[m.estado] || ESTADOS_MOV_BANCO.pendiente;
+                const asignando = bancoAsignar?.movimiento?.id === m.id;
+                return (
+                  <div key={m.id} className="p-3 text-sm">
+                    <div className="flex flex-wrap items-start gap-3">
+                      <span className="w-20 shrink-0 text-neutral-500">{formatDate(m.fecha_valor || m.fecha)}</span>
+                      <span className={`w-24 shrink-0 text-right font-bold ${m.importe > 0 ? 'text-green-700' : 'text-red-600'}`}>{formatCurrency(m.importe)}</span>
+                      <div className="flex-1 min-w-[200px]">
+                        <p className="truncate" title={m.concepto}>{m.contraparte ? <strong>{m.contraparte} · </strong> : null}{m.concepto}</p>
+                        {m.motivo && <p className="text-xs text-neutral-500">{m.motivo}{m.factura_ids?.length ? ` → ${m.factura_ids.join(', ')}` : ''}</p>}
+                      </div>
+                      <Badge className={est.color}>{est.label}</Badge>
+                      {m.importe > 0 && !['conciliado', 'ya_cobrada'].includes(m.estado) && (
+                        <div className="flex gap-1">
+                          {m.estado === 'sugerido' && m.factura_ids?.length > 0 && <Button size="sm" onClick={() => setBancoAsignar({ movimiento: m, ids: m.factura_ids.slice(0, 1) })}>Revisar</Button>}
+                          <Button size="sm" variant="secondary" onClick={() => setBancoAsignar(asignando ? null : { movimiento: m, ids: [] })}>{asignando ? 'Cerrar' : 'Asignar'}</Button>
+                          {!['otro', 'ignorado'].includes(m.estado) && <button onClick={() => marcarMovimientoBanco(m, 'otro')} title="No es el cobro de una factura" className="px-2 text-xs text-neutral-500 hover:text-neutral-800">No es cobro</button>}
+                        </div>
+                      )}
+                    </div>
+                    {asignando && (
+                      <div className="mt-2 p-3 rounded-lg bg-orange-50 space-y-2">
+                        <p className="text-xs font-semibold">¿Qué factura(s) paga este ingreso de {formatCurrency(m.importe)}? Marca una o varias:</p>
+                        <div className="grid md:grid-cols-2 gap-1 max-h-48 overflow-y-auto">
+                          {[...pendientesCobro].sort((a, b2) => (Math.abs(a.total - m.importe) < 0.01 ? -1 : 0) - (Math.abs(b2.total - m.importe) < 0.01 ? -1 : 0) || String(a.fecha).localeCompare(String(b2.fecha))).map(f => (
+                            <label key={f.id} className="flex items-center gap-2 text-xs bg-white rounded px-2 py-1">
+                              <input type="checkbox" checked={bancoAsignar.ids.includes(f.id)} onChange={e => setBancoAsignar({ ...bancoAsignar, ids: e.target.checked ? [...bancoAsignar.ids, f.id] : bancoAsignar.ids.filter(x => x !== f.id) })} />
+                              <span className="font-mono">{f.id}</span><span className="truncate flex-1">{nombreCli(f.cliente_id)}</span><span className={Math.abs(f.total - m.importe) < 0.01 ? 'font-bold text-green-700' : ''}>{formatCurrency(f.total)}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs">Seleccionado: {formatCurrency(bancoAsignar.ids.reduce((t, id) => t + (parseFloat(facturas.find(f => f.id === id)?.total) || 0), 0))}</span>
+                          <Button size="sm" disabled={!bancoAsignar.ids.length || !!bancoCargando} onClick={confirmarCobroBanco}><CheckCircle size={14} />Marcar cobrada(s)</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {renderStripe()}{/* V92 */}
+
+        {/* Recordatorios */}
+        <div className="p-4 rounded-xl border bg-white space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-bold">📨 Recordatorios de facturas vencidas</p>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={autoRec} onChange={e => guardarAjusteCobros('cobros_recordatorios_auto', e.target.checked ? 'true' : 'false')} className="w-4 h-4" />
+              Enviarlos solos (lunes a viernes, 9:50)
+            </label>
+          </div>
+          <p className="text-xs text-neutral-600">
+            Salen a los <input defaultValue={diasRec} onBlur={e => e.target.value.trim() !== diasRec && guardarAjusteCobros('cobros_recordatorios_dias', e.target.value.trim())} className="w-20 px-1 py-0.5 border rounded text-center" /> días de vencer (máximo 3 por factura; luego avisa en Slack para llamar), un email por cliente con los PDF y el IBAN.
+            No salen si el banco lleva más de 3 días sin actualizar, si hay un ingreso por revisar que puede ser ese pago, si el cliente paga por domiciliación SEPA o si tiene los recordatorios apagados en su ficha.
+          </p>
+          {r?.banco_viejo && <p className="text-xs p-2 rounded bg-amber-50 text-amber-800">⚠️ El banco no está al día ({r.banco_hasta ? `último movimiento cargado: ${formatDate(r.banco_hasta)}` : 'sin movimientos'}): hoy no saldría ningún recordatorio automático.</p>}
+          {!r ? <p className="text-sm text-neutral-500">Cargando…</p> : r.error ? <p className="text-sm text-red-600">{r.error}</p> : !vencidas.length ? <p className="text-sm text-green-700">✅ No hay facturas vencidas sin cobrar.</p> : (
+            <div className="divide-y border rounded-lg">
+              {Object.entries(porCliente).map(([cid, g]) => (
+                <div key={cid} className="p-2 text-sm flex flex-wrap items-center gap-2">
+                  <span className="font-semibold flex-1 min-w-[160px]">{g.nombre}</span>
+                  <div className="flex-[2] min-w-[240px] space-y-0.5">
+                    {g.fs.map(f => <p key={f.id} className="text-xs">{f.id} · {formatCurrency(f.total)} · venció {formatDate(f.vencimiento)} · {f.enviados} recordatorio(s) · <span className={f.saldra ? 'text-orange-700 font-semibold' : 'text-neutral-500'}>{f.saldra ? 'sale el próximo día laborable' : f.motivo}</span></p>)}
+                  </div>
+                  <Button size="sm" variant="secondary" disabled={!!bancoCargando} onClick={() => recordatorioAhora(Number(cid), g.nombre)}>Enviar ya</Button>
+                </div>
+              ))}
+            </div>
+          )}
+          {r?.ultimos?.length > 0 && <p className="text-xs text-neutral-500">Últimos enviados: {r.ultimos.slice(0, 5).map(u => `${u.factura_id} (${u.nivel}.º, ${new Date(u.created_at).toLocaleDateString('es-ES')}${u.estado !== 'enviado' ? ' ❌' : ''})`).join(' · ')}</p>}
+        </div>
+      </div>
+    );
+  };
+
   const emailsFacturacion = (cliente) => (cliente?.email_facturacion || cliente?.email || '').trim();
 
   // Envía ya una factura al cliente (botón ✉️). Si falla, ofrece el mailto con el enlace.
@@ -4894,8 +5258,8 @@ const MainApp = () => {
           }
         }
         // V83: fallback si faltan las columnas de envío de facturas en clientes
-        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.email_facturacion !== undefined || form.envio_facturas_auto !== undefined)) {
-          const { email_facturacion, envio_facturas_auto, ...sinEnvio } = form;
+        if (result.error && result.error.code === '42703' && table === 'clientes' && (form.email_facturacion !== undefined || form.envio_facturas_auto !== undefined || form.recordatorios_auto !== undefined)) {
+          const { email_facturacion, envio_facturas_auto, recordatorios_auto, ...sinEnvio } = form; // V91: recordatorios_auto
           form = sinEnvio;
           if (id) {
             result = await supabase.from(table).update(sinEnvio).eq('id', id);
@@ -6648,6 +7012,10 @@ ${pedidoLinea ? `^FO260,258
             <label className="flex items-center gap-2 mt-2 text-xs text-blue-900 cursor-pointer">
               <input type="checkbox" checked={form.envio_facturas_auto !== false} onChange={e => setForm({...form, envio_facturas_auto: e.target.checked})} className="w-4 h-4 rounded" />
               Enviarle las facturas automáticamente
+            </label>
+            <label className="flex items-center gap-2 mt-1 text-xs text-blue-900 cursor-pointer">{/* V91 */}
+              <input type="checkbox" checked={form.recordatorios_auto !== false} onChange={e => setForm({...form, recordatorios_auto: e.target.checked})} className="w-4 h-4 rounded" />
+              Recordarle por email las facturas vencidas (1, 7 y 15 días después del vencimiento)
             </label>
           </div>
 
@@ -13699,6 +14067,8 @@ ${transacciones}
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
           <StatCard icon={AlertCircle} label="Vencidas" value={facturasFiltradas.filter(f => f.estado === 'vencida' || (f.estado === 'pendiente' && new Date(f.fecha_vencimiento) < new Date())).length} color="bg-red-100 text-red-600" />
         </div>
+
+        {renderTarjetaBanco()}{/* V91 */}
 
         {renderControlSerie()}{/* V87 */}
 
@@ -32361,6 +32731,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       </Modal>}
       {showModal === 'merma' && <Modal title={editingItem ? 'Editar Merma' : 'Registrar Merma'} onClose={() => { setShowModal(null); setEditingItem(null); }}><MermaForm merma={editingItem} onSave={form => handleSave('mermas', form, editingItem?.id)} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'ajuste_recurrente' && ajusteRecurrente && <Modal title="± Cantidades del pedido recurrente" onClose={() => { setShowModal(null); setAjusteRecurrente(null); }} size="max-w-lg">{renderAjusteRecurrente()}</Modal>}{/* V89 */}
+      {showModal === 'banco' && <Modal title="🏦 Banco y cobros" onClose={() => { setShowModal(null); setBancoAsignar(null); }} size="max-w-5xl">{renderBancoCobros()}</Modal>}{/* V91 */}
       {showModal === 'convertir_recurrentes' && conversionRecurrente && <Modal title="🔁 Convertir en pedidos recurrentes" onClose={() => { setShowModal(null); setConversionRecurrente(null); }} size="max-w-4xl">{renderConversionRecurrente()}</Modal>}{/* V90 */}
       {showModal === 'pedido_recurrente' && <Modal title={editingItem ? 'Editar Pedido Recurrente' : 'Nuevo Pedido Recurrente'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-3xl"><PedidoRecurrenteForm pedidoRecurrente={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
       {showModal === 'receta' && <Modal title={editingItem ? 'Editar Receta' : 'Nueva Receta de Producción'} onClose={() => { setShowModal(null); setEditingItem(null); }} size="max-w-2xl"><RecetaForm receta={editingItem} onSave={() => { setShowModal(null); setEditingItem(null); }} onCancel={() => { setShowModal(null); setEditingItem(null); }} /></Modal>}
