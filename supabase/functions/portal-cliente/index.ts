@@ -1,4 +1,4 @@
-// Supabase Edge Function: portal-cliente (V82 + V83)
+// Supabase Edge Function: portal-cliente (V82 + V83 + V91 recordatorios de pago)
 // 1) Backend del área de cliente (src/AreaCliente.jsx). El cliente entra con el enlace
 //    https://…/area-cliente?t=<clientes.portal_token> y esta función, con la service role,
 //    le devuelve SOLO sus datos. El navegador del cliente nunca lee las tablas directamente.
@@ -24,8 +24,11 @@
 //     { accion: 'admin_enviar_pendientes' }                                     → envía ya lo que toca (aunque el automático esté apagado)
 //     { accion: 'admin_enviar_factura', factura_id, para: ['a@b.es'] }          → envía una factura concreta
 //     { accion: 'admin_pdf', tipo, id }
+//     { accion: 'admin_estado_recordatorios' }                                  → V91: qué recordatorios saldrían hoy y por qué no otros
+//     { accion: 'admin_enviar_recordatorio', cliente_id }                       → V91: recordatorio ya de todas sus facturas vencidas
 //   Programado (pg_cron, SQL V83) o el propio ERP cada 30 min:
 //     { accion: 'cron_enviar_facturas' }   → solo hace algo si el envío automático está activado en el ERP
+//     { accion: 'cron_recordatorios' }     → V91 (pg_cron L-V, SQL V91): recordatorios de facturas vencidas
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
@@ -84,6 +87,11 @@ Deno.serve(async (req) => {
       const r = await ejecutarEnvios(supabase, { forzar: false, origen: "automatico" });
       return json({ ok: true, enviadas: r.enviadas.length, errores: r.errores.length, activo: r.activo });
     }
+    // V91: recordatorios de facturas vencidas (pg_cron L-V después de conciliar el banco)
+    if (accion === "cron_recordatorios") {
+      const r = await ejecutarRecordatorios(supabase, { origen: "automatico" });
+      return json({ ok: true, enviados: r.enviados.length, errores: r.errores.length, bloqueado: r.bloqueado || null });
+    }
 
     // ---------- ERP ----------
     if (accion.startsWith("admin_")) {
@@ -93,6 +101,8 @@ Deno.serve(async (req) => {
       if (accion === "admin_enviar_pendientes") return json(await ejecutarEnvios(supabase, { forzar: true, origen: usuario }));
       if (accion === "admin_enviar_factura") return json(await enviarFacturaManual(supabase, body, usuario));
       if (accion === "admin_pdf") return json(await generarPdf(supabase, body.tipo, body.id, null));
+      if (accion === "admin_estado_recordatorios") return json(await estadoRecordatorios(supabase)); // V91
+      if (accion === "admin_enviar_recordatorio") return json(await recordatorioManual(supabase, body, usuario)); // V91
       return json({ error: "Acción no válida" }, 400);
     }
 
@@ -830,6 +840,192 @@ export function htmlEmailFactura(f: any, c: any, token: string, pendientes: any[
     <p style="font-size:14px;margin-top:20px;">Gracias por confiar en RootFlow 🌱<br>Para cualquier duda, responde a este correo o llámanos al ${esc(EMPRESA.telefono)}.</p>
     <p style="margin-top:24px;font-size:12px;color:#888;">${esc(EMPRESA.nombre)} · CIF ${esc(EMPRESA.cif)} · ${esc(EMPRESA.direccion)}, ${esc(EMPRESA.cp)} ${esc(EMPRESA.ciudad)} · ${esc(EMPRESA.email)}</p>
   </div></body></html>`;
+}
+
+// ==================== V91: RECORDATORIOS DE FACTURAS VENCIDAS ====================
+// Salen solos (L-V) a los días configurados después del vencimiento (por defecto 1, 7 y 15) y como mucho
+// tres por factura. Un email por cliente con todas sus facturas vencidas que tocan y sus PDF.
+// Seguridad para no reclamar algo ya pagado: no sale nada si el banco no está al día (movimientos de
+// hace más de 3 días), ni para facturas con un ingreso del banco pendiente de confirmar, ni si el cliente
+// paga por domiciliación SEPA o tiene los recordatorios desactivados en su ficha.
+const DIAS_BANCO_AL_DIA = 3;
+const MIN_DIAS_ENTRE_RECORDATORIOS = 5;
+const diasEntre = (a: string, b: string) => Math.round((Date.parse(`${a.slice(0, 10)}T12:00:00Z`) - Date.parse(`${b.slice(0, 10)}T12:00:00Z`)) / 86400000);
+
+async function leerConfigRecordatorios(supabase: any) {
+  const { data } = await supabase.from("ajustes_sistema").select("clave, valor").in("clave", ["cobros_recordatorios_auto", "cobros_recordatorios_dias", "banco_al_dia", "facturas_envio_copia"]);
+  const m: Record<string, string> = {};
+  (data || []).forEach((r: any) => { m[r.clave] = r.valor; });
+  const dias = String(m.cobros_recordatorios_dias || "1,7,15").split(/[,;\s]+/).map((x) => parseInt(x, 10)).filter((n) => n >= 0 && n < 365).sort((a, b) => a - b);
+  let alDia: any = null;
+  try { alDia = JSON.parse(m.banco_al_dia || "null"); } catch { /* vacío */ }
+  return { activo: m.cobros_recordatorios_auto !== "false", dias: dias.length ? dias : [1, 7, 15], bancoHasta: alDia?.hasta || null, copia: String(m.facturas_envio_copia || "").split(/[,;\s]+/).filter(esEmail) };
+}
+
+// null = toca recordatorio; si no, el motivo por el que no
+export function motivoNoRecordar(f: any, c: any, hoy: string, cfg: { dias: number[] }, conIngresoSinConfirmar: Set<string>, manual = false) {
+  if (!["pendiente", "vencida"].includes(f.estado) || f.tipo === "anulada" || esRectificativa(f) || (Number(f.total) || 0) <= 0) return "no está pendiente";
+  if (!f.fecha_vencimiento || String(f.fecha_vencimiento) >= hoy) return "todavía no ha vencido";
+  if (!c) return "sin cliente";
+  if (!destinatariosCliente(c).length) return "el cliente no tiene email";
+  if (c.sepa_activo && f.metodo_cobro === "sepa_b2b") return "se cobra por domiciliación SEPA";
+  if (conIngresoSinConfirmar.has(f.id)) return "hay un ingreso en el banco que puede ser este pago: confírmalo en 🏦 Banco y cobros";
+  if (manual) return null;
+  if (c.recordatorios_auto === false) return "recordatorios desactivados en la ficha del cliente";
+  const nivel = Number(f.recordatorios_enviados) || 0;
+  if (nivel >= cfg.dias.length) return `ya se le han enviado ${nivel} recordatorios: toca llamar`;
+  const vencida = diasEntre(hoy, String(f.fecha_vencimiento));
+  if (vencida < cfg.dias[nivel]) return `el ${nivel + 1}.º recordatorio sale a los ${cfg.dias[nivel]} días de vencer (lleva ${vencida})`;
+  if (f.recordatorio_ultimo_at && diasEntre(hoy, String(f.recordatorio_ultimo_at)) < MIN_DIAS_ENTRE_RECORDATORIOS) return "recordatorio enviado hace menos de 5 días";
+  return null;
+}
+
+async function candidatosRecordatorio(supabase: any, manual = false) {
+  const cfg = await leerConfigRecordatorios(supabase);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const { data: facturas, error } = await supabase.from("facturas").select("*").in("estado", ["pendiente", "vencida"]).lt("fecha_vencimiento", hoy).order("fecha");
+  if (error) throw error;
+  const lista = facturas || [];
+  const cliIds = [...new Set(lista.map((f: any) => f.cliente_id))];
+  const { data: clientes } = cliIds.length ? await supabase.from("clientes").select("*").in("id", cliIds) : { data: [] };
+  const { data: sug } = await supabase.from("movimientos_banco").select("factura_ids").eq("estado", "sugerido");
+  const conIngreso = new Set<string>(((sug || []) as any[]).flatMap((m) => m.factura_ids || []));
+  const bancoViejo = !cfg.bancoHasta || diasEntre(hoy, cfg.bancoHasta) > DIAS_BANCO_AL_DIA;
+  const filas = lista.map((f: any) => {
+    const c = (clientes || []).find((x: any) => x.id === f.cliente_id);
+    return { f, c, motivo: motivoNoRecordar(f, c, hoy, cfg, conIngreso, manual) };
+  });
+  return { cfg, hoy, filas, bancoViejo };
+}
+
+async function estadoRecordatorios(supabase: any) {
+  const { cfg, filas, bancoViejo } = await candidatosRecordatorio(supabase);
+  const { data: ultimos } = await supabase.from("recordatorios_cobro").select("*").order("created_at", { ascending: false }).limit(30);
+  return {
+    activo: cfg.activo, dias: cfg.dias, banco_hasta: cfg.bancoHasta, banco_viejo: bancoViejo,
+    facturas: filas.map(({ f, c, motivo }: any) => ({
+      id: f.id, total: Number(f.total) || 0, vencimiento: f.fecha_vencimiento, cliente: c?.nombre || "—", cliente_id: f.cliente_id,
+      enviados: Number(f.recordatorios_enviados) || 0, ultimo: f.recordatorio_ultimo_at || null,
+      saldra: !motivo && !bancoViejo && cfg.activo, motivo: motivo || (bancoViejo ? `el banco no está al día (último movimiento cargado: ${cfg.bancoHasta ? fechaES(cfg.bancoHasta) : "ninguno"})` : !cfg.activo ? "recordatorios automáticos apagados" : null),
+    })),
+    ultimos: ultimos || [],
+  };
+}
+
+async function ejecutarRecordatorios(supabase: any, { origen }: { origen: string }) {
+  const { cfg, filas, bancoViejo } = await candidatosRecordatorio(supabase);
+  const res = { enviados: [] as any[], errores: [] as any[], bloqueado: null as string | null };
+  const tocan = filas.filter((x: any) => !x.motivo);
+  if (!cfg.activo) { res.bloqueado = "apagados"; return res; }
+  if (bancoViejo) {
+    res.bloqueado = "banco";
+    if (tocan.length) await avisarSlackTexto(supabase, `⏸️ Hoy no salen ${tocan.length} recordatorio(s) de pago porque el banco no está al día (último movimiento cargado: ${cfg.bancoHasta ? fechaES(cfg.bancoHasta) : "ninguno"}). Conecta el BBVA o sube el extracto en Facturación → 🏦 Banco y cobros.`);
+    return res;
+  }
+  const porCliente = new Map<any, any[]>();
+  tocan.forEach((x: any) => porCliente.set(x.c.id, [...(porCliente.get(x.c.id) || []), x.f]));
+  for (const [, fs] of [...porCliente.entries()].slice(0, MAX_ENVIOS_POR_EJECUCION)) {
+    const c = filas.find((x: any) => x.f.id === fs[0].id).c;
+    const r = await enviarRecordatorio(supabase, c, fs, cfg.copia, origen, true);
+    if (r.ok) res.enviados.push({ cliente: c.nombre, facturas: fs.map((f: any) => f.id) });
+    else if (!r.omitido) res.errores.push({ cliente: c.nombre, error: r.error });
+  }
+  const llamar = filas.filter((x: any) => String(x.motivo || "").startsWith("ya se le han enviado"));
+  if (res.enviados.length || res.errores.length || llamar.length) {
+    await avisarSlackTexto(supabase, [
+      res.enviados.length ? `📨 *Recordatorios de pago enviados:*\n${res.enviados.map((e) => `• ${e.cliente}: ${e.facturas.join(", ")}`).join("\n")}` : "",
+      res.errores.length ? `❌ Recordatorios con error:\n${res.errores.map((e) => `• ${e.cliente}: ${e.error}`).join("\n")}` : "",
+      llamar.length && new Date().getUTCDay() === 1 ? `☎️ Facturas vencidas que ya tienen todos los recordatorios (toca llamar):\n${llamar.map((x: any) => `• ${x.c?.nombre}: ${x.f.id} (${eur(x.f.total)}, vencida el ${fechaES(x.f.fecha_vencimiento)})`).join("\n")}` : "",
+    ].filter(Boolean).join("\n\n"));
+  }
+  return res;
+}
+
+async function recordatorioManual(supabase: any, body: any, usuario: string) {
+  const { filas, cfg } = await candidatosRecordatorio(supabase, true);
+  const mias = filas.filter((x: any) => x.f.cliente_id === Number(body.cliente_id));
+  const fs = mias.filter((x: any) => !x.motivo).map((x: any) => x.f);
+  if (!fs.length) return { ok: false, error: mias[0]?.motivo || "Este cliente no tiene facturas vencidas" };
+  return await enviarRecordatorio(supabase, mias[0].c, fs, cfg.copia, usuario, false);
+}
+
+async function enviarRecordatorio(supabase: any, c: any, fs: any[], copia: string[], origen: string, reclamar: boolean) {
+  const ahora = new Date().toISOString();
+  let lista = fs;
+  if (reclamar) {
+    // Reclamar las facturas antes de enviar: dos ejecuciones a la vez no mandan dos emails
+    const limite = new Date(Date.now() - MIN_DIAS_ENTRE_RECORDATORIOS * 86400000).toISOString();
+    const reclamadas: any[] = [];
+    for (const f of fs) {
+      const q = supabase.from("facturas").update({ recordatorio_ultimo_at: ahora }).eq("id", f.id);
+      const { data } = await (f.recordatorio_ultimo_at ? q.lt("recordatorio_ultimo_at", limite) : q.is("recordatorio_ultimo_at", null)).select("id");
+      if (data?.length) reclamadas.push(f);
+    }
+    lista = reclamadas;
+    if (!lista.length) return { ok: false, omitido: true, error: "ya enviado" };
+  }
+  const para = destinatariosCliente(c);
+  const nivel = Math.max(...lista.map((f) => (Number(f.recordatorios_enviados) || 0) + 1));
+  try {
+    const token = await asegurarToken(supabase, c);
+    const adjuntos: any[] = [];
+    for (const f of lista.slice(0, 6)) {
+      const r = await cargarFactura(supabase, f.id);
+      if (r) adjuntos.push({ filename: `Factura-${f.id}.pdf`, content: bytesABase64(await pdfFactura(r.factura, r.cliente)) });
+    }
+    const total = lista.reduce((s, f) => s + (Number(f.total) || 0), 0);
+    const asunto = nivel >= 3 ? `Último aviso: factura${lista.length > 1 ? "s" : ""} pendiente${lista.length > 1 ? "s" : ""} de pago (${eur(total)}) · RootFlow`
+      : `${nivel === 2 ? "Segundo recordatorio" : "Recordatorio"}: ${lista.length > 1 ? `${lista.length} facturas vencidas` : `factura ${lista[0].id} vencida`} · RootFlow`;
+    const envio = await enviarResend({ para, copia, asunto, html: htmlRecordatorio(c, lista, nivel, token), adjuntos });
+    await supabase.from("email_log").insert({ destinatarios: para.join(", "), asunto, alerta_id: `recordatorio:${lista.map((f) => f.id).join(",")}`, estado: envio.ok ? "enviado" : "error", respuesta: envio.ok ? JSON.stringify({ id: envio.id, por: origen }) : envio.error });
+    for (const f of lista) await supabase.from("recordatorios_cobro").insert({ factura_id: f.id, cliente_id: c.id, nivel: (Number(f.recordatorios_enviados) || 0) + 1, enviado_a: para.join(", "), estado: envio.ok ? "enviado" : "error", error: envio.ok ? null : envio.error, origen });
+    if (!envio.ok) throw new Error(envio.error);
+    for (const f of lista) await supabase.from("facturas").update({ recordatorios_enviados: (Number(f.recordatorios_enviados) || 0) + 1, recordatorio_ultimo_at: ahora }).eq("id", f.id);
+    return { ok: true, para, facturas: lista.map((f) => f.id) };
+  } catch (e) {
+    const msg = String((e as any)?.message || e).slice(0, 500);
+    if (reclamar) for (const f of lista) await supabase.from("facturas").update({ recordatorio_ultimo_at: f.recordatorio_ultimo_at || null }).eq("id", f.id);
+    return { ok: false, error: msg };
+  }
+}
+
+export function htmlRecordatorio(c: any, fs: any[], nivel: number, token: string) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const total = fs.reduce((s, f) => s + (Number(f.total) || 0), 0);
+  const intro = nivel >= 3
+    ? `Te escribimos de nuevo porque seguimos sin recibir el pago de ${fs.length > 1 ? "estas facturas" : "esta factura"}, ya vencida${fs.length > 1 ? "s" : ""} desde hace tiempo. Te agradeceríamos que lo regularizaras en los próximos días o que nos llamaras si hay algún problema.`
+    : nivel === 2
+    ? `Te recordamos de nuevo que ${fs.length > 1 ? "estas facturas siguen" : "esta factura sigue"} pendiente${fs.length > 1 ? "s" : ""} de pago.`
+    : `Según nuestros registros, ${fs.length > 1 ? "estas facturas han vencido" : "esta factura ha vencido"} y todavía no nos consta el pago. Seguramente se te haya pasado: te dejamos los datos para que puedas hacerlo cuando te venga bien.`;
+  return `<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,Helvetica,sans-serif;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;padding:28px;">
+    <div style="margin-bottom:20px;"><img src="${LOGO_URL}" alt="RootFlow" width="44" style="vertical-align:middle;"> <span style="font-size:22px;font-weight:800;vertical-align:middle;">Root<span style="color:#F97316;">Flow</span></span></div>
+    <p style="font-size:15px;">Hola ${esc(c?.contacto || c?.nombre || "")},</p>
+    <p style="font-size:15px;">${intro}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;">
+      <tr style="background:#f5f5f5;"><th style="padding:8px;text-align:left;">Factura</th><th style="padding:8px;text-align:left;">Fecha</th><th style="padding:8px;text-align:left;">Venció</th><th style="padding:8px;text-align:right;">Importe</th></tr>
+      ${fs.map((f) => `<tr><td style="padding:8px;border-bottom:1px solid #eee;"><a href="${urlPortal(token, f.id)}" style="color:#047857;">${esc(f.id)}</a></td><td style="padding:8px;border-bottom:1px solid #eee;">${fechaES(f.fecha)}</td><td style="padding:8px;border-bottom:1px solid #eee;color:#DC2626;">${fechaES(f.fecha_vencimiento)} (hace ${diasEntre(hoy, String(f.fecha_vencimiento))} días)</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${eur(f.total)}</td></tr>`).join("")}
+      ${fs.length > 1 ? `<tr><td colspan="3" style="padding:8px;"><strong>Total</strong></td><td style="padding:8px;text-align:right;"><strong>${eur(total)}</strong></td></tr>` : ""}
+    </table>
+    <p style="font-size:14px;">Pago por transferencia a ${esc(EMPRESA.nombre)} (${esc(EMPRESA.banco)}) · IBAN <strong>${esc(EMPRESA.iban)}</strong> · Concepto: ${esc(fs.map((f) => f.id).join(", "))}.</p>
+    <p style="font-size:14px;">Te adjuntamos ${fs.length > 1 ? "las facturas" : "la factura"} en PDF. <strong>Si ya lo has pagado, ignora este mensaje</strong> (los pagos pueden tardar un par de días en llegarnos) o respóndenos con el justificante y lo revisamos.</p>
+    <p style="margin:20px 0;"><a href="${urlPortal(token)}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">Ver mis facturas</a></p>
+    <p style="font-size:14px;margin-top:20px;">Gracias 🌱<br>Para cualquier duda, responde a este correo o llámanos al ${esc(EMPRESA.telefono)}.</p>
+    <p style="margin-top:24px;font-size:12px;color:#888;">${esc(EMPRESA.nombre)} · CIF ${esc(EMPRESA.cif)} · ${esc(EMPRESA.direccion)}, ${esc(EMPRESA.cp)} ${esc(EMPRESA.ciudad)} · ${esc(EMPRESA.email)}</p>
+  </div></body></html>`;
+}
+
+async function avisarSlackTexto(supabase: any, text: string) {
+  try {
+    let webhook = env("SLACK_WEBHOOK_URL");
+    if (!webhook) {
+      const { data } = await supabase.from("notificaciones_config").select("slack_webhook_url").limit(1).maybeSingle();
+      webhook = data?.slack_webhook_url || "";
+    }
+    if (webhook && text) await fetch(webhook, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  } catch (e) {
+    console.warn("Slack no enviado", e);
+  }
 }
 
 // ==================== SOLICITUD DE AMPLIACIÓN ====================
