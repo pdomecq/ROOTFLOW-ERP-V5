@@ -1994,6 +1994,46 @@ const MainApp = () => {
     return true;
   };
 
+  // V95: la factura "por pedido" se crea al crear el pedido; si después se edita el pedido o su albarán
+  // (más productos, portes), la factura se quedaba con el importe viejo (F-2026-0022 salió por 9,15 € y el
+  // albarán era de 51,27 €). Esto la recalcula: si el pedido tiene un albarán solo suyo, con los importes del
+  // albarán (que ya llevan descuento y porte); si no, con las líneas del pedido. Solo facturas pendientes y sin
+  // cobro de Stripe en curso. Devuelve { id, antes, ahora, enviada } si ha cambiado.
+  const sincronizarFacturaDePedido = async (pedidoId) => {
+    const r2 = (x) => Math.round((parseFloat(x) || 0) * 100) / 100;
+    const { data: fs } = await supabase.from('facturas').select('*').eq('pedido_id', pedidoId).in('estado', ['pendiente', 'vencida']);
+    const f = (fs || []).find(x => !esRectificativa(x) && x.tipo !== 'anulada' && !(Array.isArray(x.albaranes_ids) && x.albaranes_ids.length) && !['processing', 'succeeded'].includes(x.stripe_estado));
+    if (!f) return null;
+    const cliente = clientes.find(c => c.id === f.cliente_id);
+    let nuevo = null;
+    const { data: rel } = await supabase.from('albaran_pedidos').select('albaran_id, pedido_id');
+    const albIds = [...new Set((rel || []).filter(x => x.pedido_id === pedidoId).map(x => x.albaran_id))]
+      .filter(id => (rel || []).filter(x => x.albaran_id === id).length === 1); // albaranes solo de este pedido
+    if (albIds.length === 1) {
+      const { data: a } = await supabase.from('albaranes').select('*').eq('id', albIds[0]).maybeSingle();
+      if (a && a.valorado !== false && r2(a.total) > 0) nuevo = { subtotal: r2(a.subtotal) || r2(r2(a.base_imponible) - r2(a.coste_envio) + r2(a.descuento_aplicado)), descuento_aplicado: r2(a.descuento_aplicado), portes_importe: r2(a.coste_envio), base_imponible: r2(a.base_imponible), iva: r2(a.iva), re_importe: r2(a.re_importe), total: r2(a.total) };
+    }
+    if (!nuevo) {
+      const { data: its } = await supabase.from('pedido_items').select('subtotal').eq('pedido_id', pedidoId);
+      const { data: ped } = await supabase.from('pedidos').select('fecha, fecha_entrega').eq('id', pedidoId).maybeSingle();
+      const subtotal = r2((its || []).reduce((t, i) => t + (parseFloat(i.subtotal) || 0), 0));
+      const desc = r2(subtotal * (descuentoClienteEnFecha(cliente, ped?.fecha_entrega || ped?.fecha) / 100));
+      const base = r2(subtotal - desc);
+      const iva = r2(base * IVA_VENTAS / 100);
+      const re = cliente?.recargo_equivalencia ? r2(base * RE_VENTAS / 100) : 0;
+      nuevo = { subtotal, descuento_aplicado: desc, portes_importe: 0, base_imponible: base, iva, re_importe: re, total: r2(base + iva + re) };
+    }
+    if (Math.abs(nuevo.total - r2(f.total)) < 0.01 && Math.abs(nuevo.base_imponible - r2(f.base_imponible)) < 0.01) return null;
+    let { error } = await supabase.from('facturas').update(nuevo).eq('id', f.id);
+    if (error?.code === '42703') { const { portes_importe, ...sin } = nuevo; ({ error } = await supabase.from('facturas').update(sin).eq('id', f.id)); }
+    if (error) { alert(`❌ No se pudo actualizar la factura ${f.id}: ${error.message}`); return null; }
+    await rehacerAsientoFactura(f.id);
+    registrarAuditoria?.('UPDATE', 'facturas', f.id, { total: f.total }, { total: nuevo.total }, `V95: factura recalculada al editar el pedido #${pedidoId} o su albarán`);
+    refetchFacturas();
+    return { id: f.id, antes: r2(f.total), ahora: nuevo.total, enviada: !!f.enviada_at };
+  };
+  const avisarFacturaSincronizada = (r) => r && alert(`🧾 La factura ${r.id} se ha actualizado con el pedido/albarán: ${formatCurrency(r.antes)} → ${formatCurrency(r.ahora)}.${r.enviada ? `\n\n⚠️ Ya se había enviado al cliente con el importe anterior: reenvíasela con el botón ✉️ de Facturación.` : ''}`);
+
   // Rectificativa que anula una factura (columna factura_rectificada_id; sin el SQL V87, por el concepto)
   const rectificativaDe = (facturaId) => facturas.find(r => esRectificativa(r) && (r.factura_rectificada_id === facturaId || String(r.concepto || '').includes(`factura ${facturaId} `)));
   const facturaRectificadaPor = (r) => r.factura_rectificada_id || (String(r.concepto || '').match(/factura (\S+) de /) || [])[1] || null;
@@ -6365,6 +6405,7 @@ ${pedidoLinea ? `^FO260,258
           subtotal: item.subtotal 
         });
       }
+      if (editingItem) avisarFacturaSincronizada(await sincronizarFacturaDePedido(pedidoId)); // V95
 
       // STOCK AUTOMÁTICO basado en ESTADO del pedido
       // Lógica:
@@ -17324,6 +17365,9 @@ ${logoRootflow}^FS
         } catch (e) { console.warn(e); }
       }
       
+      // V95: la factura de cada pedido de este albarán se pone al día (importes y portes del albarán)
+      for (const pid of pedidosSel) avisarFacturaSincronizada(await sincronizarFacturaDePedido(pid));
+
       refetchAlbaranes();
       refetchAlbaranPedidos();
       refetchPedidos();
