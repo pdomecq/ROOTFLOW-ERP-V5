@@ -29,9 +29,11 @@
 //   Programado (pg_cron, SQL V83) o el propio ERP cada 30 min:
 //     { accion: 'cron_enviar_facturas' }   → solo hace algo si el envío automático está activado en el ERP
 //     { accion: 'cron_recordatorios' }     → V91 (pg_cron L-V, SQL V91): recordatorios de facturas vencidas
+//     { accion: 'cron_control_facturas' }  → V97 (pg_cron diario, SQL V97): facturas que no cuadran con su albarán → Slack
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
+import { importeEsperado, cuadra, revisarFacturas } from "./controlFacturas.js"; // V97
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -92,6 +94,9 @@ Deno.serve(async (req) => {
       const r = await ejecutarRecordatorios(supabase, { origen: "automatico" });
       return json({ ok: true, enviados: r.enviados.length, errores: r.errores.length, bloqueado: r.bloqueado || null });
     }
+
+    // V97: revisión diaria de facturas contra albaranes/pedidos
+    if (accion === "cron_control_facturas") return json(await controlDiarioFacturas(supabase));
 
     // ---------- ERP ----------
     if (accion.startsWith("admin_")) {
@@ -745,6 +750,19 @@ async function enviarFactura(supabase: any, facturaId: string, para: string[], c
     const r = await cargarFactura(supabase, facturaId);
     if (!r) throw new Error("Factura no encontrada");
     const { factura, cliente } = r;
+    // V97: una factura que no cuadra con su albarán (o sus albaranes / su pedido) NO sale al cliente
+    if (!esRectificativa(factura)) {
+      const ctx = await contextoControl(supabase);
+      const esperado = importeEsperado(factura, { ...ctx, cliente });
+      if (!cuadra(factura, esperado)) {
+        const msg = `No cuadra con ${esperado.fuente === "albaran" ? `el albarán ${esperado.albaranId}` : esperado.fuente === "albaranes" ? "sus albaranes" : "el pedido"}: factura ${eur(factura.total)}, debería ser ${eur(esperado.total)}. Corrígela en Facturación → Control de facturas`;
+        const { data: prev } = await supabase.from("facturas").select("envio_error").eq("id", factura.id).maybeSingle();
+        if (!String(prev?.envio_error || "").startsWith("No cuadra")) { // un solo aviso, no uno cada 30 min
+          await avisarSlackTexto(supabase, `🛑 *Factura ${factura.id} NO enviada* a ${cliente.nombre}: ${msg}.`);
+        }
+        throw new Error(msg);
+      }
+    }
     const token = await asegurarToken(supabase, cliente);
     const { data: pend } = await supabase.from("facturas").select("id, fecha, fecha_vencimiento, total, estado").eq("cliente_id", cliente.id).in("estado", ["pendiente", "vencida"]).order("fecha");
     const pdf = await pdfFactura(factura, cliente);
@@ -1044,6 +1062,43 @@ export function htmlRecordatorio(c: any, fs: any[], nivel: number, token: string
     <p style="font-size:14px;margin-top:20px;">Gracias 🌱<br>Para cualquier duda, responde a este correo o llámanos al ${esc(EMPRESA.telefono)}.</p>
     <p style="margin-top:24px;font-size:12px;color:#888;">${esc(EMPRESA.nombre)} · CIF ${esc(EMPRESA.cif)} · ${esc(EMPRESA.direccion)}, ${esc(EMPRESA.cp)} ${esc(EMPRESA.ciudad)} · ${esc(EMPRESA.email)}</p>
   </div></body></html>`;
+}
+
+// ==================== V97: CONTROL DE FACTURAS ====================
+const PCT = (x: any) => parseFloat(x) || 0;
+// Copia de descuentoClienteEnFecha() del ERP (tramos clientes.descuentos_fechas y, si no, el descuento general)
+function descuentoClienteEnFecha(cli: any, fechaIso: string) {
+  const general = PCT(cli?.descuento);
+  const tramos = (Array.isArray(cli?.descuentos_fechas) ? cli.descuentos_fechas : []).filter((t: any) => t && t.hasta && t.pct !== null && t.pct !== undefined && t.pct !== "");
+  if (!fechaIso || !tramos.length) return general;
+  const t = [...tramos].sort((a: any, b: any) => String(a.hasta).localeCompare(String(b.hasta))).find((t: any) => String(fechaIso).slice(0, 10) <= String(t.hasta).slice(0, 10));
+  return t ? PCT(t.pct) : general;
+}
+
+async function contextoControl(supabase: any) {
+  const [a, ap, pi, p, c, f] = await Promise.all([
+    supabase.from("albaranes").select("id, subtotal, descuento_aplicado, coste_envio, base_imponible, iva, re_importe, total, valorado"),
+    supabase.from("albaran_pedidos").select("albaran_id, pedido_id"),
+    supabase.from("pedido_items").select("pedido_id, subtotal"),
+    supabase.from("pedidos").select("id, estado, cliente_id, fecha, fecha_entrega, total"),
+    supabase.from("clientes").select("id, nombre, periodicidad_facturacion, recargo_equivalencia, descuento, descuentos_fechas"),
+    supabase.from("facturas").select("*"),
+  ]);
+  const err = [a, ap, pi, p, c, f].find((x: any) => x.error);
+  if (err) throw new Error("No se pudieron leer los datos para revisar la factura: " + err.error.message);
+  return { albaranes: a.data, albaranPedidos: ap.data, pedidoItems: pi.data, pedidos: p.data, clientes: c.data, facturas: f.data, descuentoPct: descuentoClienteEnFecha, ivaPct: 4, rePct: 0.5 };
+}
+
+async function controlDiarioFacturas(supabase: any) {
+  const ctx = await contextoControl(supabase);
+  const r = revisarFacturas({ ...ctx, desde: "2026-10-01" });
+  const nom = (id: number) => (ctx.clientes || []).find((c: any) => c.id === id)?.nombre || "—";
+  const lineas: string[] = [];
+  r.descuadres.forEach((d: any) => lineas.push(`• ${d.factura.id} (${nom(d.factura.cliente_id)}): factura ${eur(d.factura.total)}, ${d.esperado.fuente === "albaran" ? `albarán ${d.esperado.albaranId}` : d.esperado.fuente === "albaranes" ? "albaranes" : "pedido"} ${eur(d.esperado.total)}${d.enviada ? " — YA ENVIADA: rectificar y reemitir" : ""}`));
+  r.duplicadas.forEach((d: any) => lineas.push(`• Facturado dos veces: pedido #${d.factura.pedido_id} (${nom(d.factura.cliente_id)}) en ${d.factura.id} y en la agrupada ${d.agrupada.id}`));
+  r.sinFactura.forEach((p: any) => lineas.push(`• Pedido #${p.id} (${nom(p.cliente_id)}, ${eur(p.total)}) entregado y sin factura`));
+  if (lineas.length) await avisarSlackTexto(supabase, `🧾 *Control de facturas*: ${lineas.length} problema(s)\n${lineas.join("\n")}\nArréglalo en el ERP: Facturación → 🧾 Control de facturas.`);
+  return { ok: true, descuadres: r.descuadres.length, duplicadas: r.duplicadas.length, sin_factura: r.sinFactura.length };
 }
 
 async function avisarSlackTexto(supabase: any, text: string) {
