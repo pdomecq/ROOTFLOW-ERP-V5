@@ -7,6 +7,7 @@ Los SQL de cada versión están en `supabase/sql/historico/`. "Ejecutado" = comp
 
 | Versión | Cambio | SQL |
 |---|---|---|
+| V95 | **La factura de un pedido se pone al día sola** cuando se edita el pedido o se guarda su albarán (`sincronizarFacturaDePedido()`). Si el pedido tiene un albarán solo suyo, la factura toma sus importes (con descuento y porte); si no, los de las líneas del pedido. Rehace el asiento y avisa, también de que hay que reenviarla si ya se había mandado. Solo facturas pendientes y sin cobro de Stripe en curso. Corregida a mano la F-2026-0022 (Café El Padrino): 9,15 € → 51,27 € como su albarán A-2026-0042 (37,30 € + 12 € de portes), con el asiento A203 rehecho. Era un pedido facturado al crearlo y ampliado después. Las demás facturas de pedido cuadran con sus albaranes. | — (sin SQL) |
 | V94 | Emails de **acceso al área de cliente** y de **domiciliación** con el mismo bloque de Stripe (logo incluido): «🔁 Domiciliar mis pagos» y, si tiene facturas pendientes, «💳 Pagar con tarjeta». El de domiciliación añade además el acceso a su área de cliente. Los botones van al área de cliente (`?domiciliar=1` / `?pagar=todas`), que abre Stripe, así que ya no caducan a las 24 h. | — (sin SQL) |
 | V93 | **Pagar ya con tarjeta (Stripe)** las facturas pendientes, de una en una o todas de golpe. Botón morado «💳 Pagar ahora con tarjeta» con el logo de Stripe:
 - en el email de cada factura (salvo las domiciliadas);
