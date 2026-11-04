@@ -21,6 +21,7 @@ import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
+import { importeEsperado, cuadra as facturaCuadra, revisarFacturas } from './controlFacturas.js'; // V97
 import { FRECUENCIAS_RECURRENTE, DIAS_SEMANA, primeraEntrega, proximaEntregaDesde, proximasEntregas, entregasAGenerar, diaDeSemana, sumarDias } from './recurrentes.js'; // V90
 
 // ==================== SUPABASE CONFIG ====================
@@ -1996,43 +1997,95 @@ const MainApp = () => {
 
   // V95: la factura "por pedido" se crea al crear el pedido; si después se edita el pedido o su albarán
   // (más productos, portes), la factura se quedaba con el importe viejo (F-2026-0022 salió por 9,15 € y el
-  // albarán era de 51,27 €). Esto la recalcula: si el pedido tiene un albarán solo suyo, con los importes del
-  // albarán (que ya llevan descuento y porte); si no, con las líneas del pedido. Solo facturas pendientes y sin
-  // cobro de Stripe en curso. Devuelve { id, antes, ahora, enviada } si ha cambiado.
-  const sincronizarFacturaDePedido = async (pedidoId) => {
+  // albarán era de 51,27 €). V97: el cálculo está en src/controlFacturas.js (importeEsperado) y la factura
+  // SIEMPRE cierra con el albarán entregado. Si la factura ya se envió al cliente NO se toca (sería cambiar un
+  // documento que el cliente ya tiene): se avisa y se corrige con «Rectificar y reemitir» en 🧾 Control de facturas.
+  const contextoControlFacturas = async (filtroPedido) => {
+    let qRel = supabase.from('albaran_pedidos').select('albaran_id, pedido_id');
+    const { data: rel } = await qRel;
+    const { data: its } = filtroPedido ? await supabase.from('pedido_items').select('pedido_id, subtotal').eq('pedido_id', filtroPedido) : { data: pedidoItems };
+    const albIds = [...new Set((rel || []).filter(x => !filtroPedido || x.pedido_id === filtroPedido).map(x => x.albaran_id))];
+    const { data: albs } = filtroPedido ? (albIds.length ? await supabase.from('albaranes').select('*').in('id', albIds) : { data: [] }) : { data: albaranes };
+    const { data: peds } = filtroPedido ? await supabase.from('pedidos').select('id, fecha, fecha_entrega').eq('id', filtroPedido) : { data: pedidos };
+    return { albaranes: albs || [], albaranPedidos: rel || [], pedidoItems: its || [], pedidos: peds || [], descuentoPct: descuentoClienteEnFecha, ivaPct: IVA_VENTAS, rePct: RE_VENTAS };
+  };
+  const facturaBloqueadaStripe = (f) => ['processing', 'succeeded'].includes(f.stripe_estado);
+
+  // Pone los importes esperados en una factura NO enviada (y rehace su asiento)
+  const aplicarImportesFactura = async (f, esperado, motivo) => {
     const r2 = (x) => Math.round((parseFloat(x) || 0) * 100) / 100;
-    const { data: fs } = await supabase.from('facturas').select('*').eq('pedido_id', pedidoId).in('estado', ['pendiente', 'vencida']);
-    const f = (fs || []).find(x => !esRectificativa(x) && x.tipo !== 'anulada' && !(Array.isArray(x.albaranes_ids) && x.albaranes_ids.length) && !['processing', 'succeeded'].includes(x.stripe_estado));
-    if (!f) return null;
-    const cliente = clientes.find(c => c.id === f.cliente_id);
-    let nuevo = null;
-    const { data: rel } = await supabase.from('albaran_pedidos').select('albaran_id, pedido_id');
-    const albIds = [...new Set((rel || []).filter(x => x.pedido_id === pedidoId).map(x => x.albaran_id))]
-      .filter(id => (rel || []).filter(x => x.albaran_id === id).length === 1); // albaranes solo de este pedido
-    if (albIds.length === 1) {
-      const { data: a } = await supabase.from('albaranes').select('*').eq('id', albIds[0]).maybeSingle();
-      if (a && a.valorado !== false && r2(a.total) > 0) nuevo = { subtotal: r2(a.subtotal) || r2(r2(a.base_imponible) - r2(a.coste_envio) + r2(a.descuento_aplicado)), descuento_aplicado: r2(a.descuento_aplicado), portes_importe: r2(a.coste_envio), base_imponible: r2(a.base_imponible), iva: r2(a.iva), re_importe: r2(a.re_importe), total: r2(a.total) };
-    }
-    if (!nuevo) {
-      const { data: its } = await supabase.from('pedido_items').select('subtotal').eq('pedido_id', pedidoId);
-      const { data: ped } = await supabase.from('pedidos').select('fecha, fecha_entrega').eq('id', pedidoId).maybeSingle();
-      const subtotal = r2((its || []).reduce((t, i) => t + (parseFloat(i.subtotal) || 0), 0));
-      const desc = r2(subtotal * (descuentoClienteEnFecha(cliente, ped?.fecha_entrega || ped?.fecha) / 100));
-      const base = r2(subtotal - desc);
-      const iva = r2(base * IVA_VENTAS / 100);
-      const re = cliente?.recargo_equivalencia ? r2(base * RE_VENTAS / 100) : 0;
-      nuevo = { subtotal, descuento_aplicado: desc, portes_importe: 0, base_imponible: base, iva, re_importe: re, total: r2(base + iva + re) };
-    }
-    if (Math.abs(nuevo.total - r2(f.total)) < 0.01 && Math.abs(nuevo.base_imponible - r2(f.base_imponible)) < 0.01) return null;
+    const { fuente, albaranId, ...imp } = esperado;
+    // si el envío se bloqueó por no cuadrar, se libera para que salga en el próximo envío
+    const nuevo = { ...imp, ...(String(f.envio_error || '').startsWith('No cuadra') ? { envio_error: null, envio_intentos: 0 } : {}) };
     let { error } = await supabase.from('facturas').update(nuevo).eq('id', f.id);
     if (error?.code === '42703') { const { portes_importe, ...sin } = nuevo; ({ error } = await supabase.from('facturas').update(sin).eq('id', f.id)); }
-    if (error) { alert(`❌ No se pudo actualizar la factura ${f.id}: ${error.message}`); return null; }
+    if (error) { alert(`❌ No se pudo actualizar la factura ${f.id}: ${error.message}`); return false; }
     await rehacerAsientoFactura(f.id);
-    registrarAuditoria?.('UPDATE', 'facturas', f.id, { total: f.total }, { total: nuevo.total }, `V95: factura recalculada al editar el pedido #${pedidoId} o su albarán`);
-    refetchFacturas();
-    return { id: f.id, antes: r2(f.total), ahora: nuevo.total, enviada: !!f.enviada_at };
+    registrarAuditoria?.('UPDATE', 'facturas', f.id, { total: f.total, base_imponible: f.base_imponible }, { total: nuevo.total, base_imponible: nuevo.base_imponible }, motivo);
+    return { id: f.id, antes: r2(f.total), ahora: nuevo.total };
   };
-  const avisarFacturaSincronizada = (r) => r && alert(`🧾 La factura ${r.id} se ha actualizado con el pedido/albarán: ${formatCurrency(r.antes)} → ${formatCurrency(r.ahora)}.${r.enviada ? `\n\n⚠️ Ya se había enviado al cliente con el importe anterior: reenvíasela con el botón ✉️ de Facturación.` : ''}`);
+
+  const sincronizarFacturaDePedido = async (pedidoId) => {
+    const { data: fs } = await supabase.from('facturas').select('*').eq('pedido_id', pedidoId).in('estado', ['pendiente', 'vencida']);
+    const f = (fs || []).find(x => !esRectificativa(x) && x.tipo !== 'anulada' && !(Array.isArray(x.albaranes_ids) && x.albaranes_ids.length) && !facturaBloqueadaStripe(x));
+    if (!f) return null;
+    const cliente = clientes.find(c => c.id === f.cliente_id);
+    const esperado = importeEsperado(f, { ...(await contextoControlFacturas(pedidoId)), cliente });
+    if (!esperado || (facturaCuadra(f, esperado) && Math.abs(esperado.total - (parseFloat(f.total) || 0)) < 0.011)) return null;
+    if (f.enviada_at) return { id: f.id, antes: parseFloat(f.total) || 0, ahora: esperado.total, enviada: true, sinCambiar: true }; // V97
+    const r = await aplicarImportesFactura(f, esperado, `V97: factura recalculada con el ${esperado.fuente === 'albaran' ? `albarán ${esperado.albaranId}` : 'pedido'} (pedido #${pedidoId})`);
+    refetchFacturas();
+    return r ? { ...r, enviada: false } : null;
+  };
+  const avisarFacturaSincronizada = (r) => r && alert(r.sinCambiar
+    ? `⚠️ La factura ${r.id} ya se envió al cliente por ${formatCurrency(r.antes)} y con el pedido/albarán debería ser ${formatCurrency(r.ahora)}.\n\nNo la he cambiado (el cliente ya la tiene). Corrígela en Facturación → 🧾 Control de facturas → «Rectificar y reemitir».`
+    : `🧾 La factura ${r.id} se ha actualizado con el pedido/albarán: ${formatCurrency(r.antes)} → ${formatCurrency(r.ahora)}.`);
+
+  // Corrige una factura descuadrada: sin enviar → importes del albarán; enviada → rectificativa + factura nueva
+  const corregirFacturaConAlbaran = async (d, silencioso = false) => {
+    const f = d.factura;
+    if (facturaBloqueadaStripe(f)) { if (!silencioso) alert(`La factura ${f.id} tiene un cobro de Stripe en curso o hecho: revísala a mano.`); return false; }
+    if (f.enviada_at) return rectificarYReemitir(d);
+    if (!silencioso && !window.confirm(`Corregir la factura ${f.id} con ${d.esperado.fuente === 'pedido' ? 'las líneas del pedido' : d.esperado.fuente === 'albaran' ? `el albarán ${d.esperado.albaranId}` : 'sus albaranes'}?\n\n${formatCurrency(f.total)} → ${formatCurrency(d.esperado.total)}\n\nNo se ha enviado todavía, así que se corrige directamente (y su asiento).`)) return false;
+    const r = await aplicarImportesFactura(f, d.esperado, `V97: factura corregida con ${d.esperado.fuente === 'albaran' ? `el albarán ${d.esperado.albaranId}` : d.esperado.fuente}${silencioso ? ' (automático al cargar)' : ''}`);
+    refetchFacturas();
+    if (r && !silencioso) alert(`✅ Factura ${f.id} corregida: ${formatCurrency(r.antes)} → ${formatCurrency(r.ahora)}.`);
+    return !!r;
+  };
+
+  // Factura ya enviada y mal: se anula con rectificativa y se emite una nueva con los importes buenos
+  const rectificarYReemitir = async (d) => {
+    const f = d.factura;
+    const cli = clientes.find(c => c.id === f.cliente_id);
+    if (!window.confirm(`La factura ${f.id} (${cli?.nombre || ''}) ya se envió al cliente por ${formatCurrency(f.total)} y debería ser ${formatCurrency(d.esperado.total)}.\n\nUna factura enviada no se modifica: se hará\n  1) la rectificativa R-… que la anula,\n  2) una factura NUEVA por ${formatCurrency(d.esperado.total)} con los mismos ${Array.isArray(f.albaranes_ids) && f.albaranes_ids.length ? 'albaranes' : 'pedido'},\ny luego te ofrezco enviar las dos al cliente.\n\n¿Seguir?`)) return false;
+    const anulada = await anularFactura(f, `Importe erróneo: se sustituye por una factura nueva de ${formatCurrency(d.esperado.total)} (según albarán)`);
+    if (!anulada?.rectificativa) return false;
+    const hoy = new Date().toISOString().split('T')[0];
+    const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cli?.plazo_pago_dias, 10) || 30));
+    const prefijo = `F-${hoy.slice(0, 4)}-`;
+    const { fuente, albaranId, ...imp } = d.esperado;
+    const datos = {
+      pedido_id: f.pedido_id || null, cliente_id: f.cliente_id, fecha: hoy, fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente',
+      tipo: f.tipo || (Array.isArray(f.albaranes_ids) && f.albaranes_ids.length ? 'agrupada' : 'pedido'), albaranes_ids: f.albaranes_ids || [],
+      periodo_desde: f.periodo_desde || null, periodo_hasta: f.periodo_hasta || null, concepto: f.concepto || null, ...(f.descuento_pct != null ? { descuento_pct: f.descuento_pct } : {}), ...(f.plazo_pago_dias ? { plazo_pago_dias: f.plazo_pago_dias } : {}),
+      ...imp, iva_porcentaje: IVA_VENTAS, recargo_equivalencia: imp.re_importe > 0, re_porcentaje: imp.re_importe > 0 ? RE_VENTAS : 0,
+    };
+    const res = await insertarFacturaV87(datos, prefijo);
+    if (res.error) { alert(`❌ Se anuló ${f.id} con ${anulada.rectificativa}, pero no se pudo crear la nueva: ${res.error.message}\n\nCréala desde el pedido/albaranes.`); refetchFacturas(); return false; }
+    if (Array.isArray(f.albaranes_ids) && f.albaranes_ids.length) await supabase.from('albaranes').update({ estado: 'facturado', numero_factura: res.id }).in('id', f.albaranes_ids);
+    await crearAsientoDesdeFactura({ ...datos, id: res.id }, cli, true);
+    registrarAuditoria?.('INSERT', 'facturas', res.id, null, { total: datos.total }, `V97: sustituye a ${f.id} (anulada con ${anulada.rectificativa})`);
+    refetchFacturas(); refetchAlbaranes(); refetchAsientos(); refetchAsientoLineas();
+    const para = emailsFacturacion(cli);
+    if (para && window.confirm(`✅ ${f.id} anulada con ${anulada.rectificativa} y emitida la nueva ${res.id} (${formatCurrency(datos.total)}).\n\n¿Envío ahora a ${para} la rectificativa y la factura nueva?`)) {
+      const dest = para.split(/[,;\s]+/).filter(x => x.includes('@'));
+      const r1 = await invocarPortal({ accion: 'admin_enviar_factura', factura_id: anulada.rectificativa, para: dest });
+      const r2 = await invocarPortal({ accion: 'admin_enviar_factura', factura_id: res.id, para: dest });
+      refetchFacturas();
+      alert(r1.ok && r2.ok ? '✅ Enviadas las dos.' : `⚠️ ${r1.ok ? '' : `Rectificativa: ${r1.error}. `}${r2.ok ? '' : `Nueva: ${r2.error}`}\nEnvíalas con el botón ✉️.`);
+    }
+    return true;
+  };
 
   // Rectificativa que anula una factura (columna factura_rectificada_id; sin el SQL V87, por el concepto)
   const rectificativaDe = (facturaId) => facturas.find(r => esRectificativa(r) && (r.factura_rectificada_id === facturaId || String(r.concepto || '').includes(`factura ${facturaId} `)));
@@ -2049,7 +2102,7 @@ const MainApp = () => {
     return res;
   };
 
-  const anularFactura = async (factura) => {
+  const anularFactura = async (factura, motivoFijo = null) => { // V97: motivoFijo (sin preguntar) y devuelve { rectificativa }
     if (esNumeroAnulado(factura)) { alert(`El número ${factura.id} ya está anulado.`); return; }
     if (factura.estado === 'anulada') { alert(`La factura ${factura.id} ya está anulada${rectificativaDe(factura.id) ? ` (rectificativa ${rectificativaDe(factura.id).id})` : ''}.`); return; }
     if (esRectificativa(factura)) { alert('Una factura rectificativa no se anula. Si está mal, emite otra factura corregida.'); return; }
@@ -2071,7 +2124,7 @@ const MainApp = () => {
     }
 
     // 2) Cualquier otra → anulación con factura rectificativa (el número se queda en la serie)
-    const motivo = window.prompt(
+    const motivo = motivoFijo ?? window.prompt(
       `ANULAR LA FACTURA ${factura.id}\n${cli?.nombre || ''} · ${formatDate(factura.fecha)} · ${formatCurrency(factura.total)}\n\n` +
       `${factura.enviada_at ? 'Ya se envió al cliente' : !ultima ? 'Ya hay facturas posteriores' : 'Ya está cobrada'}, así que no se puede borrar sin dejar un hueco en la numeración (lo que ve la asesoría y Hacienda).\n\n` +
       `Se emitirá la factura rectificativa ${'R-' + String(factura.fecha || new Date().toISOString()).slice(0, 4)}-… con los mismos importes en negativo, la factura quedará "Anulada" con su número, ` +
@@ -2093,13 +2146,14 @@ const MainApp = () => {
     await supabase.from('albaranes').update({ estado: 'entregado', numero_factura: null }).eq('numero_factura', factura.id);
     await crearAsientoDesdeFactura({ ...datosR, id: idFinal }, cli, true);
     refetchFacturas(); refetchAlbaranes(); refetchAsientos(); refetchAsientoLineas();
-    alert(
+    if (!motivoFijo) alert(
       `✅ Factura ${factura.id} anulada con la rectificativa ${idFinal} (${formatCurrency(datosR.total)}).\n\n` +
       (factura.estado === 'pagada' ? `⚠️ La factura estaba COBRADA: hay que devolver ${formatCurrency(factura.total)} al cliente o descontarlo de su próxima factura.\n\n` : '') +
       (factura.pedido_id && !(Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length) ? `Si hay que volver a facturar el pedido #${factura.pedido_id}, usa "Facturar de nuevo" en la factura anulada.\n\n` : '') +
       `Envía la rectificativa al cliente con el botón ✉️.` +
       (res.sinColumnasV87 ? '\n\n⚠️ Ejecuta el SQL V87 en Supabase para guardar el enlace entre las dos facturas.' : '')
     );
+    return { rectificativa: idFinal }; // V97
   };
 
   // Nueva factura de un pedido cuya factura se anuló (importes del pedido con las tarifas actuales)
@@ -14133,6 +14187,7 @@ ${transacciones}
 
         {renderTarjetaBanco()}{/* V91 */}
 
+        {renderControlFacturas()}{/* V97 */}
         {renderControlSerie()}{/* V87 */}
 
         {/* V84: facturación por línea de negocio en el periodo elegido */}
@@ -17515,7 +17570,10 @@ ${logoRootflow}^FS
                             {alb.estado === 'generado' && (
                               <button 
                                 onClick={async () => {
-                                  await supabase.from('albaranes').update({ estado: 'entregado', fecha_entrega_real: new Date().toISOString().slice(0,10) }).eq('id', alb.id);
+                                  const { error: eEnt } = await supabase.from('albaranes').update({ estado: 'entregado', fecha_entrega_real: new Date().toISOString().slice(0,10) }).eq('id', alb.id);
+                                  if (eEnt) { alert('❌ No se pudo marcar como entregado: ' + eEnt.message); return; }
+                                  // V97: al entregar, la factura del pedido cierra con este albarán
+                                  for (const ap of albaranPedidos.filter(x => x.albaran_id === alb.id)) avisarFacturaSincronizada(await sincronizarFacturaDePedido(ap.pedido_id));
                                   refetchAlbaranes();
                                 }} 
                                 className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Marcar como entregado">
@@ -24662,6 +24720,66 @@ SELECT cron.schedule(
     const tramo = ordenados.find(t => String(fechaIso).slice(0, 10) <= String(t.hasta).slice(0, 10));
     return tramo ? (parseFloat(tramo.pct) || 0) : general;
   };
+  // V97: revisión de todas las facturas pendientes contra sus albaranes/pedidos (panel 🧾 y arreglo automático)
+  const controlFacturas = useMemo(() => revisarFacturas({
+    facturas, clientes, albaranes, albaranPedidos, pedidoItems, pedidos, desde: '2026-10-01',
+    descuentoPct: descuentoClienteEnFecha, ivaPct: IVA_VENTAS, rePct: RE_VENTAS,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [facturas, clientes, albaranes, albaranPedidos, pedidoItems, pedidos]);
+
+  // V97: panel rojo en Facturación con lo que no cuadra
+  const renderControlFacturas = () => {
+    const { descuadres, duplicadas, sinFactura } = controlFacturas;
+    if (!descuadres.length && !duplicadas.length && !sinFactura.length) return (
+      <div className="mb-4 px-4 py-2 rounded-xl bg-green-50 border border-green-200 text-sm text-green-800">🧾 Control de facturas: todas las facturas pendientes cuadran con sus albaranes.</div>
+    );
+    const nom = (id) => clientes.find(c => c.id === id)?.nombre || '—';
+    return (
+      <div className="mb-4 p-4 rounded-xl bg-red-50 border-2 border-red-300 space-y-3">
+        <div>
+          <h3 className="font-bold text-red-800">🧾 Control de facturas: {descuadres.length + duplicadas.length + sinFactura.length} problema(s)</h3>
+          <p className="text-xs text-red-700">Se revisa solo cada vez que abres el ERP y todas las mañanas (aviso en Slack). Una factura que no cuadra no se envía al cliente.</p>
+        </div>
+        {descuadres.map(d => (
+          <div key={d.factura.id} className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-lg p-3 border border-red-200">
+            <div className="text-sm">
+              <span className="font-mono font-bold">{d.factura.id}</span> · {nom(d.factura.cliente_id)} · factura <b>{formatCurrency(d.factura.total)}</b> y {d.esperado.fuente === 'albaran' ? `albarán ${d.esperado.albaranId}` : d.esperado.fuente === 'albaranes' ? 'sus albaranes' : 'el pedido'} <b>{formatCurrency(d.esperado.total)}</b>
+              {d.esperado.portes_importe > 0 && !(parseFloat(d.factura.portes_importe) > 0) && <span className="text-red-700"> (faltan los portes)</span>}
+              {d.enviada && <Badge className="ml-2 bg-amber-100 text-amber-800">ya enviada</Badge>}
+            </div>
+            <Button size="sm" onClick={() => corregirFacturaConAlbaran(d)}>{d.enviada ? '↩️ Rectificar y reemitir' : '✅ Corregir con el albarán'}</Button>
+          </div>
+        ))}
+        {duplicadas.map(d => (
+          <div key={d.factura.id} className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-lg p-3 border border-red-200">
+            <div className="text-sm">
+              ⚠️ <b>Facturado dos veces</b>: el pedido #{d.factura.pedido_id} ({nom(d.factura.cliente_id)}) está en <span className="font-mono">{d.factura.id}</span> ({formatCurrency(d.factura.total)}) y su albarán {d.albaranId} también en la agrupada <span className="font-mono">{d.agrupada.id}</span>.
+              {d.factura.estado === 'pagada' && <span className="text-red-700"> {d.factura.id} ya está cobrada: hay que devolverlo o descontarlo.</span>}
+            </div>
+            <Button size="sm" variant="secondary" onClick={() => anularFactura(d.factura)}>Anular {d.factura.id}</Button>
+          </div>
+        ))}
+        {sinFactura.length > 0 && (
+          <div className="bg-white rounded-lg p-3 border border-red-200 text-sm">
+            📦 <b>Entregados sin factura</b> (clientes que facturan por pedido): {sinFactura.map(p => `#${p.id} ${nom(p.cliente_id)} ${formatCurrency(p.total)}`).join(' · ')}. Factúralos desde Pedidos.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Al cargar el ERP: las facturas descuadradas que NO se han enviado se corrigen solas con su albarán
+  const autoControlFacturasRef = useRef('');
+  useEffect(() => {
+    const arreglables = controlFacturas.descuadres.filter(d => !d.enviada && !facturaBloqueadaStripe(d.factura));
+    const clave = arreglables.map(d => `${d.factura.id}:${d.esperado.total}`).join('|');
+    if (!clave || autoControlFacturasRef.current === clave || !albaranesData || !albaranPedidosData || !pedidoItemsData) return;
+    autoControlFacturasRef.current = clave;
+    (async () => { for (const d of arreglables) await corregirFacturaConAlbaran(d, true); })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlFacturas]);
+
+
   // Fecha que decide el descuento de un albarán: la de entrega (es la que figura en la factura)
   const fechaReferenciaAlbaran = (a) => a?.fecha_entrega_real || a?.fecha_entrega_prevista || a?.fecha_emision || null;
   // % de descuento de un albarán: el fijado a mano en ese albarán, o el que toque al cliente por fecha

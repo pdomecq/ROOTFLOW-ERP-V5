@@ -50,6 +50,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - **Stripe (pruebas)**: poner en Supabase → Edge Functions → Secrets `STRIPE_SECRET_KEY` (sk_test_… del Stripe sandbox) y `STRIPE_WEBHOOK_SECRET` (Stripe → Developers → Webhooks → endpoint `…/functions/v1/stripe` → Signing secret). Probar con un cliente de prueba y la tarjeta 4242 4242 4242 4242. Pasos en `docs/STRIPE.md`.
 - **Stripe (real)**: activar la cuenta (Nico, administrador único, con su DNI), crear el mismo webhook en modo real y cambiar las dos claves por las `sk_live_…` / `whsec_…` reales. Después mandar el enlace de domiciliación a los restaurantes.
 - **Banco**: hasta que se dé de alta Enable Banking (`docs/BANCO.md`), subir el extracto del BBVA al menos 2 veces por semana: sin movimientos de los últimos 3 días los recordatorios no salen (avisa en Slack).
+- 🔴 **Cobro doble (V97)**: el pedido #42 de Gold Gourmet está en F-2026-0016 (56 €) y en la agrupada F-2026-0026. Las dos enviadas. Anular F-2026-0016 desde 🧾 Control de facturas (rectificativa) **antes del lunes 9-nov**, que le saldría el 1.er recordatorio.
 - Primeras facturas que vencen: F-2026-0016 (Gold Gourmet) y F-2026-0018 (Soto del Lugar) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
 - F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el extracto del 5-ago al 3-nov: confirmar si se cobró antes de agosto.
