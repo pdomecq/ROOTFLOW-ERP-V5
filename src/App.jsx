@@ -2087,6 +2087,77 @@ const MainApp = () => {
     return true;
   };
 
+  // ==================== V98: FLUJO PEDIDO → ALBARÁN → FACTURA A PRUEBA DE ERRORES ====================
+  // Nada se borra: los pedidos se CANCELAN y los albaranes se ANULAN (conservan su número e historial), y con
+  // ellos su factura (rectificativa si ya existía). Una factura enviada o cobrada no se modifica nunca.
+  const facturaVigenteDePedido = (pid) => facturas.find(f => f.pedido_id === pid && !esRectificativa(f) && f.tipo !== 'anulada' && !['anulada', 'cancelada'].includes(f.estado) && !(Array.isArray(f.albaranes_ids) && f.albaranes_ids.length));
+  const facturaDeAlbaran = (alb) => facturas.find(f => f.estado !== 'anulada' && !esRectificativa(f) && (f.id === alb.numero_factura || (Array.isArray(f.albaranes_ids) && f.albaranes_ids.map(String).includes(String(alb.id)))));
+  const albaranesDePedido = (pid) => albaranPedidos.filter(ap => ap.pedido_id === pid).map(ap => albaranes.find(a => a.id === ap.albaran_id)).filter(a => a && a.estado !== 'anulado');
+
+  // ¿Se pueden tocar los importes de esta factura? (enviada o cobrada = documento fiscal cerrado)
+  const facturaEditable = (f) => {
+    if (!f) return true;
+    if (f.estado === 'pagada') { alert(`⛔ La factura ${f.id} está cobrada: no se puede modificar.\n\nSi hay un error, anúlala (rectificativa) y emite otra; la diferencia se devuelve o se descuenta de la próxima.`); return false; }
+    if (f.enviada_at) { alert(`⛔ La factura ${f.id} ya se envió al cliente: no se puede modificar (es un documento fiscal).\n\nCorrige el pedido o el albarán y después, en Facturación → 🧾 Control de facturas, pulsa «↩️ Rectificar y reemitir»: se anula con una rectificativa y se emite la buena.`); return false; }
+    return true;
+  };
+
+  // Comprueba si un pedido se puede cancelar y, si sí, anula su albarán y su factura. Devuelve true si se puede seguir.
+  const cancelarDocumentosDePedido = async (pedido, { preguntar = true } = {}) => {
+    const albs = albaranesDePedido(pedido.id);
+    const entregados = albs.filter(a => ['entregado', 'facturado'].includes(a.estado) || a.numero_factura);
+    if (pedido.estado === 'entregado' || entregados.length) {
+      alert(`⛔ El pedido #${pedido.id} ya está entregado${entregados.length ? ` (albarán ${entregados.map(a => a.id).join(', ')})` : ''}: no se puede cancelar.\n\nSi el cliente devuelve algo o cambian los importes, corrige el albarán; si su factura ya se envió, rectifícala desde 🧾 Control de facturas.`);
+      return false;
+    }
+    const fac = facturaVigenteDePedido(pedido.id);
+    if (fac?.estado === 'pagada') { alert(`⛔ El pedido #${pedido.id} tiene la factura ${fac.id} cobrada. Anúlala primero desde Facturación (rectificativa) y devuelve el importe.`); return false; }
+    const cli = clientes.find(c => c.id === pedido.cliente_id);
+    if (preguntar && !window.confirm(`¿Cancelar el pedido #${pedido.id} (${cli?.nombre || ''}, entrega ${formatDate(pedido.fecha_entrega)})?\n\n${albs.length ? `• Se anula el albarán ${albs.map(a => a.id).join(', ')}.\n` : ''}${fac ? `• Su factura ${fac.id} ${fac.enviada_at ? 'ya se envió: se anula con una factura rectificativa (mándasela al cliente).' : 'se anula.'}\n` : ''}\nEl pedido no se borra: queda como «Cancelado» para que se vea el historial.`)) return false;
+    if (fac) { const r = await anularFactura(fac, 'Pedido cancelado por el cliente'); if (!r) return false; }
+    for (const a of albs) {
+      const { error } = await supabase.from('albaranes').update({ estado: 'anulado' }).eq('id', a.id);
+      if (error) { alert(`❌ No se pudo anular el albarán ${a.id}: ${error.message}`); return false; }
+      await supabase.from('albaran_pedidos').delete().eq('albaran_id', a.id);
+    }
+    return true;
+  };
+
+  const cancelarPedido = async (pedido, opciones = {}) => {
+    if (pedido.estado === 'cancelado') return true;
+    if (!(await cancelarDocumentosDePedido(pedido, opciones))) return false;
+    const { error } = await supabase.from('pedidos').update({ estado: 'cancelado' }).eq('id', pedido.id);
+    if (error) { alert(`❌ No se pudo cancelar el pedido #${pedido.id}: ${error.message}`); return false; }
+    registrarAuditoria?.('UPDATE', 'pedidos', pedido.id, { estado: pedido.estado }, { estado: 'cancelado' }, 'V98: pedido cancelado (no se borra)');
+    refetchPedidos(); refetchAlbaranes(); refetchAlbaranPedidos(); refetchFacturas();
+    return true;
+  };
+  const cancelarPedidosSeleccionados = async (ids) => {
+    const sel = pedidos.filter(p => ids.includes(p.id) && p.estado !== 'cancelado');
+    if (!sel.length) return;
+    if (!window.confirm(`¿Cancelar ${sel.length} pedido(s)? Se anulan también sus albaranes y facturas (rectificativa si ya se enviaron). No se borran: quedan como «Cancelado».`)) return;
+    let ok = 0;
+    for (const p of sel) if (await cancelarPedido(p, { preguntar: false })) ok++;
+    setSelectedPedidos([]);
+    alert(`✅ ${ok} de ${sel.length} pedido(s) cancelados.${ok < sel.length ? ' Los demás ya estaban entregados o cobrados.' : ''}`);
+  };
+
+  // Un albarán no se borra: se anula (conserva su número). Si ya está entregado o facturado, se corrige editándolo.
+  const anularAlbaran = async (alb) => {
+    const fac = facturaDeAlbaran(alb);
+    if (['entregado', 'facturado'].includes(alb.estado) || fac) {
+      alert(`⛔ El albarán ${alb.id} ya está ${fac ? `en la factura ${fac.id}` : 'entregado'}: no se anula.\n\nSi algo está mal, edítalo (✏️) y la factura se pone al día sola${fac?.enviada_at ? '; como esa factura ya se envió, después rectifícala desde 🧾 Control de facturas' : ''}. Si el pedido entero no se entregó, cancela el pedido.`);
+      return;
+    }
+    if (!window.confirm(`¿Anular el albarán ${alb.id}?\n\nQueda como «Anulado» con su número (no se borra) y su pedido vuelve a estar pendiente de albarán.`)) return;
+    const { error } = await supabase.from('albaranes').update({ estado: 'anulado' }).eq('id', alb.id);
+    if (error) { alert('❌ No se pudo anular: ' + error.message); return; }
+    await supabase.from('albaran_pedidos').delete().eq('albaran_id', alb.id);
+    await supabase.from('pedidos').update({ albaran_principal_id: null }).eq('albaran_principal_id', alb.id);
+    registrarAuditoria?.('UPDATE', 'albaranes', alb.id, { estado: alb.estado }, { estado: 'anulado' }, 'V98: albarán anulado (no se borra)');
+    refetchAlbaranes(); refetchAlbaranPedidos(); refetchPedidos();
+  };
+
   // Rectificativa que anula una factura (columna factura_rectificada_id; sin el SQL V87, por el concepto)
   const rectificativaDe = (facturaId) => facturas.find(r => esRectificativa(r) && (r.factura_rectificada_id === facturaId || String(r.concepto || '').includes(`factura ${facturaId} `)));
   const facturaRectificadaPor = (r) => r.factura_rectificada_id || (String(r.concepto || '').match(/factura (\S+) de /) || [])[1] || null;
@@ -2111,7 +2182,7 @@ const MainApp = () => {
 
     // 1) Última de la serie, sin enviar ni cobrar → se puede borrar y su número se reutiliza
     if (ultima && !factura.enviada_at && factura.estado !== 'pagada') {
-      if (!window.confirm(`🗑️ ¿Borrar la factura ${factura.id} (${cli?.nombre || ''} · ${formatCurrency(factura.total)})?\n\nEs la última de la serie y no se ha enviado ni cobrado, así que se puede borrar sin dejar hueco: su número se usará en la próxima factura.\n\nTambién se borra su asiento contable y sus albaranes vuelven a quedar pendientes de facturar.`)) return;
+      if (!motivoFijo && !window.confirm(`🗑️ ¿Borrar la factura ${factura.id} (${cli?.nombre || ''} · ${formatCurrency(factura.total)})?\n\nEs la última de la serie y no se ha enviado ni cobrado, así que se puede borrar sin dejar hueco: su número se usará en la próxima factura.\n\nTambién se borra su asiento contable y sus albaranes vuelven a quedar pendientes de facturar.`)) return;
       const { error: eAlb } = await supabase.from('albaranes').update({ estado: 'entregado', numero_factura: null }).eq('numero_factura', factura.id);
       if (eAlb) { alert('❌ No se pudieron liberar los albaranes: ' + eAlb.message); return; }
       await supabase.from('asientos_contables').delete().in('referencia', [`FAC-${factura.id}`, `COB-${factura.id}`]);
@@ -2119,8 +2190,8 @@ const MainApp = () => {
       if (error) { alert('❌ No se pudo borrar: ' + error.message); return; }
       refetchFacturas(); refetchAlbaranes(); refetchAsientos(); refetchAsientoLineas();
       setSelectedFacturas(prev => prev.filter(id => id !== factura.id));
-      alert(`✅ Factura ${factura.id} borrada. La próxima factura volverá a usar ese número.`);
-      return;
+      if (!motivoFijo) alert(`✅ Factura ${factura.id} borrada. La próxima factura volverá a usar ese número.`);
+      return { borrada: true }; // V98
     }
 
     // 2) Cualquier otra → anulación con factura rectificativa (el número se queda en la serie)
@@ -5308,6 +5379,17 @@ const MainApp = () => {
 
   // CRUD
   const handleSave = async (table, form, id = null) => {
+    // V98: cambiar cómo factura un cliente con cosas a medias descuadra la facturación
+    if (table === 'clientes' && id && form.periodicidad_facturacion !== undefined) {
+      const ant = clientes.find(c => c.id === id);
+      const agr = (x) => ['semanal', 'quincenal', 'mensual'].includes(x);
+      if (ant && agr(ant.periodicidad_facturacion) && !agr(form.periodicidad_facturacion)) {
+        const sinFacturar = albaranes.filter(a => a.cliente_id === id && a.estado === 'entregado' && !a.numero_factura);
+        if (sinFacturar.length) { alert(`⛔ ${ant.nombre} tiene ${sinFacturar.length} albarán(es) entregado(s) sin facturar (${sinFacturar.map(a => a.id).join(', ')}).\n\nHaz antes su factura ${ant.periodicidad_facturacion} (Facturación → facturas agrupadas) y luego cambia a «por pedido». Si no, esos albaranes se quedarían sin facturar.`); return; }
+      }
+      if (ant && !agr(ant.periodicidad_facturacion || 'por_pedido') && agr(form.periodicidad_facturacion)
+        && !window.confirm(`${ant.nombre} pasa a facturarse ${form.periodicidad_facturacion}.\n\nLos pedidos que ya tienen su factura se quedan con ella (no entran en la agrupada); los nuevos se facturarán juntos al final del periodo. ¿Seguir?`)) return;
+    }
     try {
       let result;
       let newRecordId = null;
@@ -6433,6 +6515,16 @@ ${pedidoLinea ? `^FO260,258
         notas: form.notas || '', 
         total 
       };
+
+      // V98: cancelar desde el formulario = mismo camino que el botón (anula su albarán y su factura)
+      if (editingItem && form.estado === 'cancelado' && editingItem.estado !== 'cancelado') {
+        if (!(await cancelarDocumentosDePedido(editingItem))) return;
+      }
+      // V98: un pedido por cliente y día de entrega (si pide más, se amplía el que hay)
+      if (!editingItem && form.estado !== 'cancelado') {
+        const mismoDia = pedidos.find(p => p.cliente_id === form.cliente_id && p.estado !== 'cancelado' && String(p.fecha_entrega || '').slice(0, 10) === String(form.fecha_entrega || '').slice(0, 10));
+        if (mismoDia && !window.confirm(`⚠️ ${cliente?.nombre || 'Este cliente'} ya tiene el pedido #${mismoDia.id} para el ${formatDate(mismoDia.fecha_entrega)}.\n\nLo normal es AMPLIAR ese pedido (✏️) para que salga un solo albarán y una sola factura.\n\n¿Crear de todas formas un pedido aparte?`)) return;
+      }
 
       let pedidoId;
       if (editingItem) {
@@ -13036,7 +13128,7 @@ ${pedidoLinea ? `^FO260,258
                   <div className="flex gap-2">
                     <Button variant="secondary" size="sm" onClick={() => setSelectedPedidos([])}>Deseleccionar</Button>
                     <Button size="sm" onClick={() => convertirPedidosARecurrentes(selectedPedidos)} title="Crear un pedido recurrente por cliente y día de entrega"><Repeat size={14} /> Hacer recurrentes</Button>{/* V89 */}
-                    <Button variant="secondary" size="sm" className="text-red-600" onClick={() => handleDeleteMultiple('pedidos', selectedPedidos, refetchPedidos, setSelectedPedidos)}>
+                    <Button variant="secondary" size="sm" className="text-red-600" onClick={() => cancelarPedidosSeleccionados(selectedPedidos)}>{/* V98: cancelar, no borrar */}
                       <Trash2 size={14} /> Eliminar
                     </Button>
                   </div>
@@ -13095,16 +13187,16 @@ ${pedidoLinea ? `^FO260,258
                             }
                             return null;
                           })()}
-                          <button 
+                          {pedido.estado !== 'cancelado' && <button 
                             onClick={() => { setPedidoParaAlbaran(pedido); setEditingItem(null); setShowModal('albaran'); }} 
                             className="p-2 text-neutral-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg" 
                             title="Generar albarán"
                           >
                             <FileText size={16} />
-                          </button>
+                          </button>}
                           <button onClick={() => convertirPedidosARecurrentes([pedido.id])} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg" title="Hacer recurrente (se repite cada semana, quincena o mes)"><Repeat size={16} /></button>{/* V89 */}
                           <button onClick={() => { setEditingItem(pedido); setShowModal('pedido'); }} className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg"><Edit2 size={16} /></button>
-                          <button onClick={() => handleDelete('pedidos', pedido.id)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={16} /></button>
+                          {pedido.estado !== 'cancelado' && <button onClick={() => cancelarPedido(pedido)} className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg" title="Cancelar pedido (no se borra: anula también su albarán y su factura)"><XCircle size={16} /></button>}{/* V98 */}
                         </div></td>
                       </tr>
                     );
@@ -14712,7 +14804,7 @@ ${transacciones}
                           <button onClick={() => recalcularFacturaPedido(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales del cliente"><Calculator size={16} /></button>
                         )}
                         {factura.estado !== 'anulada' && ((factura.tipo === 'agrupada' && Array.isArray(factura.albaranes_ids) && factura.albaranes_ids.length > 0) || (factura.tipo !== 'agrupada' && factura.pedido_id)) && (
-                          <button onClick={() => { setEditingItem(factura); setShowModal('corregirFactura'); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Corregir descuento y portes de esta factura"><Edit2 size={16} /></button>
+                          <button onClick={() => { if (!facturaEditable(factura)) return; setEditingItem(factura); setShowModal('corregirFactura'); }} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg" title="Corregir descuento y portes de esta factura"><Edit2 size={16} /></button>
                         )}
                         {factura.estado === 'pendiente' && (
                           <button 
@@ -14757,7 +14849,7 @@ ${transacciones}
             pedidoItemsList={pedidoItems}
             onDescargarAlbaranes={descargarZipAlbaranesFactura}
             onRecalcular={(f) => f.tipo === 'agrupada' ? recalcularFacturaAgrupada(f) : recalcularFacturaPedido(f)}
-            onCorregir={(f) => { setEditingItem(f); setShowModal('corregirFactura'); }}
+            onCorregir={(f) => { if (!facturaEditable(f)) return; setEditingItem(f); setShowModal('corregirFactura'); }}
             onClose={() => setSelectedFactura(null)} 
           />
         )}
@@ -17331,6 +17423,20 @@ ${logoRootflow}^FS
   // V54: Vista de planificación de producción
   // V58: Función auxiliar para crear/actualizar albarán en BD
   const guardarAlbaran = async (form, idExistente = null) => {
+    // V98: reglas que evitan facturas descuadradas o duplicadas
+    {
+      const cliV = clientes.find(c => c.id === parseInt(form.cliente_id));
+      const sel = form.pedidos_seleccionados || [];
+      const cancelados = sel.map(id => pedidos.find(p => p.id === id)).filter(p => p?.estado === 'cancelado');
+      if (cancelados.length) { alert(`⛔ El pedido #${cancelados.map(p => p.id).join(', #')} está cancelado: no se le puede hacer albarán.`); return; }
+      if (sel.length > 1 && !['semanal', 'quincenal', 'mensual'].includes(cliV?.periodicidad_facturacion)) {
+        alert(`⛔ ${cliV?.nombre || 'Este cliente'} factura por pedido: haz un albarán para cada pedido (cada pedido tiene su factura y tiene que cuadrar con su albarán).`); return;
+      }
+      if (!idExistente) {
+        const yaCon = sel.filter(pid => albaranesDePedido(pid).length);
+        if (yaCon.length && !window.confirm(`⚠️ El pedido #${yaCon.join(', #')} ya tiene albarán (${yaCon.flatMap(pid => albaranesDePedido(pid).map(a => a.id)).join(', ')}).\n\nSi lo que quieres es corregirlo, edita ese albarán (✏️). ¿Hacer de verdad un segundo albarán (entrega parcial)?`)) return;
+      }
+    }
     try {
       let albaranId = idExistente;
       
@@ -17581,15 +17687,9 @@ ${logoRootflow}^FS
                               </button>
                             )}
                             {alb.estado !== 'anulado' && (
-                              <button onClick={() => { setEditingItem(alb); setShowModal('albaran'); }} className="p-2 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Editar"><Edit2 size={16} /></button>
+                              <button onClick={() => { const fa = facturaDeAlbaran(alb); if (fa && (fa.enviada_at || fa.estado === 'pagada') && !window.confirm(`⚠️ El albarán ${alb.id} está en la factura ${fa.id}, que ya se ${fa.estado === 'pagada' ? 'cobró' : 'envió al cliente'}.\n\nSi cambias el albarán, la factura no se modifica: después tendrás que rectificarla desde 🧾 Control de facturas. ¿Seguir?`)) return; setEditingItem(alb); setShowModal('albaran'); }} className="p-2 text-neutral-500 hover:bg-neutral-100 rounded-lg" title="Editar"><Edit2 size={16} /></button>
                             )}
-                            <button onClick={async () => {
-                              if (window.confirm(`¿Eliminar el albarán ${alb.id}?`)) {
-                                await supabase.from('albaran_pedidos').delete().eq('albaran_id', alb.id);
-                                await supabase.from('albaranes').delete().eq('id', alb.id);
-                                refetchAlbaranes(); refetchAlbaranPedidos();
-                              }
-                            }} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Eliminar"><Trash2 size={16} /></button>
+                            {alb.estado === 'generado' && <button onClick={() => anularAlbaran(alb)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg" title="Anular albarán (conserva su número)"><XCircle size={16} /></button>}{/* V98 */}
                           </div>
                         </td>
                       </tr>
@@ -24836,7 +24936,9 @@ SELECT cron.schedule(
         a.cliente_id === cli.id && 
         a.estado === 'entregado' && 
         !a.numero_factura && 
-        !a.factura_semanal_id
+        !a.factura_semanal_id &&
+        // V98: si su pedido ya tiene factura propia, no se vuelve a facturar (así salió el cobro doble de Gold Gourmet)
+        !albaranPedidos.some(ap => ap.albaran_id === a.id && facturaVigenteDePedido(ap.pedido_id))
       ).sort((a, b) => new Date(a.fecha_entrega_real || a.fecha_emision) - new Date(b.fecha_entrega_real || b.fecha_emision));
       
       if (albsPendientes.length === 0) return;
@@ -25019,6 +25121,7 @@ SELECT cron.schedule(
   // V72: además APLICA LAS TARIFAS ACTUALES del cliente a los items de cada
   // albarán (corrige facturas creadas antes de definir las tarifas especiales).
   const recalcularFacturaAgrupada = async (factura) => {
+    if (!facturaEditable(factura)) return; // V98
     const albIds = Array.isArray(factura.albaranes_ids) ? factura.albaranes_ids : [];
     const albs = albIds.map(id => albaranes.find(a => a.id === id)).filter(Boolean);
     
@@ -25132,6 +25235,7 @@ SELECT cron.schedule(
   
   // V72: Recalcular una factura de PEDIDO con las tarifas actuales del cliente
   const recalcularFacturaPedido = async (factura) => {
+    if (!facturaEditable(factura)) return; // V98
     if (!factura.pedido_id) {
       alert('Esta factura no tiene pedido vinculado, no se puede recalcular automáticamente.');
       return;
