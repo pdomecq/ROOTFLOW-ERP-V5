@@ -1,4 +1,4 @@
-// Supabase Edge Function: portal-cliente (V82 + V83 + V91 recordatorios de pago + V92/V93 Stripe)
+// Supabase Edge Function: portal-cliente (V82 + V83 + V91 recordatorios de pago + V92/V93/V96 Stripe)
 // 1) Backend del área de cliente (src/AreaCliente.jsx). El cliente entra con el enlace
 //    https://…/area-cliente?t=<clientes.portal_token> y esta función, con la service role,
 //    le devuelve SOLO sus datos. El navegador del cliente nunca lee las tablas directamente.
@@ -807,7 +807,15 @@ const pagoTarjetaActivo = () => !!env("STRIPE_SECRET_KEY");
 const LOGO_STRIPE = "https://rootflow-erp.vercel.app/stripe-logo.png";
 const LOGO_STRIPE_BLANCO = "https://rootflow-erp.vercel.app/stripe-logo-blanco.png";
 const urlPagar = (token: string, ids: string) => `${PORTAL_URL()}?t=${encodeURIComponent(token)}&pagar=${encodeURIComponent(ids)}`;
-const botonPagoTarjeta = (url: string, texto = "Pagar ahora con tarjeta") => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">💳 ${texto} <img src="${LOGO_STRIPE_BLANCO}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table><p style="margin:4px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay y Google Pay</p>`;
+const botonPagoTarjeta = (url: string, texto = "Pagar ahora con tarjeta", emoji = "💳") => `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:6px 0;"><tr><td style="background:#635BFF;border-radius:8px;"><a href="${url}" style="display:inline-block;padding:11px 18px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;font-family:Arial,Helvetica,sans-serif;">${emoji} ${texto} <img src="${LOGO_STRIPE_BLANCO}" alt="Stripe" width="48" height="20" style="vertical-align:middle;margin-left:6px;border:0;"></a></td></tr></table><p style="margin:4px 0 0;font-size:11px;color:#888;">Pago seguro con <img src="${LOGO_STRIPE}" alt="Stripe" width="34" height="14" style="vertical-align:middle;border:0;"> · Visa, Mastercard, Apple Pay y Google Pay</p>`;
+// V96: invitación a domiciliar (Stripe) para los clientes que aún no lo están. El botón va al área de cliente
+// (?domiciliar=1), que abre la domiciliación de Stripe: no caduca.
+const bloqueDomiciliar = (c: any, token: string) => (!pagoTarjetaActivo() || (c?.stripe_activo && c?.stripe_payment_method_id) || c?.sepa_activo) ? "" : `
+    <div style="margin:18px 0;padding:14px;border:1px solid #e0defe;border-radius:10px;background:#f7f7ff;font-size:14px;color:#333;">
+      <p style="margin:0 0 6px;"><strong>¿Te cobramos las próximas facturas automáticamente?</strong></p>
+      <p style="margin:0 0 8px;">Domicilia tus pagos una sola vez y te cobramos cada factura el día de su vencimiento, sin transferencias ni recordatorios. Puedes cancelarlo cuando quieras.</p>
+      ${botonPagoTarjeta(`${PORTAL_URL()}?t=${encodeURIComponent(token)}&domiciliar=1`, "Domiciliar mis pagos", "🔁")}
+    </div>`;
 const esc = (t: any) => String(t ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as any)[ch]);
 const urlPortal = (token: string, facturaId?: string) => `${PORTAL_URL()}?t=${encodeURIComponent(token)}${facturaId ? `&factura=${encodeURIComponent(facturaId)}` : ""}`;
 
@@ -841,6 +849,7 @@ export function htmlEmailFactura(f: any, c: any, token: string, pendientes: any[
       ? `Se cobrará por domiciliación SEPA B2B el ${fechaES(f.fecha_vencimiento)} en la cuenta del mandato firmado.`
       : `Pago por transferencia a ${esc(EMPRESA.nombre)} (${esc(EMPRESA.banco)}) · IBAN <strong>${esc(EMPRESA.iban)}</strong> · Concepto: ${esc(f.id)}.`}</p>
     ${!rect && !stripe && !sepa && pagoTarjetaActivo() && ["pendiente", "vencida"].includes(f.estado) && Number(f.total) > 0 ? `<p style="font-size:14px;margin:14px 0 4px;">O págala ahora con tarjeta en un momento:</p>${botonPagoTarjeta(urlPagar(token, f.id))}` : ""}<!-- V93 -->
+    ${rect ? "" : bloqueDomiciliar(c, token)}<!-- V96 -->
     ${otras.length ? `
     <div style="margin:18px 0;padding:14px;border:1px solid #eee;border-radius:10px;">
       <p style="margin:0 0 8px;font-size:14px;"><strong>Tus facturas pendientes con nosotros</strong> (${eur(totalPend)} en total)</p>
@@ -1029,6 +1038,7 @@ export function htmlRecordatorio(c: any, fs: any[], nivel: number, token: string
     </table>
     ${pagoTarjetaActivo() ? `<p style="font-size:14px;margin:14px 0 4px;"><strong>Lo más rápido:</strong> págala${fs.length > 1 ? "s" : ""} ahora con tarjeta en un momento.</p>${botonPagoTarjeta(urlPagar(token, fs.map((f) => f.id).join(",")), fs.length > 1 ? `Pagar las ${fs.length} con tarjeta (${eur(total)})` : "Pagar ahora con tarjeta")}<p style="font-size:14px;margin-top:14px;">O, si lo prefieres, por transferencia:</p>` : ""}<!-- V93 -->
     <p style="font-size:14px;">Pago por transferencia a ${esc(EMPRESA.nombre)} (${esc(EMPRESA.banco)}) · IBAN <strong>${esc(EMPRESA.iban)}</strong> · Concepto: ${esc(fs.map((f) => f.id).join(", "))}.</p>
+    ${bloqueDomiciliar(c, token)}<!-- V96 -->
     <p style="font-size:14px;">Te adjuntamos ${fs.length > 1 ? "las facturas" : "la factura"} en PDF. <strong>Si ya lo has pagado, ignora este mensaje</strong> (los pagos pueden tardar un par de días en llegarnos) o respóndenos con el justificante y lo revisamos.</p>
     <p style="margin:20px 0;"><a href="${urlPortal(token)}" style="display:inline-block;background:#047857;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">Ver mis facturas</a></p>
     <p style="font-size:14px;margin-top:20px;">Gracias 🌱<br>Para cualquier duda, responde a este correo o llámanos al ${esc(EMPRESA.telefono)}.</p>
