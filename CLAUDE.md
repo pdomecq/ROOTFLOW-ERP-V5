@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V103**; la siguiente es **V104**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V104: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V104-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V105**; la siguiente es **V106**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V106: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V106-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V104 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V106 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V104: <resumen corto>`.
+- Mensaje de commit: `V106: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -51,8 +51,9 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - `src/tablasInteractivas.js` (V99): `activarMejorasUI()` (useEffect de `MainApp`) hace ordenables, filtrables y con selector de columnas todas las `<table>`, y convierte las notas explicativas (texto `text-xs` gris ≥ 55 caracteres o que empieza por 💡) en un icono ⓘ con nube. No hace falta código en cada tabla; para excluir algo, pon `data-rf-no` en la tabla o su contenedor. Los avisos importantes escríbelos con ⚠️/❌/⛔ o en color (no gris) para que sigan a la vista. V102: en el móvil (≤ 700 px) las tablas se ven compactas y `ajustarMovil()` oculta columnas secundarias hasta que caben (nunca la primera, importes ni botones); las tarjetas (`data-rf-movil`) son opcionales con el botón de la barra. No pongas anchos mínimos fijos a las tablas. Para imprimir o descargar una factura usa siempre el PDF de portal-cliente (`imprimirPdfDocumento` / `descargarPdfDocumento`), no plantillas HTML propias.
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
-- Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)`.
+- Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)` (V104: lee por páginas de 1.000, sin límite de filas).
 - `AuthProvider` + `LoginPage` (Supabase Auth, dominio permitido `rootflow.es`).
+- **Usuarios y permisos (V105)**: `user_profiles` (rol, activo, permisos jsonb, socio). `ROLES_ERP` / `SECCIONES_ERP` / `seccionesDePerfil()` deciden qué secciones ve cada uno (`puedeVer(seccion)` oculta el menú y la sección). En la BD, todas las políticas exigen `usuario_activo()` (cuentas nuevas desactivadas hasta que un admin las active) y solo `es_admin()` cambia roles/permisos. Si añades una sección nueva, añádela a `SECCIONES_ERP` y a los roles que la deban ver. **Historial**: trigger `auditar_cambios()` en las tablas principales (añade el trigger a las tablas nuevas importantes); `registrarAuditoria()` solo para notas con explicación; se consulta en Ajustes → Historial (no con `useRealtime`).
 - `MainApp` (línea ~713) contiene **todo lo demás**: estados, datos, helpers, formularios y secciones. Navegación por `activeSection` (`dashboard`, `pedidos`, `albaranes`, `facturacion`, `gastos`, `contabilidad`, `produccion`, `planificacion`, `calendario`, `clientes`, `tarifas`, `leads`, `desarrollo`, …). Cada sección se pinta con una función `renderXxx()` y algunas tienen pestañas con su propio estado (p. ej. `gastosTab`).
 - Datos: `const { data: xData, refetch: refetchX } = useRealtime('tabla');` junto a los demás hooks (zona ~línea 1560) y después `const x = xData || [];`.
 - Formularios: `const XxxForm = ({ ..., onSave, onCancel }) => {...}` definidos a nivel de `MainApp` y abiertos con `setEditingItem(obj)` + `setShowModal('clave')`. Los modales están todos juntos al final del JSX de `MainApp` (busca `{/* Modal Corregir Factura V79 */}` y añade los nuevos al lado).

@@ -180,11 +180,27 @@ const useRealtime = (table) => {
 
   const fetchData = async () => {
     try {
-      let { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      // V104: Supabase devuelve como mucho 1.000 filas por consulta; se lee por páginas hasta tenerlas todas.
+      // Orden: created_at (más nuevo primero) y, para que las páginas no repitan ni salten filas, id.
+      const leerTodo = async (ordenes) => {
+        const PAG = 1000, filas = [];
+        for (let desde = 0; desde < 200000; desde += PAG) {
+          let q = supabase.from(table).select('*');
+          for (const [col, asc] of ordenes) q = q.order(col, { ascending: asc });
+          const { data: pag, error: err } = await q.range(desde, desde + PAG - 1);
+          if (err) return { data: null, error: err };
+          filas.push(...(pag || []));
+          if (!pag || pag.length < PAG) break;
+        }
+        return { data: filas, error: null };
+      };
+      const falta = (err) => err && (err.code === '42703' || /does not exist|created_at/.test(err.message || ''));
+      let { data: d, error: e } = await leerTodo([['created_at', false], ['id', false]]);
+      if (falta(e)) ({ data: d, error: e } = await leerTodo([['created_at', false]]));
       // V81: si la tabla no tiene created_at (42703), reintentar sin ordenar en vez de dejarla vacía
-      if (e && (e.code === '42703' || /created_at/.test(e.message || ''))) {
+      if (falta(e)) {
         console.warn(`${table} no tiene created_at: se carga sin ordenar (ejecuta el SQL V81)`);
-        ({ data: d, error: e } = await supabase.from(table).select('*'));
+        ({ data: d, error: e } = await leerTodo([]));
       }
       if (e) {
         console.warn(`Error cargando ${table}:`, e.message);
@@ -271,6 +287,33 @@ const SOCIOS = [
   { id: 'peri', nombre: 'Peri', color: 'bg-green-100 text-green-700' },
   { id: 'guzman', nombre: 'Guzmán', color: 'bg-purple-100 text-purple-700' },
 ];
+
+// ==================== V105: USUARIOS, ROLES Y PERMISOS ====================
+// Secciones del menú (id = activeSection). «ajustes» siempre se ve (cada uno edita su perfil).
+const SECCIONES_ERP = [
+  ['dashboard', 'Dashboard'], ['calendario', 'Calendario'], ['leads', 'Leads'], ['muestras', 'Muestras'], ['clientes', 'Clientes'],
+  ['presupuestos', 'Presupuestos'], ['pedidos', 'Pedidos'], ['rutas', 'Rutas de reparto'], ['productos', 'Productos'], ['tarifas', 'Tarifas'],
+  ['facturacion', 'Facturación'], ['gastos', 'Gastos'], ['proveedores', 'Proveedores'], ['informes', 'Informes'], ['rentabilidad', 'Rentabilidad'],
+  ['contabilidad', 'Contabilidad'], ['produccion', 'Producción'], ['planificacion', 'Planificación'], ['albaranes', 'Albaranes'],
+  ['insumos', 'Insumos'], ['desarrollo', 'Desarrollo'], ['mermas', 'Mermas'], ['trazabilidad', 'Trazabilidad'], ['ambiente', 'Ambiente'],
+  ['documentos', 'Documentos'],
+];
+const TODAS_SECCIONES = SECCIONES_ERP.map(([id]) => id);
+const ROLES_ERP = {
+  admin: { label: 'Administrador', desc: 'Todo el ERP y gestiona usuarios y permisos', secciones: TODAS_SECCIONES, color: 'bg-purple-100 text-purple-700' },
+  socio: { label: 'Socio', desc: 'Todo el ERP (sin gestionar usuarios)', secciones: TODAS_SECCIONES, color: 'bg-orange-100 text-orange-700' },
+  finanzas: { label: 'Finanzas', desc: 'Facturación, gastos, contabilidad e informes', secciones: ['dashboard', 'calendario', 'clientes', 'pedidos', 'albaranes', 'facturacion', 'gastos', 'proveedores', 'informes', 'rentabilidad', 'contabilidad', 'documentos'], color: 'bg-green-100 text-green-700' },
+  comercial: { label: 'Comercial', desc: 'Clientes, leads, presupuestos, pedidos y tarifas', secciones: ['dashboard', 'calendario', 'leads', 'muestras', 'clientes', 'presupuestos', 'pedidos', 'rutas', 'productos', 'tarifas', 'albaranes', 'desarrollo'], color: 'bg-blue-100 text-blue-700' },
+  produccion: { label: 'Producción', desc: 'Lotes, planificación, albaranes, stock y ambiente', secciones: ['dashboard', 'calendario', 'pedidos', 'rutas', 'productos', 'produccion', 'planificacion', 'albaranes', 'insumos', 'mermas', 'trazabilidad', 'ambiente'], color: 'bg-emerald-100 text-emerald-700' },
+  usuario: { label: 'Sin asignar', desc: 'Solo Dashboard y Calendario hasta que un administrador le dé un rol', secciones: ['dashboard', 'calendario'], color: 'bg-neutral-100 text-neutral-600' },
+};
+// Secciones que puede ver un perfil: permisos propios (si los tiene) o los de su rol
+const seccionesDePerfil = (perfil) => {
+  if (!perfil || !('permisos' in perfil)) return TODAS_SECCIONES; // perfil sin cargar o SQL V105 sin ejecutar: no se restringe
+  if (Array.isArray(perfil.permisos)) return perfil.permisos;
+  return (ROLES_ERP[perfil.rol] || ROLES_ERP.usuario).secciones;
+};
+const ETIQUETA_TABLA = { clientes: 'Clientes', productos: 'Productos', tarifas_cliente: 'Tarifas', pedidos: 'Pedidos', pedidos_recurrentes: 'Pedidos recurrentes', albaranes: 'Albaranes', facturas: 'Facturas', gastos: 'Gastos', proveedores: 'Proveedores', compras_particulares: 'Compras a particulares', aportaciones_socios: 'Aportaciones de socios', reembolsos_socios: 'Reembolsos a socios', movimientos_banco: 'Banco', materiales: 'Materiales', compras_material: 'Compras de material', recuentos_material: 'Recuentos', lotes: 'Lotes', mermas: 'Mermas', variedades: 'Variedades', user_profiles: 'Usuarios', asientos_contables: 'Asientos' };
 
 // ==================== CONFIGS ====================
 const estadoConfig = {
@@ -769,6 +812,20 @@ const MainApp = () => {
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
   useEffect(() => activarMejorasUI(document.getElementById('root')), []);
+  // V105: Ajustes en pestañas (general · usuarios y permisos · historial de cambios)
+  const [ajustesTab, setAjustesTab] = useState('general');
+  const [historial, setHistorial] = useState([]);
+  const [historialHayMas, setHistorialHayMas] = useState(false);
+  const [historialCargando, setHistorialCargando] = useState(false);
+  const [historialFiltros, setHistorialFiltros] = useState({ tabla: '', usuario: '', accion: '', desde: '', hasta: '', registro: '' });
+  const [historialAbierto, setHistorialAbierto] = useState(null);
+  const [accesosUsuarios, setAccesosUsuarios] = useState({});
+  useEffect(() => {
+    if (activeSection !== 'ajustes') return;
+    if (ajustesTab === 'historial') cargarHistorial(false);
+    if (ajustesTab === 'usuarios') cargarAccesos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, ajustesTab, historialFiltros]);
   const [rentTab, setRentTab] = useState('analisis'); // V88: 'analisis' | 'aprov' (aprovisionamientos)
   const [aprovLeyendo, setAprovLeyendo] = useState(null); // V88: gasto cuyas líneas está leyendo la IA
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
@@ -1636,7 +1693,8 @@ const MainApp = () => {
   const { data: condicionesData, refetch: refetchCondiciones } = useRealtime('condiciones_ambientales');
   const { data: asientosData, refetch: refetchAsientos } = useRealtime('asientos_contables');
   const { data: asientoLineasData, refetch: refetchAsientoLineas } = useRealtime('asiento_lineas');
-  const { data: auditLogData, refetch: refetchAuditLog } = useRealtime('audit_log');
+  // V105: el historial ya no se carga entero en tiempo real (crece con cada cambio): se consulta con filtros en Ajustes
+  const auditLogData = null; const refetchAuditLog = () => {};
   const { data: userProfilesData, refetch: refetchUserProfiles } = useRealtime('user_profiles');
   // Nuevas tablas V15
   const { data: tarifasClienteData, refetch: refetchTarifasCliente } = useRealtime('tarifas_cliente');
@@ -3261,23 +3319,29 @@ const MainApp = () => {
   // ==================== SISTEMA DE AUDITORÍA ====================
   
   // Registrar acción en el log de auditoría
+  // V105: las tablas principales ya se apuntan solas en el historial (trigger auditar_cambios del SQL V105). Esto
+  // solo guarda las notas con explicación (p. ej. «factura recalculada con el albarán…»), con las columnas reales
+  // de audit_log (antes escribía user_email/user_nombre, que no existen, y no se guardaba nada).
+  const TABLAS_AUDITADAS = Object.keys(ETIQUETA_TABLA);
   const registrarAuditoria = async (accion, tabla, registroId, datosAnteriores = null, datosNuevos = null, descripcion = '') => {
     try {
+      const generica = !descripcion || /^(Eliminad[oa]|Cread[oa]|Actualizad[oa]|INSERT|UPDATE|DELETE|CREAR|ACTUALIZAR|ELIMINAR)\b/i.test(descripcion) || descripcion === `${accion} en ${tabla}`;
+      if (generica && TABLAS_AUDITADAS.includes(tabla)) return; // ya lo apunta el trigger con el detalle de campos
       const { data: { user } } = await supabase.auth.getUser();
-      
-      await supabase.from('audit_log').insert({
-        user_id: user?.id || null,
-        user_email: user?.email || 'Anónimo',
-        user_nombre: user?.user_metadata?.nombre || user?.email?.split('@')[0] || 'Usuario',
-        accion,
+      const fila = {
+        usuario_id: user?.id || null,
+        usuario_email: user?.email || null,
+        usuario_nombre: currentUserProfile?.nombre || user?.email?.split('@')[0] || null,
+        accion: ({ INSERT: 'CREAR', UPDATE: 'ACTUALIZAR', DELETE: 'ELIMINAR' })[accion] || accion,
         tabla,
-        registro_id: registroId?.toString(),
+        registro_id: registroId?.toString() || null,
         datos_anteriores: datosAnteriores,
         datos_nuevos: datosNuevos,
         descripcion: descripcion || `${accion} en ${tabla}`,
-      });
-      
-      refetchAuditLog();
+      };
+      let { error } = await supabase.from('audit_log').insert(fila);
+      if (error?.code === '42703') { const { usuario_nombre, ...sin } = fila; ({ error } = await supabase.from('audit_log').insert(sin)); }
+      if (error) console.warn('Historial no guardado:', error.message);
     } catch (error) {
       console.error('Error registrando auditoría:', error);
     }
@@ -3312,8 +3376,9 @@ const MainApp = () => {
           setCurrentUserProfile(newProfile);
         }
         
-        // Actualizar último login
+        // Actualizar último login (V105: la columna existe desde el SQL V105; sin él, el error se ignora)
         await supabase.from('user_profiles').update({ last_login: new Date().toISOString() }).eq('id', user.id);
+        refetchUserProfiles?.();
       }
     };
     
@@ -11424,7 +11489,11 @@ ${pedidoLinea ? `^FO260,258
   };
 
   // ==================== NAV ====================
-  const NavItem = ({ icon: Icon, label, section, badge }) => (
+  // V105: permisos por sección (rol del usuario o permisos propios)
+  const misSecciones = seccionesDePerfil(currentUserProfile);
+  const puedeVer = (seccion) => seccion === 'ajustes' || misSecciones.includes(seccion);
+  const soyAdmin = currentUserProfile?.rol === 'admin' || !currentUserProfile || !('permisos' in (currentUserProfile || {}));
+  const NavItem = ({ icon: Icon, label, section, badge }) => !puedeVer(section) ? null : (
     <button onClick={() => { setActiveSection(section); if (window.innerWidth < 768) setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
       <Icon size={20} />
       {sidebarOpen && <><span className="font-semibold flex-1 text-left">{label}</span>{badge > 0 && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${activeSection === section ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>{badge}</span>}</>}
@@ -29412,6 +29481,200 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
     );
   };
 
+  // ==================== V105: USUARIOS Y PERMISOS ====================
+  const cargarAccesos = async () => {
+    const { data, error } = await supabase.rpc('usuarios_sistema');
+    if (!error && Array.isArray(data)) setAccesosUsuarios(Object.fromEntries(data.map(u => [u.id, u])));
+  };
+  const guardarPerfilUsuario = async (perfil, cambios, texto) => {
+    const { error } = await supabase.from('user_profiles').update(cambios).eq('id', perfil.id);
+    if (error) { alert((error.code === '42703' ? '⚠️ Ejecuta el SQL V105 en Supabase.\n\n' : '❌ ') + error.message); return false; }
+    refetchUserProfiles();
+    if (perfil.id === currentUser?.id) setCurrentUserProfile(prev => ({ ...prev, ...cambios }));
+    if (texto) registrarAuditoria('ACTUALIZAR', 'permisos', perfil.id, null, cambios, texto);
+    return true;
+  };
+  const renderUsuariosAjustes = () => {
+    const sinSQL = userProfiles.length > 0 && !('permisos' in userProfiles[0]);
+    const orden = [...userProfiles].sort((a, b) => (a.activo === false ? 0 : 1) - (b.activo === false ? 0 : 1) || String(a.nombre || a.email).localeCompare(String(b.nombre || b.email)));
+    return (
+      <div className="space-y-4">
+        {sinSQL && <Card className="p-4 border-2 border-amber-300 bg-amber-50 text-sm">⚠️ Falta ejecutar el SQL V105 (roles, permisos y activar usuarios).</Card>}
+        <Card className="p-4 text-sm space-y-1">
+          <p className="font-bold">Cómo funciona</p>
+          <p>⚠️ Las cuentas nuevas entran <strong>desactivadas</strong> y no ven ningún dato hasta que un administrador las active aquí.</p>
+          <p>Cada usuario ve las secciones de su <strong>rol</strong>; si le marcas secciones a mano, se usan esas. Solo los administradores pueden cambiar roles, permisos y activar o desactivar.</p>
+          <div className="flex flex-wrap gap-1.5 pt-1">{Object.entries(ROLES_ERP).map(([k, r]) => <span key={k} className={`px-2 py-0.5 rounded-full text-xs font-semibold ${r.color}`} title={r.desc}>{r.label}</span>)}</div>
+        </Card>
+        {orden.map(perfil => {
+          const acceso = accesosUsuarios[perfil.id];
+          const yo = perfil.id === currentUser?.id;
+          const rol = ROLES_ERP[perfil.rol] ? perfil.rol : 'usuario';
+          const propios = Array.isArray(perfil.permisos);
+          const secciones = seccionesDePerfil(perfil);
+          const editable = soyAdmin && !sinSQL;
+          return (
+            <Card key={perfil.id} className={`p-4 ${perfil.activo === false ? 'border-2 border-amber-300 bg-amber-50/40' : ''}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black">{(perfil.nombre || perfil.email || '?').slice(0, 1).toUpperCase()}</div>
+                  <div className="min-w-0">
+                    <p className="font-bold">{perfil.nombre || 'Sin nombre'} {yo && <span className="text-xs text-neutral-400">(tú)</span>}</p>
+                    <p className="text-xs text-neutral-500 break-all">{perfil.email}</p>
+                    <p className="text-xs text-neutral-400">Último acceso: {acceso?.ultimo_acceso ? new Date(acceso.ultimo_acceso).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : perfil.last_login ? new Date(perfil.last_login).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' }) : '—'}{acceso?.alta ? ` · alta ${formatDate(acceso.alta)}` : ''}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {perfil.activo === false ? <Badge className="bg-amber-100 text-amber-800">⏸ Desactivado</Badge> : <Badge className="bg-green-100 text-green-700">✓ Activo</Badge>}
+                  {editable ? (
+                    <>
+                      <select value={rol} onChange={e => guardarPerfilUsuario(perfil, { rol: e.target.value }, `Rol de ${perfil.email}: ${ROLES_ERP[e.target.value]?.label}`)} disabled={yo && rol === 'admin'} className="px-2 py-1.5 rounded-lg border bg-white text-sm font-semibold" title={yo ? 'No puedes quitarte a ti mismo el rol de administrador' : ''}>
+                        {Object.entries(ROLES_ERP).map(([k, r]) => <option key={k} value={k}>{r.label}</option>)}
+                      </select>
+                      <select value={perfil.socio || ''} onChange={e => guardarPerfilUsuario(perfil, { socio: e.target.value || null }, `Socio de ${perfil.email}: ${e.target.value || 'ninguno'}`)} className="px-2 py-1.5 rounded-lg border bg-white text-sm" title="Socio al que corresponde (gastos pagados por el socio, turnos…)">
+                        <option value="">No es socio</option>
+                        {SOCIOS.map(so => <option key={so.id} value={so.id}>Socio: {so.nombre}</option>)}
+                      </select>
+                      {!yo && <Button size="sm" variant={perfil.activo === false ? 'primary' : 'secondary'} onClick={() => { if (perfil.activo !== false && !window.confirm(`¿Desactivar a ${perfil.nombre || perfil.email}? Dejará de ver cualquier dato del ERP hasta que lo vuelvas a activar.`)) return; guardarPerfilUsuario(perfil, { activo: perfil.activo === false }, `${perfil.activo === false ? 'Activado' : 'Desactivado'} ${perfil.email}`); }}>{perfil.activo === false ? '✓ Activar' : 'Desactivar'}</Button>}
+                    </>
+                  ) : <span className={`px-2 py-1 rounded-full text-xs font-semibold ${ROLES_ERP[rol].color}`}>{ROLES_ERP[rol].label}</span>}
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <p className="text-xs font-bold uppercase text-neutral-500">Secciones que ve {propios ? '(personalizadas)' : `(las de «${ROLES_ERP[rol].label}»)`}</p>
+                  {editable && propios && <button className="text-xs underline text-orange-600" onClick={() => guardarPerfilUsuario(perfil, { permisos: null }, `Permisos de ${perfil.email}: los de su rol`)}>Volver a los de su rol</button>}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {SECCIONES_ERP.map(([id, label]) => {
+                    const on = secciones.includes(id);
+                    return (
+                      <button key={id} disabled={!editable || rol === 'admin'} onClick={() => guardarPerfilUsuario(perfil, { permisos: on ? secciones.filter(x => x !== id) : [...secciones, id] }, `Permisos de ${perfil.email}: ${on ? 'quitado' : 'añadido'} ${label}`)}
+                        className={`px-2 py-1 rounded-lg text-xs font-semibold border ${on ? 'bg-neutral-900 text-white border-neutral-900' : 'bg-white text-neutral-400 border-neutral-200'} ${editable && rol !== 'admin' ? 'hover:opacity-80' : 'cursor-default'}`}>{on ? '✓ ' : ''}{label}</button>
+                    );
+                  })}
+                </div>
+                {rol === 'admin' && <p className="text-xs text-neutral-400 mt-1">Los administradores ven todo.</p>}
+              </div>
+            </Card>
+          );
+        })}
+        {!soyAdmin && <p className="text-xs text-neutral-500">Solo los administradores pueden cambiar roles y permisos.</p>}
+      </div>
+    );
+  };
+
+  // ==================== V105: HISTORIAL DE CAMBIOS ====================
+  const HISTORIAL_PAGINA = 100;
+  const cargarHistorial = async (mas = false) => {
+    setHistorialCargando(true);
+    const f = historialFiltros;
+    let q = supabase.from('audit_log').select('*').order('created_at', { ascending: false });
+    if (f.tabla) q = q.eq('tabla', f.tabla);
+    if (f.usuario) q = q.eq('usuario_email', f.usuario);
+    if (f.accion) q = q.eq('accion', f.accion);
+    if (f.desde) q = q.gte('created_at', f.desde);
+    if (f.hasta) q = q.lte('created_at', f.hasta + 'T23:59:59');
+    if (f.registro) q = q.or(`registro_id.ilike.%${f.registro.replace(/[,()]/g, ' ')}%,descripcion.ilike.%${f.registro.replace(/[,()]/g, ' ')}%`);
+    const desde = mas ? historial.length : 0;
+    const { data, error } = await q.range(desde, desde + HISTORIAL_PAGINA - 1);
+    setHistorialCargando(false);
+    if (error) { alert('❌ No se pudo cargar el historial: ' + error.message); return; }
+    setHistorial(prev => mas ? [...prev, ...(data || [])] : (data || []));
+    setHistorialHayMas((data || []).length === HISTORIAL_PAGINA);
+  };
+  const valorHistorial = (v) => {
+    if (v === null || v === undefined || v === '') return '—';
+    if (typeof v === 'boolean') return v ? 'Sí' : 'No';
+    if (typeof v === 'object') { const t = JSON.stringify(v); return t.length > 140 ? t.slice(0, 140) + '…' : t; }
+    const t = String(v);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(t)) return new Date(t).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return formatDate(t);
+    return t.length > 140 ? t.slice(0, 140) + '…' : t;
+  };
+  const resumenHistorial = (log) => {
+    if (log.descripcion) return log.descripcion;
+    const n = log.datos_nuevos || {}, a = log.datos_anteriores || {};
+    const nombre = n.nombre || a.nombre || n.concepto || a.concepto || n.numero || a.numero || '';
+    if (log.accion === 'ACTUALIZAR') {
+      const campos = Object.keys(n);
+      return `${campos.length} campo${campos.length !== 1 ? 's' : ''}: ${campos.slice(0, 4).map(c => c.replace(/_/g, ' ')).join(', ')}${campos.length > 4 ? '…' : ''}`;
+    }
+    const total = n.total ?? a.total ?? n.importe ?? a.importe;
+    return [nombre, total !== undefined && total !== null ? formatCurrency(total) : ''].filter(Boolean).join(' · ') || '—';
+  };
+  const renderHistorialAjustes = () => {
+    const f = historialFiltros;
+    const setF = (k, v) => setHistorialFiltros(prev => ({ ...prev, [k]: v }));
+    const colorAccion = { CREAR: 'bg-green-100 text-green-700', ACTUALIZAR: 'bg-blue-100 text-blue-700', ELIMINAR: 'bg-red-100 text-red-700' };
+    const usuarios = [...new Set(userProfiles.map(u => u.email).filter(Boolean))];
+    const sel = 'px-2 py-1.5 rounded-lg border bg-white text-sm';
+    return (
+      <div className="space-y-4">
+        <Card className="p-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs font-semibold text-neutral-500">Qué<br /><select className={sel} value={f.tabla} onChange={e => setF('tabla', e.target.value)}><option value="">Todo</option>{Object.entries(ETIQUETA_TABLA).map(([k, l]) => <option key={k} value={k}>{l}</option>)}<option value="permisos">Permisos</option></select></label>
+            <label className="text-xs font-semibold text-neutral-500">Quién<br /><select className={sel} value={f.usuario} onChange={e => setF('usuario', e.target.value)}><option value="">Todos</option>{usuarios.map(u => <option key={u} value={u}>{u}</option>)}<option value="automático">Automático (sistema)</option></select></label>
+            <label className="text-xs font-semibold text-neutral-500">Acción<br /><select className={sel} value={f.accion} onChange={e => setF('accion', e.target.value)}><option value="">Todas</option><option value="CREAR">Crear</option><option value="ACTUALIZAR">Cambiar</option><option value="ELIMINAR">Borrar</option></select></label>
+            <label className="text-xs font-semibold text-neutral-500">Desde<br /><input type="date" className={sel} value={f.desde} onChange={e => setF('desde', e.target.value)} /></label>
+            <label className="text-xs font-semibold text-neutral-500">Hasta<br /><input type="date" className={sel} value={f.hasta} onChange={e => setF('hasta', e.target.value)} /></label>
+            <label className="text-xs font-semibold text-neutral-500 flex-1 min-w-[160px]">Nº o texto<br /><input type="search" placeholder="F-2026-0021, A-2026…, cliente…" className={`${sel} w-full`} defaultValue={f.registro} onKeyDown={e => { if (e.key === 'Enter') setF('registro', e.target.value.trim()); }} onBlur={e => setF('registro', e.target.value.trim())} /></label>
+            <Button size="sm" variant="secondary" onClick={() => setHistorialFiltros({ tabla: '', usuario: '', accion: '', desde: '', hasta: '', registro: '' })}>Limpiar</Button>
+            <Button size="sm" variant="secondary" onClick={() => cargarHistorial(false)}><RefreshCw size={14} /> Actualizar</Button>
+          </div>
+          <p className="text-xs text-neutral-500 mt-2">Se apunta solo cada alta, cambio y borrado de clientes, productos, tarifas, pedidos, albaranes, facturas, gastos, banco, lotes, usuarios… con quién lo hizo y qué campos cambiaron. Nadie puede modificar ni borrar el historial.</p>
+        </Card>
+        <Card className="overflow-hidden" data-rf-no="">
+          {historial.length === 0 ? (
+            <div className="p-8 text-center text-neutral-500">{historialCargando ? 'Cargando…' : 'No hay cambios con estos filtros.'}</div>
+          ) : (
+            <div className="divide-y">
+              {historial.map(log => {
+                const abierto = historialAbierto === log.id;
+                const campos = [...new Set([...Object.keys(log.datos_anteriores || {}), ...Object.keys(log.datos_nuevos || {})])].filter(k => !['created_at', 'updated_at'].includes(k));
+                return (
+                  <div key={log.id} className="text-sm">
+                    <button className="w-full text-left px-4 py-2.5 hover:bg-neutral-50 flex flex-wrap items-center gap-x-3 gap-y-1" onClick={() => setHistorialAbierto(abierto ? null : log.id)}>
+                      <span className="font-mono text-xs text-neutral-500 w-32 shrink-0">{new Date(log.created_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${colorAccion[log.accion] || 'bg-neutral-100 text-neutral-700'}`}>{({ CREAR: 'Crear', ACTUALIZAR: 'Cambiar', ELIMINAR: 'Borrar' })[log.accion] || log.accion}</span>
+                      <span className="font-semibold">{ETIQUETA_TABLA[log.tabla] || log.tabla}{log.registro_id ? <span className="font-mono text-neutral-500"> · {log.registro_id.length > 20 ? log.registro_id.slice(0, 8) + '…' : log.registro_id}</span> : ''}</span>
+                      <span className="text-neutral-600 flex-1 min-w-[140px] truncate">{resumenHistorial(log)}</span>
+                      <span className="text-xs text-neutral-500">{log.usuario_nombre || log.usuario_email || 'Automático'}</span>
+                    </button>
+                    {abierto && (
+                      <div className="px-4 pb-3 bg-neutral-50">
+                        {log.descripcion && <p className="text-neutral-700 py-2">{log.descripcion}</p>}
+                        {campos.length > 0 && (
+                          <table className="w-full text-xs" data-rf-no="">
+                            <thead><tr className="text-neutral-500"><th className="text-left py-1 pr-2">Campo</th>{log.accion !== 'CREAR' && <th className="text-left py-1 pr-2">{log.accion === 'ELIMINAR' ? 'Valor' : 'Antes'}</th>}{log.accion !== 'ELIMINAR' && <th className="text-left py-1">{log.accion === 'CREAR' ? 'Valor' : 'Después'}</th>}</tr></thead>
+                            <tbody>
+                              {campos.map(c => (
+                                <tr key={c} className="border-t border-neutral-200 align-top">
+                                  <td className="py-1 pr-2 font-semibold text-neutral-600">{c.replace(/_/g, ' ')}</td>
+                                  {log.accion !== 'CREAR' && <td className="py-1 pr-2 text-red-700 break-all">{valorHistorial(log.datos_anteriores?.[c])}</td>}
+                                  {log.accion !== 'ELIMINAR' && <td className="py-1 text-green-800 break-all">{valorHistorial(log.datos_nuevos?.[c])}</td>}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        <div className="flex flex-wrap gap-3 pt-2 text-xs">
+                          <span className="text-neutral-500">{log.usuario_email || 'Automático (función del sistema)'}</span>
+                          {log.registro_id && <button className="underline text-orange-600" onClick={() => setHistorialFiltros({ tabla: log.tabla, usuario: '', accion: '', desde: '', hasta: '', registro: log.registro_id })}>Ver todo el historial de este registro</button>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {historialHayMas && <div className="p-3 text-center border-t"><Button size="sm" variant="secondary" disabled={historialCargando} onClick={() => cargarHistorial(true)}>{historialCargando ? 'Cargando…' : 'Ver más'}</Button></div>}
+        </Card>
+      </div>
+    );
+  };
+
   const renderAjustes = () => {
     const notificacionesConfig = [
       { key: 'stock_bajo', label: 'Stock bajo', descripcion: 'Cuando un producto tiene stock bajo' },
@@ -29432,10 +29695,18 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-black text-neutral-900">Ajustes</h1>
-            <p className="text-neutral-500 font-medium">Configuración del ERP</p>
+            <p className="text-neutral-500 font-medium">Configuración del ERP, usuarios y permisos, e historial de cambios</p>
           </div>
         </div>
 
+        {/* V105: pestañas */}
+        <div className="inline-flex rounded-xl border bg-white p-0.5 text-sm font-semibold max-w-full overflow-x-auto">
+          {[['general', '⚙️ General'], ['usuarios', '👥 Usuarios y permisos'], ['historial', '🕓 Historial de cambios']].map(([k, l]) => (
+            <button key={k} onClick={() => setAjustesTab(k)} className={`px-3 py-1.5 rounded-lg whitespace-nowrap ${ajustesTab === k ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{l}</button>
+          ))}
+        </div>
+
+        {ajustesTab === 'general' && (<>
         {/* V56: Configuración Slack */}
         <Card className="p-5">
           <div className="flex items-center gap-3 mb-4">
@@ -29601,38 +29872,6 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </div>
         </Card>
 
-        {/* Socios */}
-        <Card className="p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-3 bg-green-100 rounded-xl">
-              <Users size={24} className="text-green-600" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-neutral-900">Equipo</h3>
-              <p className="text-sm text-neutral-500">Socios y empleados del sistema</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {SOCIOS.map(socio => (
-              <div key={socio.id} className="p-4 rounded-xl bg-neutral-50 border">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${socio.color}`}>
-                    <User size={20} />
-                  </div>
-                  <div>
-                    <p className="font-bold text-neutral-900">{socio.nombre}</p>
-                    <p className="text-xs text-neutral-500 capitalize">{socio.id}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-neutral-500 mt-3">
-            Para añadir más socios, edita la constante SOCIOS en el código fuente.
-          </p>
-        </Card>
-
         {/* Empresa */}
         <Card className="p-5">
           <div className="flex items-center gap-3 mb-4">
@@ -29745,120 +29984,9 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           )}
         </Card>
 
-        {/* USUARIOS REGISTRADOS */}
-        <Card className="p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-3 bg-indigo-100 rounded-xl">
-              <Users size={24} className="text-indigo-600" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-neutral-900">Usuarios del Sistema</h3>
-              <p className="text-sm text-neutral-500">{userProfiles.length} usuarios registrados</p>
-            </div>
-          </div>
-          
-          <div className="space-y-2">
-            {userProfiles.length > 0 ? userProfiles.map(profile => (
-              <div key={profile.id} className="flex items-center justify-between p-3 bg-neutral-50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
-                    <User size={18} className="text-indigo-600" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">{profile.nombre || 'Sin nombre'}</p>
-                    <p className="text-xs text-neutral-500">{profile.email}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <Badge className={profile.rol === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-neutral-100 text-neutral-600'}>
-                    {profile.rol || 'usuario'}
-                  </Badge>
-                  <p className="text-xs text-neutral-400 mt-1">
-                    {profile.last_login ? `Último: ${formatDate(profile.last_login)}` : 'Sin actividad'}
-                  </p>
-                </div>
-              </div>
-            )) : (
-              <p className="text-center text-neutral-500 py-4">No hay usuarios registrados</p>
-            )}
-          </div>
-        </Card>
-
-        {/* HISTORIAL DE AUDITORÍA */}
-        <Card className="p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-emerald-100 rounded-xl">
-                <Clock size={24} className="text-emerald-600" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-neutral-900">Historial de Cambios</h3>
-                <p className="text-sm text-neutral-500">Trazabilidad de acciones en el sistema</p>
-              </div>
-            </div>
-            <Button variant="secondary" size="sm" onClick={refetchAuditLog}>
-              <RefreshCw size={14} /> Actualizar
-            </Button>
-          </div>
-          
-          <div className="overflow-x-auto max-h-96">
-            {auditLog.length > 0 ? (
-              <table className="w-full text-sm">
-                <thead className="bg-neutral-100 sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-semibold">Fecha/Hora</th>
-                    <th className="text-left px-3 py-2 font-semibold">Usuario</th>
-                    <th className="text-left px-3 py-2 font-semibold">Acción</th>
-                    <th className="text-left px-3 py-2 font-semibold">Tabla</th>
-                    <th className="text-left px-3 py-2 font-semibold">Descripción</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {auditLog.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 50).map(log => (
-                    <tr key={log.id} className="border-b hover:bg-neutral-50">
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <p className="font-mono text-xs">{new Date(log.created_at).toLocaleDateString('es-ES')}</p>
-                        <p className="font-mono text-xs text-neutral-400">{new Date(log.created_at).toLocaleTimeString('es-ES')}</p>
-                      </td>
-                      <td className="px-3 py-2">
-                        <p className="font-semibold">{log.user_nombre || 'Sistema'}</p>
-                        <p className="text-xs text-neutral-400">{log.user_email}</p>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge className={
-                          log.accion === 'CREAR' ? 'bg-green-100 text-green-700' :
-                          log.accion === 'ACTUALIZAR' ? 'bg-blue-100 text-blue-700' :
-                          log.accion === 'ELIMINAR' ? 'bg-red-100 text-red-700' :
-                          'bg-neutral-100 text-neutral-700'
-                        }>
-                          {log.accion}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className="px-2 py-1 bg-neutral-100 rounded text-xs font-mono">{log.tabla}</span>
-                      </td>
-                      <td className="px-3 py-2 text-neutral-600 max-w-xs truncate">
-                        {log.descripcion || '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="text-center py-8 text-neutral-500">
-                <Clock size={48} className="mx-auto mb-3 text-neutral-300" />
-                <p>No hay registros de auditoría</p>
-                <p className="text-xs mt-1">Las acciones se registrarán automáticamente</p>
-              </div>
-            )}
-          </div>
-          
-          {auditLog.length > 50 && (
-            <p className="text-xs text-neutral-500 mt-3 text-center">
-              Mostrando las últimas 50 acciones de {auditLog.length} totales
-            </p>
-          )}
-        </Card>
+        </>)}
+        {ajustesTab === 'usuarios' && renderUsuariosAjustes()}
+        {ajustesTab === 'historial' && renderHistorialAjustes()}
       </div>
     );
   };
@@ -32418,6 +32546,18 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
 
   // ==================== MAIN RENDER ====================
   if (loading) return <LoadingScreen />;
+  const seccionVisible = puedeVer(activeSection) ? activeSection : '__sin_permiso__'; // V105
+  // V105: usuario desactivado (cuenta nueva sin aprobar o dado de baja): no ve el ERP
+  if (currentUserProfile && 'permisos' in currentUserProfile && currentUserProfile.activo === false) return (
+    <div className="min-h-screen flex items-center justify-center bg-neutral-50 p-6">
+      <Card className="p-8 max-w-md text-center space-y-3">
+        <RootFlowLogo size={64} />
+        <p className="text-xl font-black">Tu usuario está pendiente de activar</p>
+        <p className="text-neutral-600 text-sm">Has entrado como <strong>{currentUser?.email}</strong>. Un administrador (Peri, Nico o Guzmán) tiene que activarte en Ajustes → Usuarios y permisos.</p>
+        <Button variant="secondary" className="mx-auto" onClick={signOut}>Cerrar sesión</Button>
+      </Card>
+    </div>
+  );
 
   return (
     <div className={`min-h-screen ${darkMode ? 'bg-neutral-900' : 'bg-neutral-100'} flex transition-colors duration-300`}>
@@ -32837,32 +32977,36 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </div>
         </header>
         <div className="p-4 md:p-8">
-          {activeSection === 'dashboard' && renderDashboard()}
-          {activeSection === 'calendario' && renderCalendario()}
-          {activeSection === 'leads' && renderLeads()}
-          {activeSection === 'muestras' && renderMuestras()}
-          {activeSection === 'clientes' && renderClientes()}
-          {activeSection === 'presupuestos' && renderPresupuestos()}
-          {activeSection === 'pedidos' && renderPedidos()}
-          {activeSection === 'rutas' && renderRutas()}
-          {activeSection === 'productos' && renderProductos()}
-          {activeSection === 'tarifas' && renderTarifas()}
-          {activeSection === 'facturacion' && renderFacturacion()}
-          {activeSection === 'gastos' && renderGastos()}
-          {activeSection === 'proveedores' && renderProveedores()}
-          {activeSection === 'informes' && renderInformes()}
-          {activeSection === 'rentabilidad' && renderRentabilidad()}{/* V86 */}
-          {activeSection === 'contabilidad' && renderContabilidad()}
-          {activeSection === 'produccion' && renderProduccion()}
-          {activeSection === 'planificacion' && renderPlanificacion()}
-          {activeSection === 'albaranes' && renderAlbaranes()}
-          {activeSection === 'insumos' && renderInsumos()}
-          {activeSection === 'desarrollo' && renderDesarrollo()}
-          {activeSection === 'mermas' && renderMermas()}
-          {activeSection === 'trazabilidad' && renderTrazabilidad()}
-          {activeSection === 'ambiente' && renderAmbiente()}
-          {activeSection === 'documentos' && renderDocumentos()}
-          {activeSection === 'ajustes' && renderAjustes()}
+          {/* V105: si el usuario no tiene permiso para la sección, no se pinta */}
+          {!puedeVer(activeSection) && (
+            <Card className="p-8 text-center max-w-lg mx-auto"><p className="text-4xl mb-2">🔒</p><p className="font-bold text-lg">No tienes acceso a esta sección</p><p className="text-sm text-neutral-500 mt-1">Pide a un administrador que te lo active en Ajustes → Usuarios y permisos.</p><Button className="mt-4 mx-auto" onClick={() => setActiveSection('dashboard')}>Ir al Dashboard</Button></Card>
+          )}
+          {seccionVisible === 'dashboard' && renderDashboard()}
+          {seccionVisible === 'calendario' && renderCalendario()}
+          {seccionVisible === 'leads' && renderLeads()}
+          {seccionVisible === 'muestras' && renderMuestras()}
+          {seccionVisible === 'clientes' && renderClientes()}
+          {seccionVisible === 'presupuestos' && renderPresupuestos()}
+          {seccionVisible === 'pedidos' && renderPedidos()}
+          {seccionVisible === 'rutas' && renderRutas()}
+          {seccionVisible === 'productos' && renderProductos()}
+          {seccionVisible === 'tarifas' && renderTarifas()}
+          {seccionVisible === 'facturacion' && renderFacturacion()}
+          {seccionVisible === 'gastos' && renderGastos()}
+          {seccionVisible === 'proveedores' && renderProveedores()}
+          {seccionVisible === 'informes' && renderInformes()}
+          {seccionVisible === 'rentabilidad' && renderRentabilidad()}{/* V86 */}
+          {seccionVisible === 'contabilidad' && renderContabilidad()}
+          {seccionVisible === 'produccion' && renderProduccion()}
+          {seccionVisible === 'planificacion' && renderPlanificacion()}
+          {seccionVisible === 'albaranes' && renderAlbaranes()}
+          {seccionVisible === 'insumos' && renderInsumos()}
+          {seccionVisible === 'desarrollo' && renderDesarrollo()}
+          {seccionVisible === 'mermas' && renderMermas()}
+          {seccionVisible === 'trazabilidad' && renderTrazabilidad()}
+          {seccionVisible === 'ambiente' && renderAmbiente()}
+          {seccionVisible === 'documentos' && renderDocumentos()}
+          {seccionVisible === 'ajustes' && renderAjustes()}
         </div>
       </main>
 
