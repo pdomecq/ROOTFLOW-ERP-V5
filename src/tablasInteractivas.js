@@ -34,6 +34,33 @@ th[data-rf-orden="desc"]::after{content:" ▼";font-size:9px;color:#ea580c}
 [data-rf-nota]:hover::before,[data-rf-nota]:focus::before{border-color:#ea580c;color:#ea580c}
 .rf-nube{position:fixed;z-index:10001;max-width:min(360px,86vw);background:#262626;color:#fff;font-size:12px;line-height:1.45;padding:9px 11px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);white-space:pre-line;pointer-events:none}
 @media print{.rf-barra,.rf-nube,.rf-pop{display:none!important}}
+/* V101: en el móvil cada fila de una tabla ancha es una tarjeta «etiqueta: valor» */
+@media (max-width:700px){
+table[data-rf-movil]{display:block!important;width:100%!important;min-width:0!important;border:0!important;background:transparent!important}
+table[data-rf-movil]>thead{display:none!important}
+table[data-rf-movil]>tbody,table[data-rf-movil]>tfoot{display:block!important;width:100%!important}
+table[data-rf-movil]>tbody>tr,table[data-rf-movil]>tfoot>tr{display:block!important;margin:8px 0!important;padding:8px 12px!important;border:1px solid #e5e5e5!important;border-radius:14px!important;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+table[data-rf-movil]>tbody>tr>td,table[data-rf-movil]>tfoot>tr>td{display:flex!important;align-items:center;justify-content:space-between;gap:12px;width:auto!important;min-width:0!important;max-width:none!important;padding:5px 0!important;border:0!important;border-bottom:1px dashed #f0f0f0!important;text-align:right!important;white-space:normal!important;word-break:break-word}
+table[data-rf-movil]>tbody>tr>td:last-child{border-bottom:0!important}
+table[data-rf-movil]>tbody>tr>td::before,table[data-rf-movil]>tfoot>tr>td::before{content:attr(data-rf-label);flex:0 0 auto;max-width:45%;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;color:#8a8a8a}
+table[data-rf-movil] td[data-rf-label=""]::before{display:none}
+table[data-rf-movil] td[data-rf-label=""]{justify-content:flex-end;flex-wrap:wrap}
+table[data-rf-movil]>tbody>tr>td[data-rf-titulo]{font-size:15px!important;font-weight:700;justify-content:flex-start;text-align:left!important;border-bottom:1px solid #eee!important}
+table[data-rf-movil]>tbody>tr>td[data-rf-titulo]::before{display:none}
+table[data-rf-movil] td[colspan]{display:block!important;text-align:center!important}
+table[data-rf-movil] td[colspan]::before{display:none}
+table[data-rf-movil] td>div,table[data-rf-movil] td>span{max-width:100%}
+.rf-barra{padding:8px 6px}
+.rf-barra .rf-cuenta{margin-left:0;width:100%}
+/* filas de cabecera (título + botones) y barras de acciones: bajan de línea en vez de salirse */
+main .flex.justify-between,main .flex.justify-end,main .flex.gap-2,main .flex.gap-3,main .flex.gap-4{flex-wrap:wrap}
+main .flex.justify-between>*{min-width:0}
+/* selectores de pestañas y botones en fila: se desplazan con el dedo */
+main .inline-flex.rounded-xl,main .overflow-x-auto{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+main h1{font-size:1.6rem!important;line-height:1.15!important;word-break:break-word}
+main .grid{min-width:0}
+main .grid>*{min-width:0}
+}
 `;
 
 // ---------- valores para ordenar ----------
@@ -240,6 +267,20 @@ function prepararTabla(tabla) {
     st = { clave, orden: pref.orden || null, ocultas: pref.ocultas || [], busca: '', filtros: {}, barra: null };
     estados.set(tabla, st);
     tabla.setAttribute('data-rf-tabla', String(++contadorTablas));
+  }
+  // V101: tablas de 4 o más columnas se ven como tarjetas en el móvil (etiqueta = texto de la cabecera)
+  if (hs.length >= 4 && !tabla.hasAttribute('data-rf-movil')) tabla.setAttribute('data-rf-movil', '');
+  if (tabla.hasAttribute('data-rf-movil')) {
+    const etiquetas = hs.map(textoCabecera);
+    const iTitulo = etiquetas.findIndex(t => t);
+    for (const tbody of tabla.tBodies) for (const tr of tbody.rows) {
+      if (tr.cells.length !== hs.length) continue;
+      [...tr.cells].forEach((td, i) => {
+        const l = etiquetas[i] || '';
+        if (td.getAttribute('data-rf-label') !== l) td.setAttribute('data-rf-label', l);
+        if (i === iTitulo) { if (!td.hasAttribute('data-rf-titulo')) td.setAttribute('data-rf-titulo', ''); }
+      });
+    }
   }
   // Cabeceras ordenables (las que tienen texto y no llevan controles dentro)
   hs.forEach((th, i) => {

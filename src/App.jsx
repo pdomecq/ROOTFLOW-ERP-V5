@@ -5109,6 +5109,22 @@ const MainApp = () => {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
+  // V101: imprimir = el MISMO PDF que se envía al cliente (portal-cliente), no una plantilla aparte.
+  // La ventana se abre antes del await para que el navegador no la bloquee; ahí se carga el PDF y se imprime.
+  const imprimirPdfDocumento = async (tipo, id) => {
+    const w = window.open('', '_blank');
+    if (w) w.document.write('<!doctype html><title>Generando PDF…</title><body style="font-family:Arial;padding:40px;color:#555">Generando el PDF de ' + id + '…</body>');
+    const res = await invocarPortal({ accion: 'admin_pdf', tipo, id });
+    if (res.error || !res.base64) { if (w) w.close(); alert('❌ No se pudo generar el PDF: ' + (res.error || 'respuesta vacía')); return; }
+    const bytes = Uint8Array.from(atob(res.base64), ch => ch.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+    if (!w) { const a = document.createElement('a'); a.href = url; a.download = res.filename || `${tipo}-${id}.pdf`; document.body.appendChild(a); a.click(); a.remove(); return; }
+    w.document.open();
+    w.document.write(`<!doctype html><title>${res.filename || id}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style><body><iframe src="${url}"></iframe><script>const f=document.querySelector('iframe');f.onload=()=>{setTimeout(()=>{try{f.contentWindow.focus();f.contentWindow.print()}catch(e){}},400)}<\/script></body>`);
+    w.document.close();
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  };
+
   // V83: ajustes del envío automático (tabla ajustes_sistema, claves facturas_envio_*)
   const ajusteSistema = (clave, defecto = '') => ajustesSistema.find(a => a.clave === clave)?.valor ?? defecto;
   const envioFacturasActivo = ajusteSistema('facturas_envio_auto') === 'true';
@@ -14008,8 +14024,8 @@ ${pedidoLinea ? `^FO260,258
             <Button variant="secondary" onClick={() => enviarFacturaCliente(factura)} title={factura.enviada_at ? `Enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''}` : 'Enviar por email al cliente'}>
               <Send size={18} /> {factura.enviada_at ? 'Reenviar al cliente' : 'Enviar al cliente'}
             </Button>
-            <Button variant="secondary" onClick={() => descargarPdfDocumento('factura', factura.id)} title="El mismo PDF que recibe el cliente por email"><FileDown size={18} /> PDF del cliente</Button>{/* V83 */}
-            <Button onClick={handlePrint}><Printer size={18} /> Imprimir / PDF</Button>
+            <Button variant="secondary" onClick={() => descargarPdfDocumento('factura', factura.id)} title="El mismo PDF que recibe el cliente por email"><FileDown size={18} /> Descargar PDF</Button>{/* V83 */}
+            <Button onClick={() => imprimirPdfDocumento('factura', factura.id)} title="Imprime el mismo PDF que recibe el cliente"><Printer size={18} /> Imprimir</Button>{/* V101: antes era otra plantilla distinta */}
           </div>
         </div>
       </Modal>
@@ -14277,7 +14293,7 @@ ${transacciones}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
           <StatCard icon={Receipt} label="Total Facturado" value={formatCurrency(facturasFiltradas.reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-green-100 text-green-600" />
           <StatCard icon={Clock} label="Pendiente Cobro" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pendiente').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-amber-100 text-amber-600" />
           <StatCard icon={CheckCircle} label="Cobrado" value={formatCurrency(facturasFiltradas.filter(f => f.estado === 'pagada').reduce((sum, f) => sum + (f.total || 0), 0))} color="bg-blue-100 text-blue-600" />
@@ -14729,8 +14745,8 @@ ${transacciones}
                 <Euro size={20} className="text-blue-600" />
               </div>
               <div>
-                <p className="font-bold text-blue-800">Política de Cobros: AL CONTADO</p>
-                <p className="text-sm text-blue-600">Vencimiento: mismo día de entrega del pedido</p>
+                <p className="font-bold text-blue-800">Política de cobros: {PLAZO_PAGO_DEFECTO} días</p>{/* V101: antes decía «al contado», que no era verdad */}
+                <p className="text-sm text-blue-600">Vencimiento: {PLAZO_PAGO_DEFECTO} días desde la factura (o lo que diga la ficha del cliente), nunca más de 30 días desde la entrega</p>
               </div>
             </div>
             <div className="text-right">
@@ -14802,7 +14818,7 @@ ${transacciones}
                         {!esNumeroAnulado(factura) && <button onClick={() => enviarFacturaCliente(factura)} className={`p-2 rounded-lg ${factura.enviada_at ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={factura.enviada_at ? `Reenviar (enviada el ${formatDate(factura.enviada_at)} a ${factura.enviada_a || ''})` : 'Enviar por email al cliente'}><Send size={16} /></button>}
                         {factura.tipo === 'agrupada' && factura.estado !== 'anulada' && (
                           <>
-                            <button onClick={() => generarPDFFacturaAgrupada(factura)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir factura agrupada (detalle de albaranes)"><Printer size={16} /></button>
+                            <button onClick={() => imprimirPdfDocumento('factura', factura.id)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg" title="Imprimir (el mismo PDF que recibe el cliente)"><Printer size={16} /></button>{/* V101 */}
                             <button onClick={() => descargarZipAlbaranesFactura(factura)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded-lg" title="Descargar ZIP con los albaranes valorados de esta factura">🗂️</button>
                             <button onClick={() => recalcularFacturaAgrupada(factura)} className="p-2 text-teal-600 hover:bg-teal-50 rounded-lg" title="Recalcular con tarifas actuales (corrige precios y doble IVA)"><Calculator size={16} /></button>
                           </>
@@ -16053,7 +16069,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
         {gastosTab === 'capex' && (
           <>
             {/* Stats CAPEX */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
               <StatCard icon={Package} label="Total Inversión" value={formatCurrency(totalCapexBruto)} color="bg-indigo-100 text-indigo-600" />
               <StatCard icon={TrendingDown} label="Amortización Acumulada" value={formatCurrency(totalAmortizacionAcumulada)} color="bg-red-100 text-red-600" />
               <StatCard icon={Banknote} label="Valor Neto Contable" value={formatCurrency(totalValorNeto)} color="bg-green-100 text-green-600" />
@@ -20753,7 +20769,7 @@ td.blank { background:#fff; }
         {calendarioTab === 'eventos' && (
           /* === VISTA EVENTOS === */
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
               <StatCard icon={Truck} label="Entregas este mes" value={entregasMes.length} color="bg-blue-100 text-blue-600" />
               <StatCard icon={Leaf} label="Cosechas este mes" value={cosechasMes.length} color="bg-green-100 text-green-600" />
               <StatCard icon={AlertCircle} label="Próximos 3 días" value={
@@ -23196,7 +23212,7 @@ Firma repartidor: _________________
           <Button onClick={() => { setEditingItem(null); setShowModal('tarea'); }}><Plus size={20} /> Nueva Tarea</Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
           <StatCard icon={Clock} label="Pendientes" value={tareasPendientesLista.length} color="bg-amber-100 text-amber-600" />
           <StatCard icon={AlertCircle} label="Alta Prioridad" value={tareasPendientesLista.filter(t => t.prioridad === 'alta').length} color="bg-red-100 text-red-600" />
           <StatCard icon={CheckCircle} label="Completadas" value={tareasCompletadas.length} color="bg-green-100 text-green-600" />
@@ -23298,7 +23314,7 @@ Firma repartidor: _________________
           <Button onClick={() => { setEditingItem(null); setShowModal('merma'); }}><Plus size={20} /> Registrar Merma</Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
           <StatCard icon={AlertTriangle} label="Total Mermas" value={totalMermas} color="bg-red-100 text-red-600" />
           <StatCard icon={TrendingDown} label="Este Mes" value={mermas.filter(m => new Date(m.fecha).getMonth() === new Date().getMonth()).reduce((sum, m) => sum + (m.cantidad || 0), 0)} color="bg-amber-100 text-amber-600" />
           <StatCard icon={Sprout} label="Lotes Afectados" value={[...new Set(mermas.map(m => m.lote_id))].length} color="bg-purple-100 text-purple-600" />
@@ -32475,7 +32491,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       </aside>
 
       {/* Main */}
-      <main className={`flex-1 w-full transition-all duration-300 ${sidebarOpen ? 'md:ml-64' : 'md:ml-20'}`}>
+      <main className={`flex-1 w-full min-w-0 transition-all duration-300 ${sidebarOpen ? 'md:ml-64' : 'md:ml-20'}`}>{/* V101: min-w-0 para que el contenido ancho no ensanche la página en el móvil */}
         <header className={`${darkMode ? 'bg-neutral-800 border-neutral-700' : 'bg-white border-neutral-200'} border-b px-4 md:px-8 py-3 md:py-4 sticky top-0 z-30`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
