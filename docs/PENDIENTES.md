@@ -51,8 +51,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - **Stripe (real)**: activar la cuenta (Nico, administrador único, con su DNI), crear el mismo webhook en modo real y cambiar las dos claves por las `sk_live_…` / `whsec_…` reales. Después mandar el enlace de domiciliación a los restaurantes.
 - **Banco**: hasta que se dé de alta Enable Banking (`docs/BANCO.md`), subir el extracto del BBVA al menos 2 veces por semana: sin movimientos de los últimos 3 días los recordatorios no salen (avisa en Slack).
 - 🟠 **Plazo legal (V99)**: facturas ya enviadas que vencen más de 30 días después de la primera entrega: F-2026-0020 (25-nov; entrega 22-oct), F-2026-0025 (3-dic; entregas desde el 6-oct) y F-2026-0026 (3-dic; desde el 15-oct). No se han tocado porque el cliente ya las tiene. Con facturación **mensual** el límite de 30 días desde la primera entrega deja muy poco plazo: mejor semanal o quincenal para los clientes agrupados. El PDF de `portal-cliente` sigue diciendo «N días desde la fecha de factura»: cambiarlo al mismo texto que la factura del ERP la próxima vez que se despliegue.
-- 🔴 **Cobro doble (V97)**: el pedido #42 de Gold Gourmet está en F-2026-0016 (56 €) y en la agrupada F-2026-0026. Las dos enviadas. Anular F-2026-0016 desde 🧾 Control de facturas (rectificativa) **antes del lunes 9-nov**, que le saldría el 1.er recordatorio.
-- Primeras facturas que vencen: F-2026-0016 (Gold Gourmet) y F-2026-0018 (Soto del Lugar) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
+- Primeras facturas que vencen: F-2026-0018 (Soto del Lugar) y F-2026-0021 (Frutas Félix Vázquez) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
 - F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el extracto del 5-ago al 3-nov: confirmar si se cobró antes de agosto.
 
@@ -63,7 +62,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Las compras de semilla y envases cuentan el mes en que se compran (no hay control de existencias): para márgenes mensuales finos haría falta valorar el stock de semilla y envases.
 - No hay nóminas ni Seguridad Social registradas: si los socios cobran, el EBITDA real será menor.
 
-## 6. 🟡 Facturas: unificar la plantilla (pedido de Peri, sin empezar)
+## 6. 🟡 Facturas: unificar la plantilla (en parte hecho en la V101: imprimir y descargar ya usan el PDF de portal-cliente)
 
 "Dependiendo de dónde pulse las genera de una forma u otra y es un caos; algunas salen sin el detalle de importes."
 - Hoy hay al menos tres caminos distintos:
