@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V105**; la siguiente es **V106**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V106: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V106-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V106**; la siguiente es **V107**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V107: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V107-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V106 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V107 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V106: <resumen corto>`.
+- Mensaje de commit: `V107: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -73,7 +73,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - **IDs de documentos** (albaranes, facturas, presupuestos, lotes, asientos): usa `generarIdSecuencial(tabla, prefijo, padding, campo)` y `insertarConIdUnico(tabla, datos, prefijo, padding)`. Nunca `COUNT + 1` (provocó duplicados de `albaranes_pkey`).
 - Comprueba siempre `error` en cada llamada a Supabase y enséñalo con `alert('❌ …' + error.message)`; no des por guardado lo que no se ha guardado.
 - Archivos: bucket `facturas-gastos` (URL pública con `getPublicUrl`).
-- Edge Functions del repo: `send-email`, `send-slack`, `siembra-diaria`, `portal-cliente`, `leer-factura`, `banco` (V91), `stripe` (V92) (`supabase/functions/`). `leer-factura` (V85) lee facturas de proveedor con la API de Claude (secret `ANTHROPIC_API_KEY`) y las deja en `facturas_recibidas`; el gasto y su asiento los crea siempre el ERP al registrarla. Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
+- Edge Functions del repo: `send-email`, `send-slack`, `siembra-diaria`, `portal-cliente`, `leer-factura`, `banco` (V91), `stripe` (V92), `aviso-cobros` (V106: email interno a Peri cuando vence una factura sin cobrar) (`supabase/functions/`). `leer-factura` (V85) lee facturas de proveedor con la API de Claude (secret `ANTHROPIC_API_KEY`) y las deja en `facturas_recibidas`; el gasto y su asiento los crea siempre el ERP al registrarla. Avisos: `enviarSlack({...})` y `enviarEmail({...})` en `MainApp`.
 
 ## Reglas de negocio y fiscales
 

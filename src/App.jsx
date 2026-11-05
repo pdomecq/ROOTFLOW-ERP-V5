@@ -288,6 +288,9 @@ const SOCIOS = [
   { id: 'guzman', nombre: 'Guzmán', color: 'bg-purple-100 text-purple-700' },
 ];
 
+// V106: alertas de stock (campana, Slack y contador del menú) desactivadas por ahora a petición de Peri
+const ALERTAS_STOCK_ACTIVAS = false;
+
 // ==================== V105: USUARIOS, ROLES Y PERMISOS ====================
 // Secciones del menú (id = activeSection). «ajustes» siempre se ve (cada uno edita su perfil).
 const SECCIONES_ERP = [
@@ -3472,8 +3475,9 @@ const MainApp = () => {
     hoy.setHours(0, 0, 0, 0);
     const alertasList = [];
 
-    // 1. Stock bajo
-    productos.filter(p => p.stock < (p.stock_minimo || 20)).forEach(p => {
+    // 1. Stock bajo — V106: desactivado por ahora (el stock de producto aún no es fiable: ver PENDIENTES). Para
+    // volver a activarlo, pon ALERTAS_STOCK_ACTIVAS = true.
+    if (ALERTAS_STOCK_ACTIVAS) productos.filter(p => p.stock < (p.stock_minimo || 20)).forEach(p => {
       alertasList.push({
         id: `stock-${p.id}`,
         tipo: 'stock',
@@ -3821,7 +3825,7 @@ const MainApp = () => {
         lead_seguimiento: cfg.notif_lead_seguimiento,
       };
       
-      if (flagPorTipo[tipoEvento] === false) {
+      if (flagPorTipo[tipoEvento] === false || (!ALERTAS_STOCK_ACTIVAS && /^stock_/.test(tipoEvento))) { // V106: sin avisos de stock por ahora
         return { success: false, error: `Tipo "${tipoEvento}" desactivado en configuración`, skipped: true };
       }
     }
@@ -4932,6 +4936,13 @@ const MainApp = () => {
     if (r) { setBancoAsignar(null); alert(`✅ Cobrada(s): ${ids.join(', ')}. La próxima vez que pague este ordenante se casará solo.`); }
   };
   const marcarMovimientoBanco = (m, estado) => accionBanco('marcar', { accion: 'admin_marcar', movimiento_id: m.id, estado });
+  // V106: email interno a Peri con lo que falta por cobrar (función aviso-cobros). Solo sale solo cuando vence una
+  // factura; este botón lo manda ya con todo lo vencido.
+  const avisoCobrosAhora = async () => {
+    const r = await invocarFuncion('aviso-cobros', { accion: 'ahora' });
+    if (r.error || !r.ok) { alert('❌ No se pudo enviar: ' + (r.error || 'sin respuesta') + '\n\n¿Está desplegada la función aviso-cobros?'); return; }
+    alert(`✅ Enviado a ${(r.para || []).join(', ')}: ${r.clientes || 0} cliente(s) con facturas vencidas.`);
+  };
   const recordatorioAhora = async (clienteId, nombre) => {
     if (!window.confirm(`¿Enviar ya a ${nombre} un recordatorio de todas sus facturas vencidas?`)) return;
     setBancoCargando('recordatorio');
@@ -5129,6 +5140,7 @@ const MainApp = () => {
               ))}
             </div>
           )}
+          <p className="text-xs text-neutral-600">📧 Cuando vence una factura sin cobrar te llega un aviso a <strong>{ajusteSistema('aviso_cobros_email', 'p.domecq@rootflow.es')}</strong> con lo que debe ese cliente. <button className="underline text-orange-600" onClick={avisoCobrosAhora}>Enviarme ya el resumen de lo vencido</button></p>{/* V106 */}
           {r?.ultimos?.length > 0 && <p className="text-xs text-neutral-500">Últimos enviados: {r.ultimos.slice(0, 5).map(u => `${u.factura_id} (${u.nivel}.º, ${new Date(u.created_at).toLocaleDateString('es-ES')}${u.estado !== 'enviado' ? ' ❌' : ''})`).join(' · ')}</p>}
         </div>
       </div>
@@ -32589,7 +32601,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           <NavItem icon={ClipboardList} label="Presupuestos" section="presupuestos" badge={presupuestos.filter(p => p.estado === 'pendiente').length} />
           <NavItem icon={ShoppingCart} label="Pedidos" section="pedidos" badge={pedidosPendientes} />
           <NavItem icon={Truck} label="Rutas Reparto" section="rutas" />
-          <NavItem icon={Package} label="Productos" section="productos" badge={stockBajo} />
+          <NavItem icon={Package} label="Productos" section="productos" badge={ALERTAS_STOCK_ACTIVAS ? stockBajo : null} />{/* V106 */}
           <NavItem icon={Tag} label="Tarifas" section="tarifas" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
           <NavItem icon={Receipt} label="Facturación" section="facturacion" />
