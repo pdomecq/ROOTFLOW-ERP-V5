@@ -180,11 +180,27 @@ const useRealtime = (table) => {
 
   const fetchData = async () => {
     try {
-      let { data: d, error: e } = await supabase.from(table).select('*').order('created_at', { ascending: false });
+      // V104: Supabase devuelve como mucho 1.000 filas por consulta; se lee por páginas hasta tenerlas todas.
+      // Orden: created_at (más nuevo primero) y, para que las páginas no repitan ni salten filas, id.
+      const leerTodo = async (ordenes) => {
+        const PAG = 1000, filas = [];
+        for (let desde = 0; desde < 200000; desde += PAG) {
+          let q = supabase.from(table).select('*');
+          for (const [col, asc] of ordenes) q = q.order(col, { ascending: asc });
+          const { data: pag, error: err } = await q.range(desde, desde + PAG - 1);
+          if (err) return { data: null, error: err };
+          filas.push(...(pag || []));
+          if (!pag || pag.length < PAG) break;
+        }
+        return { data: filas, error: null };
+      };
+      const falta = (err) => err && (err.code === '42703' || /does not exist|created_at/.test(err.message || ''));
+      let { data: d, error: e } = await leerTodo([['created_at', false], ['id', false]]);
+      if (falta(e)) ({ data: d, error: e } = await leerTodo([['created_at', false]]));
       // V81: si la tabla no tiene created_at (42703), reintentar sin ordenar en vez de dejarla vacía
-      if (e && (e.code === '42703' || /created_at/.test(e.message || ''))) {
+      if (falta(e)) {
         console.warn(`${table} no tiene created_at: se carga sin ordenar (ejecuta el SQL V81)`);
-        ({ data: d, error: e } = await supabase.from(table).select('*'));
+        ({ data: d, error: e } = await leerTodo([]));
       }
       if (e) {
         console.warn(`Error cargando ${table}:`, e.message);
