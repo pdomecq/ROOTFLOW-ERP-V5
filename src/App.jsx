@@ -7121,7 +7121,7 @@ ${pedidoLinea ? `^FO260,258
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <p className="font-semibold text-neutral-900 text-sm">📅 Plazo de pago</p>
-              <p className="text-xs text-neutral-500">Por defecto 15 días. Máximo legal para productos frescos: 30 días desde la entrega (Ley 3/2004 y Ley 12/2013). En facturas agrupadas el ERP adelanta el vencimiento si hace falta.</p>
+              <p className="text-xs text-neutral-500">Por defecto 30 días, el máximo legal para productos frescos, contado desde la entrega (Ley 3/2004 y Ley 12/2013). En facturas agrupadas el ERP adelanta el vencimiento si hace falta.</p>
             </div>
             <div className="flex items-center gap-2">
               <input 

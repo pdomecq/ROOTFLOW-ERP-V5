@@ -1,10 +1,10 @@
 // V99: vencimiento de las facturas de venta. Los microbrotes son productos frescos y perecederos: el plazo de
 // pago NO puede pasar de 30 días desde la ENTREGA de la mercancía (Ley 3/2004 art. 4, en la redacción de la
-// Ley 15/2010, y Ley 12/2013 de la cadena alimentaria art. 14 bis). Rootflow cobra a 15 días por defecto.
+// Ley 15/2010, y Ley 12/2013 de la cadena alimentaria art. 14 bis). Rootflow cobra a 30 días por defecto (V100).
 // Si la factura agrupa varias entregas (semanal, quincenal o mensual), manda la primera entrega: la factura
-// tiene que vencer como tarde 30 días después de ella, aunque eso deje menos de 15 días desde la factura.
+// tiene que vencer como tarde 30 días después de ella, aunque eso deje menos plazo desde la fecha de la factura.
 
-export const PLAZO_PAGO_DEFECTO = 15;
+export const PLAZO_PAGO_DEFECTO = 30; // V100: Peri lo quiere a 30 (el máximo legal)
 export const PLAZO_MAX_PERECEDEROS = 30;
 
 const iso = (x) => (x ? String(x).slice(0, 10) : null);

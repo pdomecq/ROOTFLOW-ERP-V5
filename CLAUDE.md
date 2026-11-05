@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V99**; la siguiente es **V100**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V100: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V100-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V100**; la siguiente es **V101**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V101: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V101-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V100 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V101 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V100: <resumen corto>`.
+- Mensaje de commit: `V101: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -47,7 +47,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - `src/serieFacturas.js` (V87): numeración correlativa de facturas emitidas (huecos, orden de fechas, última de la serie, datos de la rectificativa) y cuadre facturas ↔ asientos `FAC-`/`COB-`; lo usan `anularFactura()` y `renderControlSerie()`. **Una factura emitida no se borra nunca**: se anula con `anularFactura(f)` (rectificativa `R-AAAA-NNNN`); solo la última de su serie sin enviar ni cobrar se puede borrar (lo impone un trigger del SQL V87). Si cambias los importes de una factura, llama a `rehacerAsientoFactura(id)`. V95: al editar un pedido o guardar su albarán, `sincronizarFacturaDePedido(pedidoId)` pone al día su factura «por pedido». Estados `anulada` y `rectificativa` (y `tipo: 'anulada'` = número anulado sin importes): exclúyelos en los análisis de ventas.
 - `src/aprovisionamientos.js` (V88): stock FIFO de materiales (`materiales`, `compras_material` = líneas de las facturas de gasto, `recuentos_material`) consumido por lotes sembrados (semilla y sustrato) y unidades entregadas (envase según `productos.envase_material_id` o el formato en gramos, etiquetas). Da el consumo por mes, el coste por gramo producido de cada variedad y el envase por unidad de producto; `renderRentabilidad()` se lo pasa a `calcularRentabilidad` como `datos.aprov` para cargar materiales por consumo. Una factura de material con líneas NO cuenta como gasto del mes de compra en rentabilidad (pasa a existencias). Pruébalo en Node con datos reales.
 - `src/controlFacturas.js` (V97): `importeEsperado(f, ctx)` = lo que debe valer una factura según sus albaranes (agrupada), el albarán solo de su pedido o las líneas del pedido; `revisarFacturas()` = descuadres, pedidos facturados dos veces y entregas sin factura. **Copia idéntica en `supabase/functions/portal-cliente/controlFacturas.js`** (bloquea el envío de facturas que no cuadran y hace la revisión diaria a Slack): si cambias una, cambia la otra. Una factura enviada no se modifica: se rectifica y reemite (`rectificarYReemitir`). V98: pedidos y albaranes no se borran — `cancelarPedido()` / `anularAlbaran()` (anulan en cascada su factura con `anularFactura`), `facturaEditable(f)` antes de tocar importes de una factura, y triggers en BD que impiden el borrado. Guías de uso: `docs/GUIA-PEDIDOS-ALBARANES-FACTURAS.md` (Nico) y `docs/GUIA-PRODUCCION-STOCK.md` (Guzmán).
-- `src/plazosPago.js` (V99): `fechaVencimientoFactura(fecha, cliente, primeraEntrega)` = plazo del cliente (15 por defecto, máx. 30) y nunca más de 30 días desde la primera entrega (perecederos). Úsala en toda factura de venta nueva.
+- `src/plazosPago.js` (V99): `fechaVencimientoFactura(fecha, cliente, primeraEntrega)` = plazo del cliente (30 por defecto desde la V100, máx. 30) y nunca más de 30 días desde la primera entrega (perecederos). Úsala en toda factura de venta nueva.
 - `src/tablasInteractivas.js` (V99): `activarMejorasUI()` (useEffect de `MainApp`) hace ordenables, filtrables y con selector de columnas todas las `<table>`, y convierte las notas explicativas (texto `text-xs` gris ≥ 55 caracteres o que empieza por 💡) en un icono ⓘ con nube. No hace falta código en cada tabla; para excluir algo, pon `data-rf-no` en la tabla o su contenedor. Los avisos importantes escríbelos con ⚠️/❌/⛔ o en color (no gris) para que sigan a la vista.
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
