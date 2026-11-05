@@ -34,7 +34,26 @@ th[data-rf-orden="desc"]::after{content:" ▼";font-size:9px;color:#ea580c}
 [data-rf-nota]:hover::before,[data-rf-nota]:focus::before{border-color:#ea580c;color:#ea580c}
 .rf-nube{position:fixed;z-index:10001;max-width:min(360px,86vw);background:#262626;color:#fff;font-size:12px;line-height:1.45;padding:9px 11px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);white-space:pre-line;pointer-events:none}
 @media print{.rf-barra,.rf-nube,.rf-pop{display:none!important}}
-/* V101: en el móvil cada fila de una tabla ancha es una tarjeta «etiqueta: valor» */
+/* V102: en el móvil, por defecto, tabla compacta que cabe en la pantalla (columnas menos importantes ocultas
+   si no caben); opción «▦ Tarjetas» en la barra para ver cada fila como tarjeta «etiqueta: valor» */
+.rf-solo-movil{display:none!important}
+@media (max-width:700px){
+.rf-barra .rf-solo-movil{display:inline-block!important}
+table[data-rf-tabla]:not([data-rf-movil]){font-size:12px;width:100%!important;min-width:0!important}
+table[data-rf-tabla]:not([data-rf-movil])>*>tr>th,table[data-rf-tabla]:not([data-rf-movil])>*>tr>td{padding:6px 5px!important;white-space:normal!important;word-break:break-word;min-width:0!important;max-width:none!important}
+table[data-rf-tabla]:not([data-rf-movil])>thead>tr>th{font-size:10px!important;letter-spacing:0!important;line-height:1.2}
+table[data-rf-tabla]:not([data-rf-movil])>*>tr>th,table[data-rf-tabla]:not([data-rf-movil])>*>tr>td{word-break:normal!important;overflow-wrap:normal!important}
+table[data-rf-tabla]:not([data-rf-movil])>thead>tr>th{overflow-wrap:normal!important;hyphens:auto}
+table[data-rf-tabla]:not([data-rf-movil]) td[data-rf-titulo]>:first-child{white-space:nowrap!important}
+table[data-rf-tabla]:not([data-rf-movil]) td .flex:has(>button){display:grid!important;grid-template-columns:repeat(3,auto);justify-content:end;gap:2px!important}
+table[data-rf-tabla]>thead>tr>th svg,table[data-rf-tabla]>thead>tr>th button{display:none!important}
+table[data-rf-tabla]:not([data-rf-movil]) td .flex{flex-wrap:wrap;gap:2px!important}
+table[data-rf-tabla]:not([data-rf-movil]) td button,table[data-rf-tabla]:not([data-rf-movil]) td a{padding:4px!important}
+table[data-rf-tabla]:not([data-rf-movil]) td svg{width:15px;height:15px}
+table[data-rf-tabla]:not([data-rf-movil]) td .text-lg,table[data-rf-tabla]:not([data-rf-movil]) td .text-base,table[data-rf-tabla]:not([data-rf-movil]) td .text-xl,table[data-rf-tabla]:not([data-rf-movil]) td .text-2xl,table[data-rf-tabla]:not([data-rf-movil]) td.text-lg,table[data-rf-tabla]:not([data-rf-movil]) td.text-base,table[data-rf-tabla]:not([data-rf-movil]) td.text-sm,table[data-rf-tabla]:not([data-rf-movil]) td .text-sm{font-size:12px!important}
+table[data-rf-tabla]:not([data-rf-movil]) td .rounded-full,table[data-rf-tabla]:not([data-rf-movil]) td [class*="px-2"]{white-space:normal!important;padding-left:5px!important;padding-right:5px!important}
+}
+/* V101: modo tarjetas (solo si se elige) */
 @media (max-width:700px){
 table[data-rf-movil]{display:block!important;width:100%!important;min-width:0!important;border:0!important;background:transparent!important}
 table[data-rf-movil]>thead{display:none!important}
@@ -158,6 +177,12 @@ function reglasColumnas() {
     const st = estados.get(t);
     (st?.ocultas || []).forEach(i => reglas.push(`table[data-rf-tabla="${t.getAttribute('data-rf-tabla')}"] tr>:nth-child(${i + 1}){display:none}`));
   });
+  const movil = [];
+  document.querySelectorAll('table[data-rf-tabla]').forEach(t => {
+    const st = estados.get(t);
+    (st?.auto || []).forEach(i => movil.push(`table[data-rf-tabla="${t.getAttribute('data-rf-tabla')}"]:not([data-rf-movil]) tr>:nth-child(${i + 1}){display:none}`));
+  });
+  if (movil.length) reglas.push(`@media (max-width:700px){${movil.join('\n')}}`);
   const css = reglas.join('\n');
   if (estiloColumnas.textContent !== css) estiloColumnas.textContent = css;
 }
@@ -190,8 +215,11 @@ function crearBarra(tabla, st) {
   bCols.addEventListener('click', (e) => { e.stopPropagation(); abrirPop(bCols, panelColumnas(tabla, st)); });
   const bLimpiar = document.createElement('button'); bLimpiar.type = 'button'; bLimpiar.textContent = '✕ Limpiar';
   bLimpiar.addEventListener('click', () => { st.busca = ''; busca.value = ''; st.filtros = {}; st.orden = null; guardar(st); aplicar(tabla, st); });
+  const bVista = document.createElement('button'); bVista.type = 'button'; bVista.className = 'rf-solo-movil';
+  bVista.addEventListener('click', () => { st.vista = st.vista === 'tarjetas' ? 'tabla' : 'tarjetas'; guardar(st); prepararTabla(tabla); });
   const cuenta = document.createElement('span'); cuenta.className = 'rf-cuenta';
-  barra.append(busca, bFiltros, bCols, bLimpiar, cuenta);
+  barra.append(busca, bFiltros, bCols, bVista, bLimpiar, cuenta);
+  st.elVista = bVista;
   st.barra = barra; st.elBusca = busca; st.elLimpiar = bLimpiar; st.elCuenta = cuenta; st.elFiltros = bFiltros;
   return barra;
 }
@@ -199,7 +227,9 @@ function actualizarBarra(tabla, st) {
   const nf = Object.values(st.filtros).filter(v => v !== '').length;
   st.elFiltros.textContent = nf ? `⚲ Filtros (${nf})` : '⚲ Filtros';
   st.elLimpiar.style.display = (st.busca || nf || st.orden) ? '' : 'none';
-  st.elCuenta.textContent = st.visibles === st.total ? `${st.total} filas` : `${st.visibles} de ${st.total}`;
+  st.elCuenta.textContent = (st.visibles === st.total ? `${st.total} filas` : `${st.visibles} de ${st.total}`)
+    + (esMovil() && st.vista !== 'tarjetas' && st.auto.length ? ` · ${st.auto.length} columna${st.auto.length > 1 ? 's' : ''} oculta${st.auto.length > 1 ? 's' : ''} para que quepa (▦ Columnas)` : '');
+  if (st.elVista) st.elVista.textContent = st.vista === 'tarjetas' ? '☰ Ver como tabla' : '▦ Ver como tarjetas';
 }
 function panelColumnas(tabla, st) {
   const box = document.createElement('div');
@@ -209,10 +239,12 @@ function panelColumnas(tabla, st) {
     const nombre = textoCabecera(th);
     if (!nombre) return;
     const l = document.createElement('label');
-    const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !st.ocultas.includes(i);
+    const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !st.ocultas.includes(i) && !(esMovil() && st.auto.includes(i));
     c.addEventListener('change', () => {
       st.ocultas = c.checked ? st.ocultas.filter(x => x !== i) : [...st.ocultas, i];
-      guardar(st); reglasColumnas();
+      // V102: en el móvil, marcar una columna que se había ocultado por espacio la deja fija a la vista
+      if (esMovil()) st.forzadasMovil = c.checked ? [...new Set([...st.forzadasMovil, i])] : st.forzadasMovil.filter(x => x !== i);
+      guardar(st); st.firmaMovil = ''; ajustarMovil(tabla, st); reglasColumnas(); aplicar(tabla, st);
     });
     l.append(c, document.createTextNode(nombre));
     box.appendChild(l);
@@ -245,7 +277,7 @@ function panelFiltros(tabla, st) {
 }
 function guardar(st) {
   const p = leerPrefs();
-  p[st.clave] = { orden: st.orden, ocultas: st.ocultas };
+  p[st.clave] = { orden: st.orden, ocultas: st.ocultas, vista: st.vista, forzadasMovil: st.forzadasMovil };
   guardarPrefs(p);
 }
 
@@ -264,13 +296,15 @@ function prepararTabla(tabla) {
   if (!st) {
     const clave = claveTabla(tabla, hs);
     const pref = leerPrefs()[clave] || {};
-    st = { clave, orden: pref.orden || null, ocultas: pref.ocultas || [], busca: '', filtros: {}, barra: null };
+    st = { clave, orden: pref.orden || null, ocultas: pref.ocultas || [], vista: pref.vista || 'tabla', forzadasMovil: pref.forzadasMovil || [], auto: [], firmaMovil: '', busca: '', filtros: {}, barra: null };
     estados.set(tabla, st);
     tabla.setAttribute('data-rf-tabla', String(++contadorTablas));
   }
-  // V101: tablas de 4 o más columnas se ven como tarjetas en el móvil (etiqueta = texto de la cabecera)
-  if (hs.length >= 4 && !tabla.hasAttribute('data-rf-movil')) tabla.setAttribute('data-rf-movil', '');
-  if (tabla.hasAttribute('data-rf-movil')) {
+  // V102: tarjetas en el móvil solo si se eligen (botón de la barra); etiquetas = texto de la cabecera
+  const tarjetas = hs.length >= 4 && st.vista === 'tarjetas';
+  if (tarjetas && !tabla.hasAttribute('data-rf-movil')) tabla.setAttribute('data-rf-movil', '');
+  if (!tarjetas && tabla.hasAttribute('data-rf-movil')) tabla.removeAttribute('data-rf-movil');
+  if (hs.length >= 4) {
     const etiquetas = hs.map(textoCabecera);
     const iTitulo = etiquetas.findIndex(t => t);
     for (const tbody of tabla.tBodies) for (const tr of tbody.rows) {
@@ -300,7 +334,51 @@ function prepararTabla(tabla) {
     const ancla = anclaBarra(tabla);
     if (st.barra.nextSibling !== ancla || st.barra.parentNode !== ancla.parentNode) { ocupado = true; ancla.parentNode.insertBefore(st.barra, ancla); ocupado = false; }
   }
+  ajustarMovil(tabla, st);
   aplicar(tabla, st);
+}
+
+// V102: en el móvil, si la tabla no cabe, oculta columnas de derecha a izquierda (primero las secundarias;
+// nunca la primera con texto, ni las de botones/casillas, ni las que el usuario marcó en ▦ Columnas)
+const esMovil = () => typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width:700px)').matches;
+const IMPORTANTE = /total|importe|estado|cliente|fecha|nombre|n[ºo°]|factura|pedido|albar|producto|concepto/i;
+function ajustarMovil(tabla, st) {
+  const hs = ths(tabla);
+  const ancla = anclaBarra(tabla);
+  const cont = ancla === tabla ? tabla.parentElement : ancla;
+  if (!cont) return;
+  const firma = [esMovil(), st.vista, hs.length, tabla.tBodies[0]?.rows.length, cont.clientWidth, st.ocultas.join('.'), st.forzadasMovil.join('.')].join('|');
+  if (firma === st.firmaMovil) return;
+  st.firmaMovil = firma;
+  const antes = st.auto.join(',');
+  st.auto = [];
+  if (esMovil() && st.vista !== 'tarjetas' && hs.length >= 3) {
+    reglasColumnas();
+    const etiq = hs.map(textoCabecera);
+    const iTitulo = etiq.findIndex(t => t);
+    // columnas de botones (acciones) o casillas: nunca se ocultan, hacen falta en el móvil
+    const fila = [...(tabla.tBodies[0]?.rows || [])].find(tr => tr.cells.length === hs.length);
+    const conControles = (i) => /acci/i.test(etiq[i]) || !!(fila && fila.cells[i] && fila.cells[i].querySelector('button,a,input,select'));
+    // orden en que se sacrifican las importantes si aún no cabe: fechas, otras, estado, cliente y, lo último, importes
+    const peso = (t) => /fecha|vence|venc/i.test(t) ? 0 : /total|importe/i.test(t) ? 4 : /cliente|nombre|producto|concepto/i.test(t) ? 3 : /estado/i.test(t) ? 2 : 1;
+    const candidatas = (fase) => hs.map((_, i) => i).reverse().filter(i => i !== iTitulo && etiq[i] && !conControles(i) && !st.ocultas.includes(i) && !st.auto.includes(i)
+      && !st.forzadasMovil.includes(i) && (fase === 2 || !IMPORTANTE.test(etiq[i])))
+      .sort((a, b) => fase === 2 ? peso(etiq[a]) - peso(etiq[b]) : 0);
+    for (const fase of [1, 2]) {
+      let vueltas = 0;
+      while (tabla.scrollWidth > cont.clientWidth + 1 && vueltas++ < 30) {
+        const c = candidatas(fase)[0];
+        if (c === undefined) break;
+        st.auto.push(c); reglasColumnas();
+      }
+    }
+    // segunda pasada: vuelve a mostrar (de más a menos importante) las que sí caben
+    for (const c of [...st.auto].sort((a, b) => peso(etiq[b]) - peso(etiq[a]))) {
+      st.auto = st.auto.filter(x => x !== c); reglasColumnas();
+      if (tabla.scrollWidth > cont.clientWidth + 1) { st.auto.push(c); reglasColumnas(); }
+    }
+  }
+  if (st.auto.join(',') !== antes) reglasColumnas();
 }
 
 // ---------- notas informativas ----------
@@ -379,7 +457,10 @@ export function activarMejorasUI(raiz) {
   document.addEventListener('focusout', ocultarNube);
   document.addEventListener('click', clic, true);
   window.addEventListener('scroll', ocultarNube, true);
+  const alGirar = () => programar(); // V102: al girar el móvil o cambiar el tamaño se recalcula qué columnas caben
+  window.addEventListener('resize', alGirar);
   return () => {
+    window.removeEventListener('resize', alGirar);
     obs.disconnect();
     document.removeEventListener('mouseover', sobre); document.removeEventListener('mouseout', fuera);
     document.removeEventListener('focusin', sobre); document.removeEventListener('focusout', ocultarNube);
