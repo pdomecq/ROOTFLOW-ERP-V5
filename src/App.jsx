@@ -22,6 +22,8 @@ import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
 import { importeEsperado, cuadra as facturaCuadra, revisarFacturas } from './controlFacturas.js'; // V97
+import { fechaVencimientoFactura, plazoCliente, PLAZO_PAGO_DEFECTO } from './plazosPago.js'; // V99
+import { activarMejorasUI } from './tablasInteractivas.js'; // V99: tablas ordenables/filtrables y notas en ⓘ
 import { FRECUENCIAS_RECURRENTE, DIAS_SEMANA, primeraEntrega, proximaEntregaDesde, proximasEntregas, entregasAGenerar, diaDeSemana, sumarDias } from './recurrentes.js'; // V90
 
 // ==================== SUPABASE CONFIG ====================
@@ -765,6 +767,8 @@ const MainApp = () => {
   const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
   const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
+  // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
+  useEffect(() => activarMejorasUI(document.getElementById('root')), []);
   const [rentTab, setRentTab] = useState('analisis'); // V88: 'analisis' | 'aprov' (aprovisionamientos)
   const [aprovLeyendo, setAprovLeyendo] = useState(null); // V88: gasto cuyas líneas está leyendo la IA
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
@@ -2061,11 +2065,14 @@ const MainApp = () => {
     const anulada = await anularFactura(f, `Importe erróneo: se sustituye por una factura nueva de ${formatCurrency(d.esperado.total)} (según albarán)`);
     if (!anulada?.rectificativa) return false;
     const hoy = new Date().toISOString().split('T')[0];
-    const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cli?.plazo_pago_dias, 10) || 30));
+    // V99: vence a los días del cliente (15 por defecto) y nunca más de 30 días después de la primera entrega
+    const fechasEntrega = (Array.isArray(f.albaranes_ids) ? f.albaranes_ids : []).map(id => albaranes.find(a => a.id === id)).filter(Boolean).map(a => a.fecha_entrega_real || a.fecha_emision);
+    const primeraEntrega = fechasEntrega.sort()[0] || pedidos.find(p => p.id === f.pedido_id)?.fecha_entrega || f.periodo_desde || null;
+    const vto = fechaVencimientoFactura(hoy, cli, primeraEntrega);
     const prefijo = `F-${hoy.slice(0, 4)}-`;
     const { fuente, albaranId, ...imp } = d.esperado;
     const datos = {
-      pedido_id: f.pedido_id || null, cliente_id: f.cliente_id, fecha: hoy, fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente',
+      pedido_id: f.pedido_id || null, cliente_id: f.cliente_id, fecha: hoy, fecha_vencimiento: vto, estado: 'pendiente',
       tipo: f.tipo || (Array.isArray(f.albaranes_ids) && f.albaranes_ids.length ? 'agrupada' : 'pedido'), albaranes_ids: f.albaranes_ids || [],
       periodo_desde: f.periodo_desde || null, periodo_hasta: f.periodo_hasta || null, concepto: f.concepto || null, ...(f.descuento_pct != null ? { descuento_pct: f.descuento_pct } : {}), ...(f.plazo_pago_dias ? { plazo_pago_dias: f.plazo_pago_dias } : {}),
       ...imp, iva_porcentaje: IVA_VENTAS, recargo_equivalencia: imp.re_importe > 0, re_porcentaje: imp.re_importe > 0 ? RE_VENTAS : 0,
@@ -2245,11 +2252,11 @@ const MainApp = () => {
     const total = r2(base + iva + re);
     if (!window.confirm(`Emitir una factura NUEVA del pedido #${pedidoId} (${cli?.nombre || ''}) con fecha de hoy:\n\nBase ${formatCurrency(base)} + IVA ${formatCurrency(iva)}${re ? ` + RE ${formatCurrency(re)}` : ''} = ${formatCurrency(total)}\n\n(Las líneas y precios son los que tiene ahora el pedido: corrígelo antes si hace falta.)`)) return;
     const hoy = new Date().toISOString().split('T')[0];
-    const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cli?.plazo_pago_dias, 10) || 30));
+    const vto = fechaVencimientoFactura(hoy, cli, pedidoFac?.fecha_entrega || null); // V99
     const prefijo = `F-${hoy.slice(0, 4)}-`;
     const datos = {
       id: await generarIdSecuencial('facturas', prefijo, 4), pedido_id: pedidoId, cliente_id: anulada.cliente_id, fecha: hoy,
-      fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente', tipo: 'pedido', subtotal, descuento_aplicado: descuento,
+      fecha_vencimiento: vto, estado: 'pendiente', tipo: 'pedido', subtotal, descuento_aplicado: descuento,
       base_imponible: base, iva_porcentaje: IVA_VENTAS, iva, recargo_equivalencia: re > 0, re_porcentaje: re > 0 ? RE_VENTAS : 0, re_importe: re, total,
     };
     const res = await insertarConIdUnico('facturas', datos, prefijo, 4);
@@ -6642,8 +6649,8 @@ ${pedidoLinea ? `^FO260,258
         const year = new Date().getFullYear();
         // V73: ID robusto (antes COUNT+1 → duplicate key si se borraba alguna factura)
         const facturaId = await generarIdSecuencial('facturas', `F-${year}-`, 4);
-        const fechaVencimiento = new Date(); 
-        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
+        // V99: plazo del cliente (15 días por defecto), como mucho 30 días desde la entrega (productos perecederos)
+        const fechaVencimientoIso = fechaVencimientoFactura(new Date().toISOString().split('T')[0], clientes.find(c => c.id === form.cliente_id), form.fecha_entrega || null);
         const baseImponible = total;
         
         // IVA 4% para alimentos (microbrotes)
@@ -6663,7 +6670,7 @@ ${pedidoLinea ? `^FO260,258
           pedido_id: pedidoId, 
           cliente_id: form.cliente_id, 
           fecha: fechaHoy, 
-          fecha_vencimiento: fechaVencimiento.toISOString().split('T')[0], 
+          fecha_vencimiento: fechaVencimientoIso, 
           estado: 'pendiente', 
           subtotal, 
           descuento_aplicado: descuentoAplicado, 
@@ -6714,7 +6721,7 @@ ${pedidoLinea ? `^FO260,258
       sepa_mandato_ref: '',
       sepa_mandato_fecha: '',
       sepa_tipo: 'B2B',
-      plazo_pago_dias: 30,
+      plazo_pago_dias: PLAZO_PAGO_DEFECTO, // V99
     };
     
     const [form, setForm, clearFormStorage] = useFormPersistence(
@@ -7114,15 +7121,15 @@ ${pedidoLinea ? `^FO260,258
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <p className="font-semibold text-neutral-900 text-sm">📅 Plazo de pago</p>
-              <p className="text-xs text-neutral-500">Máximo 30 días para productos perecederos (Ley 15/2010 que modifica Ley 3/2004)</p>
+              <p className="text-xs text-neutral-500">Por defecto 15 días. Máximo legal para productos frescos: 30 días desde la entrega (Ley 3/2004 y Ley 12/2013). En facturas agrupadas el ERP adelanta el vencimiento si hace falta.</p>
             </div>
             <div className="flex items-center gap-2">
               <input 
                 type="number" 
                 min="1" 
                 max="30"
-                value={form.plazo_pago_dias || 30} 
-                onChange={e => setForm({...form, plazo_pago_dias: Math.min(30, Math.max(1, parseInt(e.target.value) || 30))})} 
+                value={form.plazo_pago_dias || PLAZO_PAGO_DEFECTO} 
+                onChange={e => setForm({...form, plazo_pago_dias: Math.min(30, Math.max(1, parseInt(e.target.value) || PLAZO_PAGO_DEFECTO))})} 
                 className="w-20 px-3 py-1.5 rounded-lg border border-neutral-300 text-center font-bold"
               />
               <span className="text-sm font-semibold text-neutral-700">días</span>
@@ -12849,13 +12856,13 @@ ${pedidoLinea ? `^FO260,258
     // Factura como en un pedido normal, salvo clientes con facturación agrupada (se facturan por albaranes)
     if (!['semanal', 'quincenal', 'mensual'].includes(cliente?.periodicidad_facturacion)) {
       const year = new Date().getFullYear();
-      const vto = new Date(); vto.setDate(vto.getDate() + (parseInt(cliente?.plazo_pago_dias, 10) || 30));
+      const vto = fechaVencimientoFactura(hoyISO(), cliente, fechaEntrega); // V99
       const base = total;
       const iva = base * (IVA_VENTAS / 100);
       const re = cliente?.recargo_equivalencia ? base * (RE_VENTAS / 100) : 0;
       const facturaData = {
         id: await generarIdSecuencial('facturas', `F-${year}-`, 4), pedido_id: ped.id, cliente_id: pr.cliente_id, fecha: hoyISO(),
-        fecha_vencimiento: vto.toISOString().split('T')[0], estado: 'pendiente', subtotal, descuento_aplicado: descuentoAplicado,
+        fecha_vencimiento: vto, estado: 'pendiente', subtotal, descuento_aplicado: descuentoAplicado,
         base_imponible: base, iva_porcentaje: IVA_VENTAS, iva, recargo_equivalencia: !!cliente?.recargo_equivalencia,
         re_porcentaje: re > 0 ? RE_VENTAS : 0, re_importe: re, total: base + iva + re,
       };
@@ -13816,7 +13823,7 @@ ${pedidoLinea ? `^FO260,258
           ${(() => {
             const cli = clientes.find(c => c.id === factura.cliente_id);
             const usaSepa = cli?.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
-            const plazo = factura.plazo_pago_dias || cli?.plazo_pago_dias || 30;
+            const plazo = factura.plazo_pago_dias || plazoCliente(cli); // V99
             return `
             <div style="margin-top: 30px; padding: 20px; background: ${usaSepa ? '#eff6ff' : '#f0fdf4'}; border-left: 4px solid ${usaSepa ? '#3b82f6' : '#2D6A4F'}; border-radius: 6px;">
               <h3 style="font-size: 11px; color: ${usaSepa ? '#1e40af' : '#2D6A4F'}; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; font-weight: 700;">
@@ -13843,7 +13850,7 @@ ${pedidoLinea ? `^FO260,258
                 </div>
               `}
               <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed ${usaSepa ? '#93c5fd' : '#86efac'}; font-size: 11px; color: #444; line-height: 1.5;">
-                <p style="margin-bottom: 4px;"><strong>Plazo de pago:</strong> ${plazo} días desde la fecha de factura (Ley 15/2010 productos perecederos).</p>
+                <p style="margin-bottom: 4px;"><strong>Vencimiento:</strong> ${formatDate(factura.fecha_vencimiento)} (${plazo} días; productos frescos y perecederos: máximo 30 días desde la entrega, Ley 3/2004 y Ley 12/2013).</p>
                 <p style="font-style: italic;">El impago en plazo devengará intereses de demora conforme al Art. 7 de la Ley 3/2004, de 29 de diciembre, por la que se establecen medidas de lucha contra la morosidad en las operaciones comerciales.</p>
               </div>
             </div>
@@ -13943,7 +13950,7 @@ ${pedidoLinea ? `^FO260,258
           {(() => {
             const cli = clientes.find(c => c.id === factura.cliente_id);
             const usaSepa = cli?.sepa_activo && factura.metodo_cobro === 'sepa_b2b';
-            const plazo = factura.plazo_pago_dias || cli?.plazo_pago_dias || 30;
+            const plazo = factura.plazo_pago_dias || plazoCliente(cli); // V99
             return (
               <div className={`mt-6 p-4 ${usaSepa ? 'bg-blue-50 border-blue-200' : 'bg-emerald-50 border-emerald-200'} border rounded-lg`}>
                 <h3 className={`text-xs font-bold ${usaSepa ? 'text-blue-700' : 'text-emerald-700'} uppercase mb-2 tracking-wide`}>
@@ -24999,7 +25006,8 @@ SELECT cron.schedule(
     }
     
     const fechaHoy = new Date().toISOString().split('T')[0];
-    const fechaVto = new Date(); fechaVto.setDate(fechaVto.getDate() + 30);
+    // V99: vence a los días del cliente (15 por defecto) y nunca más de 30 días después de la primera entrega del periodo
+    const fechaVtoIso = fechaVencimientoFactura(fechaHoy, grupo.cliente, grupo.desde);
     
     const periodLabel = { semanal: 'semana', quincenal: 'quincena', mensual: 'mes' }[grupo.cliente.periodicidad_facturacion] || 'periodo';
     const concepto = `Factura agrupada (${periodLabel}) · ${grupo.albaranes.length} albarán${grupo.albaranes.length !== 1 ? 'es' : ''} del ${formatDate(grupo.desde)} al ${formatDate(grupo.hasta)}` +
@@ -25010,7 +25018,7 @@ SELECT cron.schedule(
       pedido_id: null,
       cliente_id: grupo.cliente.id,
       fecha: fechaHoy,
-      fecha_vencimiento: fechaVto.toISOString().split('T')[0],
+      fecha_vencimiento: fechaVtoIso,
       estado: 'pendiente',
       subtotal: grupo.subtotal,
       descuento_aplicado: grupo.descuento,
