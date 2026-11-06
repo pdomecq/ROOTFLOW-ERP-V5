@@ -74,6 +74,46 @@ function subconjuntoExacto(facturas, importe) {
   return null;
 }
 
+// V108: combinaciones de 2 o más facturas pendientes que suman el importe (una remesa del TPV junta los pagos del día).
+// Primero las de un mismo cliente (las más antiguas antes); de facturas iguales solo cuenta una combinación.
+// Entre clientes distintos solo se prueban combinaciones de hasta 3 facturas.
+export function combinacionesFacturas(facturas, importe) {
+  const objetivo = r2(importe);
+  const mismoCliente = [];
+  const variosClientes = [];
+  const clave = (sel) => sel.map((f) => `${f.cliente_id}|${r2(f.total)}`).sort().join(',');
+  const vistas = new Set();
+  const porCliente = new Map();
+  for (const f of facturas) { if (!porCliente.has(f.cliente_id)) porCliente.set(f.cliente_id, []); porCliente.get(f.cliente_id).push(f); }
+  for (const lista0 of porCliente.values()) {
+    const lista = lista0.slice(0, 12);
+    for (let mask = 1; mask < 1 << lista.length; mask++) {
+      const sel = lista.filter((_, i) => mask & (1 << i));
+      if (sel.length < 2 || !iguales(sel.reduce((s, f) => s + r2(f.total), 0), objetivo)) continue;
+      const k = clave(sel);
+      if (vistas.has(k)) continue; // 3 facturas de 62,40 €: F-18+F-20 y F-18+F-23 son la misma combinación
+      vistas.add(k);
+      mismoCliente.push(sel);
+      if (mismoCliente.length > 5) break;
+    }
+  }
+  if (!mismoCliente.length) {
+    const lista = facturas.slice(0, 30);
+    for (let i = 0; i < lista.length && variosClientes.length < 5; i++)
+      for (let j = i + 1; j < lista.length && variosClientes.length < 5; j++) {
+        const s2 = r2(lista[i].total) + r2(lista[j].total);
+        const pares = [[lista[i], lista[j]]];
+        for (let k = j + 1; k < lista.length; k++) if (iguales(s2 + r2(lista[k].total), objetivo)) pares.push([lista[i], lista[j], lista[k]]);
+        for (const sel of pares) {
+          if (!iguales(sel.reduce((s, f) => s + r2(f.total), 0), objetivo) || new Set(sel.map((f) => f.cliente_id)).size < 2) continue;
+          const k2 = clave(sel);
+          if (!vistas.has(k2)) { vistas.add(k2); variosClientes.push(sel); }
+        }
+      }
+  }
+  return { mismoCliente, variosClientes };
+}
+
 /**
  * @param movimientos [{ id, fecha, fecha_valor, importe, concepto, contraparte, estado, factura_ids }]
  * @param facturas    [{ id, cliente_id, fecha, total, estado, tipo, fecha_cobro }]
@@ -145,13 +185,42 @@ export function conciliar(movimientos, facturas, clientes, alias = []) {
     if (cobradaEseDia.length === 1) { decidir('ya_cobrada', cobradaEseDia, `Mismo importe que ${cobradaEseDia[0].id}, cobrada en el ERP el ${cobradaEseDia[0].fecha_cobro}`); continue; }
     if (exactasCobradas.length === 1 && !exactasPend.length) { decidir('ya_cobrada', exactasCobradas, `Mismo importe que ${exactasCobradas[0].id}, cobrada en el ERP el ${exactasCobradas[0].fecha_cobro}`); continue; }
     const debiles = new Set(conNivel.map((x) => x.c.id));
-    const candidatas = [...exactasPend].sort((a, b) => (debiles.has(b.cliente_id) ? 1 : 0) - (debiles.has(a.cliente_id) ? 1 : 0));
+    const esTpv = RE_TPV.test(nt);
+    // V108: clientes que ya han pagado antes con el TPV (sus remesas son de fiar)
+    const clientesTpv = new Set();
+    for (const x of movimientos || []) {
+      if (x.id === m.id || !['conciliado', 'ya_cobrada'].includes(x.estado) || !RE_TPV.test(normalizar(x.concepto))) continue;
+      (x.factura_ids || []).forEach((id) => { const f = porId.get(id); if (f?.cliente_id != null) clientesTpv.add(f.cliente_id); });
+    }
+    // V108: facturas del mismo importe de UN solo cliente que ya paga con tarjeta → se cobra sola la más antigua
+    if (esTpv && exactasPend.length && clientesTpv.has(exactasPend[0].cliente_id) && exactasPend.every((f) => f.cliente_id === exactasPend[0].cliente_id)) {
+      decidir('auto', [exactasPend[0]], `Remesa del TPV por el importe de ${exactasPend[0].id} (el cliente ya paga con tarjeta)`);
+      continue;
+    }
+    // V108: una remesa del TPV junta todos los pagos con tarjeta del día → puede cubrir VARIAS facturas
+    if (!exactasPend.length) {
+      const pendTodas = libres((f) => ESTADOS_PENDIENTE.includes(f.estado) && emitidaAntes(f) && dias(fecha, f.fecha) <= 120);
+      const combos = combinacionesFacturas(pendTodas, m.importe);
+      if (combos.mismoCliente.length) {
+        const [sel] = combos.mismoCliente;
+        const cli = (clientes || []).find((c) => c.id === sel[0].cliente_id);
+        const seguro = esTpv && combos.mismoCliente.length === 1 && clientesTpv.has(sel[0].cliente_id);
+        decidir(seguro ? 'auto' : 'sugerido', sel, `${esTpv ? 'Remesa del TPV' : 'Ingreso'} = ${sel.map((f) => f.id).join(' + ')}${cli ? ` (${cli.nombre.trim()})` : ''}${seguro ? '' : combos.mismoCliente.length + combos.variosClientes.length > 1 ? ' · hay otras combinaciones posibles, revísalo' : ' · confírmalo'}`);
+        continue;
+      }
+      if (combos.variosClientes.length) {
+        const [sel] = combos.variosClientes;
+        decidir('sugerido', sel, `${esTpv ? 'Remesa del TPV' : 'Ingreso'} = ${sel.map((f) => f.id).join(' + ')} (varios clientes · confírmalo)`);
+        continue;
+      }
+    }
+    const candidatas = [...exactasPend].sort((a, b) => (clientesTpv.has(b.cliente_id) ? 2 : debiles.has(b.cliente_id) ? 1 : 0) - (clientesTpv.has(a.cliente_id) ? 2 : debiles.has(a.cliente_id) ? 1 : 0));
     if (candidatas.length) {
       const clientesDistintos = new Set(candidatas.map((f) => f.cliente_id)).size;
       decidir('sugerido', candidatas.slice(0, 5), `${RE_TPV.test(nt) ? 'Pago con tarjeta' : 'Ingreso'} del mismo importe que ${candidatas.length === 1 ? candidatas[0].id : `${candidatas.length} facturas${clientesDistintos > 1 ? ' de varios clientes' : ''}`}`);
       continue;
     }
-    decidir('sin_casar', [], RE_TPV.test(nt) ? 'Pago con tarjeta sin factura del mismo importe (¿venta sin factura?)' : 'Ingreso sin factura candidata');
+    decidir('sin_casar', [], esTpv ? 'Remesa del TPV sin facturas pendientes que sumen ese importe (¿venta sin factura / ticket?)' : 'Ingreso sin factura candidata');
   }
   return out;
 }

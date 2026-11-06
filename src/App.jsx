@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Copy } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { reconstruirSaldos, resumenMensual, pagosRecurrentes, prevision as previsionTesoreria, saldoEn, diasCobro, clasificarMovimiento, TIPOS_MOVIMIENTO } from './tesoreria.js'; // V107
+import { reconstruirSaldos, resumenMensual, pagosRecurrentes, prevision as previsionTesoreria, saldoEn, diasCobro, clasificarMovimiento, TIPOS_MOVIMIENTO, planContabilizarBanco, lineasAsientoBanco, CONTRAPARTIDAS_BANCO } from './tesoreria.js'; // V107 · V108
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
@@ -831,6 +831,9 @@ const MainApp = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, ajustesTab, historialFiltros]);
   const [tesoHorizonte, setTesoHorizonte] = useState(60); // V107: días de previsión en Tesorería
+  const [contaCuentas, setContaCuentas] = useState({}); // V108: contrapartida elegida por movimiento del banco
+  const [contaVerTodo, setContaVerTodo] = useState(false); // V108
+  const [contaTrabajando, setContaTrabajando] = useState(false); // V108
   const [rentTab, setRentTab] = useState('analisis'); // V88: 'analisis' | 'aprov' (aprovisionamientos)
   const [aprovLeyendo, setAprovLeyendo] = useState(null); // V88: gasto cuyas líneas está leyendo la IA
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
@@ -1344,6 +1347,7 @@ const MainApp = () => {
     // Grupo 5 - Cuentas financieras
     '520': { nombre: 'Deudas a C/P con entidades de crédito', tipo: 'P', grupo: '5' },
     '521': { nombre: 'Deudas a C/P', tipo: 'P', grupo: '5' },
+    '5201': { nombre: 'Tarjeta de crédito (deuda con el banco)', tipo: 'P', grupo: '5' }, // V108
     '551': { nombre: 'Cuenta corriente con socios y administradores', tipo: 'P', grupo: '5' }, // DEUDA A SOCIO
     '555': { nombre: 'Partidas pendientes de aplicación', tipo: 'A', grupo: '5' },
     '570': { nombre: 'Caja, euros', tipo: 'A', grupo: '5' },
@@ -1953,6 +1957,9 @@ const MainApp = () => {
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [movimientosBanco, facturas, gastos, clientes, asientoLineasDB, ajustesSistema, userProfiles]);
+  // V108: qué movimientos del banco faltan en la contabilidad (cálculo en src/tesoreria.js)
+  const planBanco = useMemo(() => planContabilizarBanco({ movs: movimientosBanco, gastos, aportaciones: aportacionesSocios, asientos: asientosDB, lineas: asientoLineasDB, socios: tesoreria.socios }),
+    [movimientosBanco, gastos, aportacionesSocios, asientosDB, asientoLineasDB, tesoreria.socios]);
   const albaranPedidos = albaranPedidosData || [];
   // V64 - Insumos
   const insumos = insumosData || [];
@@ -2522,6 +2529,10 @@ const MainApp = () => {
       } else if (formaPago === 'caja') {
         cuentaPago = '570';
         conceptoPago = 'Caja, euros';
+      } else if (formaPago === 'tarjeta_empresa') {
+        // V108: lo pagado con la tarjeta de crédito es deuda con el banco hasta que el BBVA la cobra de la cuenta
+        cuentaPago = '5201';
+        conceptoPago = 'Tarjeta de crédito';
       } else {
         cuentaPago = '572';
         conceptoPago = 'Bancos c/c vista, euros';
@@ -3135,7 +3146,7 @@ const MainApp = () => {
     });
     
     // Deudas a C/P
-    Object.entries(saldos).filter(([c]) => ['520', '521', '551', '465'].includes(c)).forEach(([cuenta, s]) => {
+    Object.entries(saldos).filter(([c]) => ['520', '5201', '521', '551', '465'].includes(c)).forEach(([cuenta, s]) => {
       if (s.saldo !== 0) {
         data.push(['  ' + cuenta + ' ' + (PLAN_CUENTAS[cuenta]?.nombre || ''), s.saldo, '']);
         totalPasivoCorrente += s.saldo;
@@ -8773,7 +8784,7 @@ ${pedidoLinea ? `^FO260,258
               </div>
               <div><span className="font-mono">472</span> IVA {conDesglose ? '' : `${ivaPorcentaje}%`}: <strong>{iva}€</strong> (D)</div>
               {desgloseForm.retencion > 0 && <div><span className="font-mono">4751</span> Retención IRPF: <strong>{desgloseForm.retencion.toFixed(2)}€</strong> (H)</div>}{/* V85 */}
-              <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
+              <div><span className="font-mono">{form.forma_pago?.startsWith('socio_') ? '551' : form.forma_pago === 'caja' ? '570' : form.forma_pago === 'tarjeta_empresa' ? '5201' : '572'}</span> Pago: <strong>{form.importe}€</strong> (H)</div>
             </div>
           </div>
         )}
@@ -15924,7 +15935,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
       const map = {
         banco: 'Banco sociedad (572)',
         caja: 'Caja efectivo (570)',
-        tarjeta_empresa: 'Tarjeta empresa (572)',
+        tarjeta_empresa: 'Tarjeta empresa (5201)', // V108
         transferencia: 'Transferencia (572)',
         socio_nico: 'Pagado por Nico - Deuda socio (551)',
         socio_peri: 'Pagado por Peri - Deuda socio (551)',
@@ -15934,6 +15945,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
     };
     const cuentaContableFormaPago = (val) => {
       if (val === 'caja') return '570';
+      if (val === 'tarjeta_empresa') return '5201'; // V108
       if (['socio_nico', 'socio_peri', 'socio_guzman'].includes(val)) return '551';
       return '572';
     };
@@ -29760,6 +29772,265 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
   };
 
   // ==================== V107: TESORERÍA ====================
+  // ==================== V108: CONTABILIZAR LOS MOVIMIENTOS DEL BANCO ====================
+  const ALIAS_SOCIO = { socio_peri: 'Peri', socio_guzman: 'Guzmán', socio_nico: 'Nico' };
+  const nrmBanco = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const conceptoMovCorto = (m) => String(m.contraparte || m.concepto || '').replace(/\s*\/\/\s*/g, ' · ').replace(/\*{4,}\d*/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const cuentaElegidaBanco = (f) => contaCuentas[f.mov.id] || f.cuenta;
+  // Crea un asiento con sus líneas (si ya existe uno con esa referencia, no hace nada)
+  const crearAsientoBanco = async ({ fecha, concepto, referencia, lineas }, numero) => {
+    const { data: existe, error: e0 } = await supabase.from('asientos_contables').select('id').eq('referencia', referencia).limit(1);
+    if (e0) return { ok: false, error: e0.message };
+    if (existe?.length) return { ok: true, omitido: true };
+    const { data: a, error } = await supabase.from('asientos_contables').insert({ fecha, numero, concepto, referencia }).select().single();
+    if (error) return { ok: false, error: error.message };
+    const { error: e2 } = await supabase.from('asiento_lineas').insert(lineas.map(l => ({ ...l, asiento_id: a.id })));
+    if (e2) { await supabase.from('asientos_contables').delete().eq('id', a.id); return { ok: false, error: e2.message }; }
+    return { ok: true };
+  };
+  const lineasAportacion = (importe, socioClave) => {
+    const imp = Math.round(Math.abs(Number(importe) || 0) * 100) / 100;
+    return [
+      { cuenta: '572', concepto: 'Bancos c/c vista, euros', debe: imp, haber: 0 },
+      { cuenta: '551', concepto: `C/C con socios - ${ALIAS_SOCIO[socioClave] || socioClave || ''}`.trim(), debe: 0, haber: imp },
+    ];
+  };
+  /** filas: movimientos propuestos · aportaciones: aportaciones_socios sin asiento · regularizar: { fecha, diferencia, cuenta } */
+  const contabilizarBanco = async ({ filas = [], aportaciones = [], regularizar = null }) => {
+    const total = filas.length + aportaciones.length + (regularizar ? 1 : 0);
+    if (!total) return;
+    const lineasTxt = [
+      ...filas.slice(0, 12).map(f => `• ${formatDate(f.mov.fecha)} · ${conceptoMovCorto(f.mov).slice(0, 40)} · ${formatCurrency(f.mov.importe)} → ${cuentaElegidaBanco(f)}`),
+      ...(filas.length > 12 ? [`… y ${filas.length - 12} más`] : []),
+      ...(aportaciones.length ? [`• ${aportaciones.length} aportación(es) de socios (${formatCurrency(aportaciones.reduce((t, a) => t + (Number(a.importe) || 0), 0))}) → 572 / 551`] : []),
+      ...(regularizar ? [`• Saldo inicial del banco: ${formatCurrency(regularizar.diferencia)} contra la ${regularizar.cuenta}`] : []),
+    ];
+    if (!window.confirm(`Se crearán ${total} asiento(s):\n\n${lineasTxt.join('\n')}\n\n¿Seguir?`)) return;
+    setContaTrabajando(true);
+    const errores = [];
+    let hechos = 0;
+    try {
+      let num = parseInt(String(await generarIdSecuencial('asientos_contables', 'A', 1, 'numero')).replace(/\D/g, ''), 10) || 1;
+      const crear = async (datos, etiqueta) => {
+        const r = await crearAsientoBanco(datos, `A${num}`);
+        if (!r.ok) errores.push(`${etiqueta}: ${r.error}`);
+        else if (!r.omitido) { num++; hechos++; }
+      };
+      for (const a of aportaciones) {
+        await crear({ fecha: a.fecha, concepto: `Aportación de ${ALIAS_SOCIO[a.socio_clave] || a.socio_clave} a la sociedad`, referencia: `APO-${a.id}`, lineas: lineasAportacion(a.importe, a.socio_clave) }, `Aportación ${formatDate(a.fecha)}`);
+      }
+      for (const f of filas) {
+        const m = f.mov;
+        const cuenta = cuentaElegidaBanco(f);
+        const etiqueta = `${formatDate(m.fecha)} ${formatCurrency(m.importe)}`;
+        if (cuenta === '551' && Number(m.importe) > 0 && f.socio) {
+          // Aportación que no estaba apuntada: se apunta también en Socios para que cuente en su saldo
+          const { data: ap, error } = await supabase.from('aportaciones_socios').insert({ socio_clave: f.socio, fecha: String(m.fecha_valor || m.fecha).slice(0, 10), importe: Math.abs(Number(m.importe)), metodo: 'transferencia', concepto: 'Aportación detectada en el banco' }).select().single();
+          if (error) { errores.push(`${etiqueta}: ${error.message}`); continue; }
+          await crear({ fecha: ap.fecha, concepto: `Aportación de ${ALIAS_SOCIO[f.socio]} a la sociedad`, referencia: `APO-${ap.id}`, lineas: lineasAportacion(m.importe, f.socio) }, etiqueta);
+          continue;
+        }
+        await crear({ fecha: String(m.fecha).slice(0, 10), concepto: `Banco: ${conceptoMovCorto(m)}`, referencia: `BAN-${m.id}`, lineas: lineasAsientoBanco(m, cuenta, PLAN_CUENTAS[cuenta]?.nombre) }, etiqueta);
+      }
+      if (regularizar && Math.abs(regularizar.diferencia) > 0.009) {
+        // Si ya había un ajuste del saldo inicial (y luego se arreglaron asientos antiguos), se rehace con el total
+        if (regularizar.previo) await deshacerAsientoBanco('BAN-INICIO', null);
+        const totalAjuste = Math.round(((Number(regularizar.diferencia) || 0) + (Number(regularizar.previo) || 0)) * 100) / 100;
+        const imp = Math.abs(totalAjuste);
+        const sube = totalAjuste > 0;
+        await crear({ fecha: regularizar.fecha, concepto: 'Ajuste del saldo inicial del banco (movimientos anteriores al primer extracto)', referencia: 'BAN-INICIO', lineas: [
+          { cuenta: '572', concepto: 'Bancos c/c vista, euros', debe: sube ? imp : 0, haber: sube ? 0 : imp },
+          { cuenta: regularizar.cuenta, concepto: PLAN_CUENTAS[regularizar.cuenta]?.nombre || regularizar.cuenta, debe: sube ? 0 : imp, haber: sube ? imp : 0 },
+        ] }, 'Saldo inicial');
+      }
+    } catch (e) {
+      errores.push(String(e?.message || e));
+    } finally {
+      setContaTrabajando(false);
+      refetchAsientos(); refetchAsientoLineas(); refetchAportacionesSocios();
+    }
+    if (errores.length) alert(`⚠️ ${hechos} asiento(s) creados, pero ${errores.length} fallaron:\n\n${errores.slice(0, 10).join('\n')}`);
+    else alert(`✅ ${hechos} asiento(s) creados.`);
+  };
+  const deshacerAsientoBanco = async (referencia, aviso = 'El movimiento volverá a la lista de pendientes.') => {
+    if (aviso !== null && !window.confirm(`¿Borrar el asiento ${referencia}? ${aviso}`)) return false;
+    const { data: asis, error } = await supabase.from('asientos_contables').select('id').eq('referencia', referencia);
+    if (error) { alert('❌ ' + error.message); return; }
+    for (const a of asis || []) {
+      const { error: e1 } = await supabase.from('asiento_lineas').delete().eq('asiento_id', a.id);
+      if (e1) { alert('❌ ' + e1.message); return; }
+      const { error: e2 } = await supabase.from('asientos_contables').delete().eq('id', a.id);
+      if (e2) { alert('❌ ' + e2.message); return false; }
+    }
+    refetchAsientos(); refetchAsientoLineas();
+    return true;
+  };
+  // Asientos de la 572 que no cuadran con el banco: de gastos borrados (se borran) y de gastos cambiados (se rehacen)
+  const arreglarAsientosBanco = async (lista) => {
+    const borrar = lista.filter(x => x.tipo === 'gasto_borrado');
+    const rehacer = lista.filter(x => x.tipo === 'gasto_descuadrado');
+    if (!window.confirm(`Voy a arreglar ${lista.length} asiento(s):\n\n${borrar.length ? `• Borrar ${borrar.length} asiento(s) de gastos que ya no existen (${formatCurrency(borrar.reduce((t, x) => t - x.importe, 0))} que restaban del banco)\n` : ''}${rehacer.length ? `• Rehacer ${rehacer.length} asiento(s) con el importe y la forma de pago actuales de su gasto\n` : ''}\n¿Seguir?`)) return;
+    setContaTrabajando(true);
+    try {
+      for (const x of borrar) await deshacerAsientoBanco(x.asiento.referencia, null);
+      for (const x of rehacer) await rehacerAsientoGasto(x.gasto.id, x.gasto, proveedores.find(p => p.id === x.gasto.proveedor_id)?.nombre);
+      alert('✅ Asientos arreglados.');
+    } catch (e) {
+      alert('❌ ' + (e?.message || e));
+    } finally {
+      setContaTrabajando(false);
+      refetchAsientos(); refetchAsientoLineas();
+    }
+  };
+  // Cobro apuntado en el banco que no está en el BBVA
+  const arreglarCobroSinIngreso = async (x, como) => {
+    const f = facturas.find(ff => ff.id === x.facturaId);
+    if (como === 'pendiente') {
+      if (f && f.estado === 'pagada') { await anularCobro(f.id); return; }
+      await deshacerAsientoBanco(x.asiento.referencia, f ? `La factura ${f.id} está ${f.estado}: su cobro no tiene sentido.` : 'La factura ya no existe.');
+      return;
+    }
+    if (!window.confirm(`¿${x.facturaId} se cobró en efectivo? Paso su cobro de la 572 (banco) a la 570 (caja).`)) return;
+    const { error } = await supabase.from('asiento_lineas').update({ cuenta: '570', concepto: 'Caja, euros' }).eq('asiento_id', x.asiento.id).eq('cuenta', '572');
+    if (error) { alert('❌ ' + error.message); return; }
+    refetchAsientoLineas();
+  };
+  // Cargo sin gasto: abre el formulario de gasto relleno con el movimiento (su asiento ya paga contra la 572)
+  const registrarGastoDesdeMovimiento = (m) => {
+    const t = nrmBanco(`${m.contraparte || ''} ${m.concepto || ''}`);
+    const prov = proveedores.find(p => { const w = nrmBanco(p.nombre).split(' ').filter(x => x.length > 3); return w.length && w.some(x => t.includes(x)); });
+    setEditingItem({ fecha: String(m.fecha).slice(0, 10), concepto: conceptoMovCorto(m), proveedor_id: prov?.id || null, importe: Math.abs(Number(m.importe)), forma_pago: 'banco', pagado: true, categoria: prov?.categoria && categoriasGasto[prov.categoria] ? prov.categoria : 'otros', iva_tipo: 'general' });
+    setShowModal('gasto');
+  };
+  // Gasto apuntado como «banco» que no está en el banco: casi siempre se pagó con la tarjeta de crédito
+  const pasarGastoATarjeta = async (g) => {
+    if (!window.confirm(`«${g.concepto}» (${formatCurrency(g.importe)}, ${formatDate(g.fecha)}) no aparece en el BBVA.\n\n¿Se pagó con la tarjeta de crédito? Cambio la forma de pago a «Tarjeta empresa» y rehago su asiento (contra la 5201 en vez de la 572).`)) return;
+    const { error } = await supabase.from('gastos').update({ forma_pago: 'tarjeta_empresa' }).eq('id', g.id);
+    if (error) { alert('❌ No se pudo cambiar: ' + error.message); return; }
+    await rehacerAsientoGasto(g.id, { ...g, forma_pago: 'tarjeta_empresa' }, proveedores.find(p => p.id === g.proveedor_id)?.nombre);
+    refetchGastos();
+  };
+  const renderContabilizarBanco = () => {
+    const pb = planBanco;
+    const eur = (n) => formatCurrency(n);
+    const pendientes = pb.pendientes;
+    const automaticas = pendientes.filter(f => !f.faltaGasto);
+    const reg = pb.regularizacion && !pb.regularizacion.hecho && Math.abs(pb.regularizacion.diferencia) > 0.009 ? pb.regularizacion : null;
+    const cuentaReg = contaCuentas.INICIO || '555';
+    const hayArreglos = pb.revisar.length > 0 || pb.gastosSinMovimiento.length > 0;
+    const regAhora = reg && !hayArreglos ? reg : null; // el ajuste inicial se hace cuando ya no quedan asientos por arreglar
+    // Cómo quedaría la 572 si se contabiliza todo lo propuesto
+    const efectoPend = pendientes.reduce((t, f) => t + Number(f.mov.importe || 0), 0);
+    const efectoApo = pb.aportacionesSinAsiento.reduce((t, a) => t + Number(a.importe || 0), 0);
+    const quedaria = Math.round((tesoreria.contable572 + efectoPend + efectoApo + (reg ? reg.diferencia : 0)) * 100) / 100;
+    const todoHecho = !pendientes.length && !pb.aportacionesSinAsiento.length && !reg && !pb.revisar.length && !pb.gastosSinMovimiento.length;
+    const opciones = (actual) => [...new Set([...Object.keys(CONTRAPARTIDAS_BANCO), actual])];
+    const ESTADO = { cobro: ['💶', 'Cobro de factura', 'text-green-700'], gasto: ['🧾', 'Pago de un gasto', 'text-neutral-700'], aportacion: ['🤝', 'Aportación de socio', 'text-sky-700'], asiento: ['📒', 'Contabilizado', 'text-neutral-700'], compensado: ['↔️', 'Se compensa', 'text-neutral-500'], proponer: ['⏳', 'Sin asiento', 'text-amber-700'] };
+    const filasVer = contaVerTodo ? [...pb.filas].reverse() : [...pendientes].reverse();
+    return (
+      <Card className="overflow-hidden" data-rf-no>
+        <div className="p-4 border-b flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-bold">📒 Contabilizar el banco</h3>
+            <p className={`text-sm ${todoHecho ? 'text-green-700' : 'text-amber-700'}`}>
+              {todoHecho ? '✓ Todos los movimientos del BBVA están en la contabilidad.' : `${pendientes.length} movimiento(s) sin asiento${pb.aportacionesSinAsiento.length ? ` · ${pb.aportacionesSinAsiento.length} aportación(es) de socios sin asiento` : ''}${reg ? ' · falta ajustar el saldo inicial' : ''}`}
+            </p>
+            {!todoHecho && <p className="text-sm text-neutral-800 mt-1">{pb.revisar.length || pb.gastosSinMovimiento.length
+              ? <>Pasos: 1) arregla los asientos marcados en rojo y los gastos que no salen en el banco, 2) contabiliza lo propuesto. Así la 572 cuadrará con el BBVA ({eur(tesoreria.saldoHoy)}).</>
+              : <>Si contabilizas todo, la cuenta 572 quedará en <strong>{eur(quedaria)}</strong> (BBVA: {eur(tesoreria.saldoHoy)}).</>}{pendientes.some(f => f.faltaGasto) ? ' Los pagos sin gasto (🧾) mejor regístralos con su factura para deducir el IVA.' : ''}</p>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setContaVerTodo(v => !v)}>{contaVerTodo ? 'Ver solo pendientes' : 'Ver todos'}</Button>
+            {(automaticas.length > 0 || pb.aportacionesSinAsiento.length > 0 || regAhora) && (
+              <Button size="sm" disabled={contaTrabajando} onClick={() => contabilizarBanco({ filas: automaticas, aportaciones: pb.aportacionesSinAsiento, regularizar: regAhora ? { ...regAhora, cuenta: cuentaReg } : null })}>
+                {contaTrabajando ? 'Contabilizando…' : `Contabilizar lo propuesto (${automaticas.length + pb.aportacionesSinAsiento.length + (regAhora ? 1 : 0)})`}
+              </Button>
+            )}
+          </div>
+        </div>
+        {pb.revisar.length > 0 && (() => {
+          const seguros = pb.revisar.filter(x => x.tipo !== 'cobro_sin_ingreso');
+          const cobros = pb.revisar.filter(x => x.tipo === 'cobro_sin_ingreso');
+          return (
+            <div className="p-4 border-b bg-red-50/60">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <p className="text-sm font-semibold text-red-800">🔧 Arregla primero {pb.revisar.length} asiento(s) de la 572 que no corresponden al banco ({formatCurrency(pb.revisar.reduce((t, x) => t + x.importe, 0))})</p>
+                {seguros.length > 0 && <Button size="sm" disabled={contaTrabajando} onClick={() => arreglarAsientosBanco(seguros)}>Arreglar {seguros.length} asiento(s)</Button>}
+              </div>
+              <p className="text-sm text-red-800 mb-2">⚠️ Asientos de gastos que se borraron o se cambiaron después (importe o forma de pago): se borran o se rehacen con el gasto actual. Hazlo antes de contabilizar el resto, que el ajuste del saldo inicial depende de ellos.</p>
+              <div className="space-y-0.5 max-h-56 overflow-y-auto">
+                {seguros.map(x => <p key={x.asiento.id} className="text-xs text-neutral-700">{x.tipo === 'gasto_borrado' ? '🗑️' : '🔁'} {formatDate(x.asiento.fecha)} · {x.texto}</p>)}
+              </div>
+              {cobros.map(x => (
+                <div key={x.asiento.id} className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="flex-1 min-w-[12rem] text-red-800">💶 {x.texto}: ¿se cobró de verdad?</span>
+                  <button onClick={() => arreglarCobroSinIngreso(x, 'pendiente')} className="px-2 py-1 rounded-lg border bg-white text-xs font-semibold hover:bg-neutral-50">No se ha cobrado</button>
+                  <button onClick={() => arreglarCobroSinIngreso(x, 'caja')} className="px-2 py-1 rounded-lg border bg-white text-xs font-semibold hover:bg-neutral-50">Fue en efectivo (caja)</button>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+        {pb.gastosSinMovimiento.length > 0 && (
+          <div className="p-4 border-b">
+            <p className="text-sm font-semibold text-amber-800">⚠️ {pb.gastosSinMovimiento.length} gasto(s) apuntados como pagados por banco que no aparecen en el BBVA ({eur(pb.gastosSinMovimiento.reduce((t, g) => t + Number(g.importe || 0), 0))})</p>
+            <p className="text-xs text-amber-800 mb-2">Si se pagaron con la tarjeta de crédito, pásalos a tarjeta. Si aún no están pagados, edítalos y quita «pagado». Si los pagó un socio, cambia la forma de pago a ese socio.</p>
+            <div className="space-y-1">
+              {pb.gastosSinMovimiento.map(g => (
+                <div key={g.id} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="w-24 whitespace-nowrap text-neutral-500">{formatDate(g.fecha)}</span>
+                  <span className="flex-1 min-w-[8rem] truncate">{g.concepto || g.proveedor || `Gasto ${g.id}`}</span>
+                  <span className="tabular-nums font-semibold">{eur(g.importe)}</span>
+                  <button onClick={() => pasarGastoATarjeta(g)} className="px-2 py-1 rounded-lg border text-xs font-semibold hover:bg-neutral-50">💳 Fue con tarjeta</button>
+                  <button onClick={() => { setEditingItem(g); setShowModal('gasto'); }} className="px-2 py-1 rounded-lg border text-xs hover:bg-neutral-50">Editar</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {pb.aportacionesSinAsiento.length > 0 && (
+          <div className="px-4 py-2 border-b bg-sky-50 text-sm">🤝 <strong>{pb.aportacionesSinAsiento.length} aportación(es) de socios</strong> apuntadas en Socios sin asiento ({eur(efectoApo)}): se contabilizan como 572 (banco) / 551 (cuenta con el socio).</div>
+        )}
+        {reg && (
+          <div className="px-4 py-2 border-b bg-amber-50 text-sm flex flex-wrap items-center gap-2">
+            <span>🏁 <strong>Saldo inicial:</strong> el {formatDate(reg.fecha)} el BBVA tenía {eur(reg.saldoBanco)} y la contabilidad (con las aportaciones) {eur(reg.saldoContable)}. Ajuste de <strong>{eur(reg.diferencia)}</strong> contra</span>
+            <select value={cuentaReg} onChange={e => setContaCuentas(c => ({ ...c, INICIO: e.target.value }))} className="border rounded-lg px-2 py-1 text-xs bg-white">
+              {['555', '551', '5201', '100'].map(c => <option key={c} value={c}>{c} · {PLAN_CUENTAS[c]?.nombre || CONTRAPARTIDAS_BANCO[c]}</option>)}
+            </select>
+            <span className="text-xs text-neutral-500">(lo que pasó en la cuenta antes del primer extracto: si no sabes qué es, déjalo en la 555 y revisadlo con la asesoría)</span>
+            {hayArreglos && <span className="text-sm text-amber-800">⏳ Se hará cuando arregles los asientos de arriba (el importe cambiará).</span>}
+          </div>
+        )}
+        {filasVer.length > 0 && (
+          <div className="divide-y">
+            {filasVer.map(f => {
+              const [ico, etq, color] = ESTADO[f.estado] || ESTADO.proponer;
+              const cuenta = cuentaElegidaBanco(f);
+              return (
+                <div key={f.mov.id} className="px-4 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <div className="flex-1 min-w-[12rem]">
+                    <p className="text-sm font-medium"><span className="text-neutral-500 font-normal mr-2 whitespace-nowrap">{formatDate(f.mov.fecha)}</span>{conceptoMovCorto(f.mov)}</p>
+                    <p className={`text-[12px] ${color}`}>{ico} {f.estado === 'proponer' ? (f.nota || etq) : (f.detalle || etq)}{f.socio && f.estado === 'proponer' ? ` (${ALIAS_SOCIO[f.socio]})` : ''}</p>
+                  </div>
+                  <span className={`tabular-nums whitespace-nowrap font-semibold text-sm ${Number(f.mov.importe) < 0 ? 'text-red-700' : 'text-green-700'}`}>{eur(f.mov.importe)}</span>
+                  {f.estado === 'proponer' && (
+                    <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+                      <select value={cuenta} onChange={e => setContaCuentas(c => ({ ...c, [f.mov.id]: e.target.value }))} className="border rounded-lg px-2 py-1 text-xs bg-white flex-1 sm:flex-none sm:w-60 min-w-0">
+                        {opciones(cuenta).map(c => <option key={c} value={c}>{c} · {CONTRAPARTIDAS_BANCO[c] || PLAN_CUENTAS[c]?.nombre || ''}</option>)}
+                      </select>
+                      {f.faltaGasto && <button onClick={() => registrarGastoDesdeMovimiento(f.mov)} className="px-2 py-1 rounded-lg border text-xs font-semibold hover:bg-neutral-50 whitespace-nowrap">🧾 Registrar gasto</button>}
+                      <button disabled={contaTrabajando} onClick={() => contabilizarBanco({ filas: [f] })} className="px-2 py-1 rounded-lg bg-orange-500 text-white text-xs font-semibold hover:bg-orange-600 whitespace-nowrap">Contabilizar</button>
+                    </div>
+                  )}
+                  {f.estado === 'asiento' && /BAN-/.test(f.detalle || '') && <button onClick={() => deshacerAsientoBanco(`BAN-${f.mov.id}`)} className="px-2 py-1 rounded-lg border text-xs hover:bg-neutral-50" title="Borrar este asiento">↩️</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    );
+  };
   const guardarExclusionTesoreria = async (clave, excluir) => {
     const lista = excluir ? [...new Set([...tesoreria.excluir, clave])] : tesoreria.excluir.filter(x => x !== clave);
     await guardarAjusteSistema('tesoreria_excluir', JSON.stringify(lista));
@@ -29876,10 +30147,12 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
                 <div><p className="text-xs text-neutral-500">Cuenta 572</p><p className="font-bold">{eur(t.contable572)}</p></div>
                 <div><p className="text-xs text-neutral-500">Diferencia</p><p className={`font-bold ${Math.abs(diferencia) > 1 ? 'text-red-600' : 'text-green-700'}`}>{Math.abs(diferencia) > 1 ? eur(diferencia) : '✓ cuadra'}</p></div>
               </div>
-              {Math.abs(diferencia) > 1 && <p className="text-xs text-neutral-600 mt-2">⚠️ La contabilidad no refleja todo lo que pasa en el banco. Lo normal es que falten los asientos de las aportaciones de socios (572 / 551), los movimientos con la tarjeta de crédito, las comisiones y los cargos que no tienen su gasto registrado. Revisadlo con la asesoría antes del cierre.</p>}
+              {Math.abs(diferencia) > 1 && <p className="text-sm text-amber-700 mt-2">⚠️ Faltan asientos de movimientos del banco: contabilízalos abajo en «📒 Contabilizar el banco».</p>}{/* V108 */}
             </Card>
           </div>
         </div>
+
+        {renderContabilizarBanco()}{/* V108 */}
 
         <Card className="overflow-hidden">
           <div className="p-4 border-b"><h3 className="font-bold">En qué entra y en qué se va el dinero</h3><p className="text-xs text-neutral-500">Movimientos del BBVA agrupados por tipo, por mes.</p></div>
