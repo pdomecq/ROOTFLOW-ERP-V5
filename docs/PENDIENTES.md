@@ -52,6 +52,13 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
 - F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el extracto del 5-ago al 3-nov: confirmar si se cobró antes de agosto.
 
+## 4d. 🟠 Tesorería (V107): lo que ha sacado a la luz
+
+- **La caja está al límite**: saldo ~400 € el 5-nov y, sin nuevas aportaciones, la previsión a 30–60 días sale negativa. El negocio se sostiene con aportaciones de socios (~887 €/mes de media) y la tarjeta de crédito.
+- **Recibo de luz de Iberdrola (191,26 €) devuelto** el 3-nov por falta de saldo: hay que pagarlo.
+- **La cuenta 572 de la contabilidad (−5.351 €) no cuadra con el BBVA (~400 €)**: faltan asientos de las aportaciones de socios (572/551), de la tarjeta de crédito (5201), comisiones y cargos sin gasto. Idea V108: botón «Contabilizar movimientos del banco sin asiento».
+- Revisar los pagos fijos detectados (Envases y Organik son compras, no cuotas fijas) y desmarcar los que no sean fijos.
+
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
 - Rellenar en Producción las fichas de coste de cada variedad (gramos y €/kg de semilla, sustrato) y en Productos el coste de envase y etiqueta: permitirá comparar el coste real (compras) con el estándar y ver la merma.

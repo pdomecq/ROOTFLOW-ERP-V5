@@ -14,7 +14,8 @@ import {
   Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles, Globe, ExternalLink, Inbox
 } from 'lucide-react';
 import { Copy } from 'lucide-react';
-import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { reconstruirSaldos, resumenMensual, pagosRecurrentes, prevision as previsionTesoreria, saldoEn, diasCobro, clasificarMovimiento, TIPOS_MOVIMIENTO } from './tesoreria.js'; // V107
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
@@ -296,7 +297,7 @@ const ALERTAS_STOCK_ACTIVAS = false;
 const SECCIONES_ERP = [
   ['dashboard', 'Dashboard'], ['calendario', 'Calendario'], ['leads', 'Leads'], ['muestras', 'Muestras'], ['clientes', 'Clientes'],
   ['presupuestos', 'Presupuestos'], ['pedidos', 'Pedidos'], ['rutas', 'Rutas de reparto'], ['productos', 'Productos'], ['tarifas', 'Tarifas'],
-  ['facturacion', 'Facturación'], ['gastos', 'Gastos'], ['proveedores', 'Proveedores'], ['informes', 'Informes'], ['rentabilidad', 'Rentabilidad'],
+  ['facturacion', 'Facturación'], ['tesoreria', 'Tesorería'], ['gastos', 'Gastos'], ['proveedores', 'Proveedores'], ['informes', 'Informes'], ['rentabilidad', 'Rentabilidad'],
   ['contabilidad', 'Contabilidad'], ['produccion', 'Producción'], ['planificacion', 'Planificación'], ['albaranes', 'Albaranes'],
   ['insumos', 'Insumos'], ['desarrollo', 'Desarrollo'], ['mermas', 'Mermas'], ['trazabilidad', 'Trazabilidad'], ['ambiente', 'Ambiente'],
   ['documentos', 'Documentos'],
@@ -305,7 +306,7 @@ const TODAS_SECCIONES = SECCIONES_ERP.map(([id]) => id);
 const ROLES_ERP = {
   admin: { label: 'Administrador', desc: 'Todo el ERP y gestiona usuarios y permisos', secciones: TODAS_SECCIONES, color: 'bg-purple-100 text-purple-700' },
   socio: { label: 'Socio', desc: 'Todo el ERP (sin gestionar usuarios)', secciones: TODAS_SECCIONES, color: 'bg-orange-100 text-orange-700' },
-  finanzas: { label: 'Finanzas', desc: 'Facturación, gastos, contabilidad e informes', secciones: ['dashboard', 'calendario', 'clientes', 'pedidos', 'albaranes', 'facturacion', 'gastos', 'proveedores', 'informes', 'rentabilidad', 'contabilidad', 'documentos'], color: 'bg-green-100 text-green-700' },
+  finanzas: { label: 'Finanzas', desc: 'Facturación, gastos, contabilidad e informes', secciones: ['dashboard', 'calendario', 'clientes', 'pedidos', 'albaranes', 'facturacion', 'tesoreria', 'gastos', 'proveedores', 'informes', 'rentabilidad', 'contabilidad', 'documentos'], color: 'bg-green-100 text-green-700' },
   comercial: { label: 'Comercial', desc: 'Clientes, leads, presupuestos, pedidos y tarifas', secciones: ['dashboard', 'calendario', 'leads', 'muestras', 'clientes', 'presupuestos', 'pedidos', 'rutas', 'productos', 'tarifas', 'albaranes', 'desarrollo'], color: 'bg-blue-100 text-blue-700' },
   produccion: { label: 'Producción', desc: 'Lotes, planificación, albaranes, stock y ambiente', secciones: ['dashboard', 'calendario', 'pedidos', 'rutas', 'productos', 'produccion', 'planificacion', 'albaranes', 'insumos', 'mermas', 'trazabilidad', 'ambiente'], color: 'bg-emerald-100 text-emerald-700' },
   usuario: { label: 'Sin asignar', desc: 'Solo Dashboard y Calendario hasta que un administrador le dé un rol', secciones: ['dashboard', 'calendario'], color: 'bg-neutral-100 text-neutral-600' },
@@ -829,6 +830,7 @@ const MainApp = () => {
     if (ajustesTab === 'usuarios') cargarAccesos();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, ajustesTab, historialFiltros]);
+  const [tesoHorizonte, setTesoHorizonte] = useState(60); // V107: días de previsión en Tesorería
   const [rentTab, setRentTab] = useState('analisis'); // V88: 'analisis' | 'aprov' (aprovisionamientos)
   const [aprovLeyendo, setAprovLeyendo] = useState(null); // V88: gasto cuyas líneas está leyendo la IA
   const [envioEstado, setEnvioEstado] = useState(null); // V83: qué facturas se enviarán solas y por qué no las demás
@@ -1899,6 +1901,58 @@ const MainApp = () => {
   const albaranes = albaranesData || [];
   const solicitudesCliente = solicitudesClienteData || []; // V82
   const ajustesSistema = ajustesSistemaData || []; // V83
+
+  // ==================== V107: TESORERÍA (cálculo en src/tesoreria.js) ====================
+  const tesoreria = useMemo(() => {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const aj = (k, d) => ajustesSistema.find(a => a.clave === k)?.valor ?? d;
+    // Apellidos de los socios tal como salen en el banco (del email: p.domecq → domecq)
+    const socios = userProfiles.filter(u => u.socio).map(u => String(u.email || '').split('@')[0].split('.').pop()).filter(x => x && x.length > 2);
+    const saldos = reconstruirSaldos(movimientosBanco, hoy);
+    let excluir = []; try { excluir = JSON.parse(aj('tesoreria_excluir', '[]')) || []; } catch { excluir = []; }
+    const recurrentesTodos = pagosRecurrentes(movimientosBanco, hoy, socios);
+    const recurrentes = recurrentesTodos.filter(r => !excluir.includes(r.clave));
+    const nombreCli = (id) => clientes.find(c => c.id === id)?.nombre || '';
+    const vivas = facturas.filter(f => ['pendiente', 'vencida'].includes(f.estado) && f.tipo !== 'anulada' && f.tipo !== 'rectificativa' && !/^R-/.test(String(f.id)) && Number(f.total) > 0);
+    const eventos = vivas.map(f => ({ fecha: f.fecha_vencimiento || f.fecha, importe: Number(f.total), concepto: `${f.id} · ${nombreCli(f.cliente_id)}`, tipo: 'cobro', vencida: String(f.fecha_vencimiento || '') < hoy }));
+    gastos.filter(g => !g.pagado && ['banco', 'transferencia', 'tarjeta_empresa'].includes(g.forma_pago)).forEach(g => eventos.push({ fecha: g.fecha, importe: -(Number(g.importe) || 0), concepto: `${g.concepto || 'Gasto'} (sin pagar)`, tipo: 'pago' }));
+    // Impuestos del trimestre en curso (estimados con lo registrado y extrapolado al trimestre completo)
+    const mes = Number(hoy.slice(5, 7)), anio = Number(hoy.slice(0, 4)), q = Math.floor((mes - 1) / 3);
+    const iniQ = `${anio}-${String(q * 3 + 1).padStart(2, '0')}-01`, finQ = new Date(Date.UTC(anio, q * 3 + 3, 0)).toISOString().slice(0, 10);
+    const vtoQ = q === 3 ? `${anio + 1}-01-30` : `${anio}-${String(q * 3 + 4).padStart(2, '0')}-20`;
+    const factorQ = 3 / ((mes - 1) % 3 + 1);
+    const enQ = (f) => String(f || '') >= iniQ && String(f || '') <= finQ;
+    const ivaRep = facturas.filter(f => enQ(f.fecha) && f.tipo !== 'anulada').reduce((t, f) => t + (Number(f.iva) || 0) + (Number(f.re_importe) || 0), 0);
+    const ivaSop = gastos.filter(g => enQ(g.fecha)).reduce((t, g) => t + (desgloseGasto(g).iva || 0), 0);
+    const ret115 = gastos.filter(g => enQ(g.fecha)).reduce((t, g) => t + (desgloseGasto(g).retencion || 0), 0);
+    const iva303 = Math.round((ivaRep - ivaSop) * factorQ * 100) / 100;
+    const m115 = Math.round(ret115 * factorQ * 100) / 100;
+    const impuestos = [];
+    if (iva303 > 0) impuestos.push({ fecha: vtoQ, importe: -iva303, concepto: `IVA (303) ${q + 1}.º trimestre · estimado`, tipo: 'impuesto' });
+    if (m115 > 0) impuestos.push({ fecha: vtoQ, importe: -m115, concepto: `Retenciones alquiler (115) ${q + 1}.º trimestre · estimado`, tipo: 'impuesto' });
+    const saldoHoy = saldos.saldoHoy ?? 0;
+    const prev = previsionTesoreria({ saldoHoy, hoy, dias: 90, eventos: [...eventos, ...impuestos], recurrentes });
+    // Contabilidad: 572 (banco) y 5721 (Stripe pendiente de transferir)
+    const saldoCuenta = (c) => Math.round(asientoLineasDB.filter(l => String(l.cuenta) === c).reduce((t, l) => t + (Number(l.debe) || 0) - (Number(l.haber) || 0), 0) * 100) / 100;
+    const contable572 = saldoCuenta('572'), stripePendiente = saldoCuenta('5721');
+    const mensual = resumenMensual(movimientosBanco, socios);
+    const ult3 = mensual.slice(-4, -1).length ? mensual.slice(-4, -1) : mensual.slice(-3);
+    const media = (k) => ult3.length ? ult3.reduce((t, m) => t + (m.porTipo[k] || 0), 0) / ult3.length : 0;
+    const salidasMes = ult3.length ? ult3.reduce((t, m) => t + m.salidas, 0) / ult3.length : 0;
+    const cobrosMes = media('cobro') + media('stripe');
+    const umbral = Number(aj('tesoreria_saldo_minimo', '0')) || 0;
+    const min30 = Math.min(...prev.serie.slice(0, 31).map(x => x.saldo));
+    const porCobrar = vivas.reduce((t, f) => t + Number(f.total), 0);
+    const vencido = vivas.filter(f => String(f.fecha_vencimiento || '') < hoy).reduce((t, f) => t + Number(f.total), 0);
+    const bancoDias = saldos.fechaUltimo ? Math.round((Date.parse(hoy) - Date.parse(saldos.fechaUltimo)) / 86400000) : null;
+    return {
+      hoy, socios, saldos, saldoHoy, prev, recurrentes, recurrentesTodos, excluir, impuestos, iva303, m115, vtoQ, contable572, stripePendiente,
+      mensual, salidasMes, cobrosMes, aportacionesMes: media('socios'), tarjetaMes: media('tarjeta_entrada'), umbral, min30,
+      alerta: movimientosBanco.length > 0 && min30 < umbral, porCobrar, vencido, bancoDias, dso: diasCobro(facturas),
+      mesesCaja: salidasMes > 0 ? saldoHoy / salidasMes : null,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movimientosBanco, facturas, gastos, clientes, asientoLineasDB, ajustesSistema, userProfiles]);
   const albaranPedidos = albaranPedidosData || [];
   // V64 - Insumos
   const insumos = insumosData || [];
@@ -3490,6 +3544,14 @@ const MainApp = () => {
       });
     });
 
+    // V107: tesorería — el saldo previsto baja del mínimo en 30 días
+    if (tesoreria.alerta) alertasList.push({
+      id: 'tesoreria-minimo', tipo: 'tesoreria', prioridad: 'critica',
+      titulo: `Caja: el saldo bajará a ${formatCurrency(tesoreria.min30)}`,
+      mensaje: `En los próximos 30 días (mínimo fijado: ${formatCurrency(tesoreria.umbral)}). Mira Tesorería.`,
+      icono: Euro, color: 'bg-red-500', accion: () => setActiveSection('tesoreria'),
+    });
+
     // 2. Pedidos pendientes de entrega hoy o atrasados
     pedidos.filter(p => ['pendiente', 'confirmado', 'preparando', 'enviado'].includes(p.estado) && p.fecha_entrega).forEach(p => {
       const fechaEntrega = new Date(p.fecha_entrega);
@@ -3726,7 +3788,7 @@ const MainApp = () => {
     // Ordenar por prioridad
     const prioridadOrden = { critica: 0, alta: 1, media: 2, baja: 3 };
     return alertasList.sort((a, b) => prioridadOrden[a.prioridad] - prioridadOrden[b.prioridad]);
-  }, [productos, pedidos, facturas, lotes, tareas, clientes, condiciones, comprasParticulares]);
+  }, [productos, pedidos, facturas, lotes, tareas, clientes, condiciones, comprasParticulares, tesoreria]); // V107: + tesoreria
 
   const alertasNoLeidas = alertas.length;
   const alertasCriticas = alertas.filter(a => a.prioridad === 'critica').length;
@@ -11508,7 +11570,7 @@ ${pedidoLinea ? `^FO260,258
   const NavItem = ({ icon: Icon, label, section, badge }) => !puedeVer(section) ? null : (
     <button onClick={() => { setActiveSection(section); if (window.innerWidth < 768) setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeSection === section ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25' : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'}`}>
       <Icon size={20} />
-      {sidebarOpen && <><span className="font-semibold flex-1 text-left">{label}</span>{badge > 0 && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${activeSection === section ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>{badge}</span>}</>}
+      {sidebarOpen && <><span className="font-semibold flex-1 text-left">{label}</span>{(badge > 0 || typeof badge === 'string') && <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${activeSection === section ? 'bg-white/20' : 'bg-orange-500 text-white'}`}>{badge}</span>}</>}
     </button>
   );
 
@@ -11649,6 +11711,16 @@ ${pedidoLinea ? `^FO260,258
     return (
       <div className="space-y-6">
         {/* ============ HEADER ============ */}
+        {/* V107: tesorería en el dashboard */}
+        {puedeVer('tesoreria') && movimientosBanco.length > 0 && (
+          <button onClick={() => setActiveSection('tesoreria')} className={`w-full text-left rounded-2xl border p-4 flex flex-wrap items-center gap-x-6 gap-y-1 ${tesoreria.alerta ? 'bg-red-50 border-red-300' : 'bg-white border-neutral-200'} hover:shadow-md transition-all`}>
+            <span className="font-bold">💰 Banco</span>
+            <span>Hoy <strong className={tesoreria.saldoHoy < 0 ? 'text-red-600' : ''}>{formatCurrency(tesoreria.saldoHoy)}</strong></span>
+            <span>En 30 días <strong className={saldoEn(tesoreria.prev, 30) < 0 ? 'text-red-600' : ''}>{formatCurrency(saldoEn(tesoreria.prev, 30))}</strong></span>
+            <span>Por cobrar <strong>{formatCurrency(tesoreria.porCobrar)}</strong>{tesoreria.vencido > 0 && <span className="text-red-600"> ({formatCurrency(tesoreria.vencido)} vencido)</span>}</span>
+            {tesoreria.alerta && <span className="text-red-700 font-semibold">⛔ Baja de {formatCurrency(tesoreria.umbral)} en los próximos 30 días</span>}
+          </button>
+        )}
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
             <p className="text-sm text-neutral-500 font-medium capitalize">
@@ -29687,6 +29759,158 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
     );
   };
 
+  // ==================== V107: TESORERÍA ====================
+  const guardarExclusionTesoreria = async (clave, excluir) => {
+    const lista = excluir ? [...new Set([...tesoreria.excluir, clave])] : tesoreria.excluir.filter(x => x !== clave);
+    await guardarAjusteSistema('tesoreria_excluir', JSON.stringify(lista));
+  };
+  const renderTesoreria = () => {
+    const t = tesoreria;
+    const eur = (n) => (n === null || n === undefined || isNaN(n) ? '—' : formatCurrency(n));
+    const fcorta = (f) => new Date(`${f}T12:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+    if (!movimientosBanco.length) return (
+      <Card className="p-8 text-center space-y-2"><p className="text-4xl">💰</p><p className="font-bold text-lg">Aún no hay movimientos del banco</p><p className="text-sm text-neutral-600">Conecta el BBVA o sube un extracto en Facturación → 🏦 Banco y cobros.</p><Button className="mx-auto" onClick={() => setActiveSection('facturacion')}>Ir a Banco y cobros</Button></Card>
+    );
+    const H = tesoHorizonte;
+    const desde = new Date(Date.parse(t.hoy) - 90 * 86400000).toISOString().slice(0, 10);
+    const datos = [
+      ...t.saldos.diario.filter(d => d.fecha >= desde && d.fecha < t.hoy).map(d => ({ fecha: d.fecha, real: d.saldo })),
+      ...t.prev.serie.slice(0, H + 1).map((d, i) => ({ fecha: d.fecha, real: i === 0 ? t.saldoHoy : undefined, previsto: d.saldo })),
+    ];
+    const saldoH = saldoEn(t.prev, H);
+    const minH = t.prev.serie.slice(0, H + 1).reduce((m, d) => (d.saldo < m.saldo ? d : m), t.prev.serie[0]);
+    const eventosH = t.prev.eventos.filter(e => e.fecha <= t.prev.serie[Math.min(H, t.prev.serie.length - 1)].fecha);
+    const cobrosH = eventosH.filter(e => e.importe > 0).reduce((a, e) => a + e.importe, 0);
+    const pagosH = eventosH.filter(e => e.importe < 0).reduce((a, e) => a - e.importe, 0);
+    const meses = t.mensual.slice(-6);
+    const tiposUsados = Object.keys(TIPOS_MOVIMIENTO).filter(k => meses.some(m => m.porTipo[k]));
+    const diferencia = Math.round(((t.saldoHoy || 0) - t.contable572) * 100) / 100;
+    const kpi = 'p-4';
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900">💰 Tesorería</h1>
+            <p className="text-neutral-500 font-medium">Saldo real del BBVA, en qué se va el dinero y cuánto habrá en las próximas semanas</p>
+          </div>
+          <div className="inline-flex rounded-xl border bg-white p-0.5 text-sm font-semibold">
+            {[30, 60, 90].map(d => <button key={d} onClick={() => setTesoHorizonte(d)} className={`px-3 py-1.5 rounded-lg ${H === d ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{d} días</button>)}
+          </div>
+        </div>
+
+        {(t.bancoDias > 3 || t.saldos.avisos.length > 0 || minH.saldo < t.umbral) && (
+          <Card className="p-4 border-2 border-red-300 bg-red-50 space-y-1 text-sm">
+            {minH.saldo < t.umbral && <p>⛔ <strong>En los próximos {H} días el saldo baja a {eur(minH.saldo)}</strong> el {fcorta(minH.fecha)}{t.umbral ? ` (tu mínimo es ${eur(t.umbral)})` : ''}. Hará falta cobrar antes, retrasar pagos o una aportación.</p>}
+            {t.bancoDias > 3 && <p>⚠️ El último movimiento del banco es de hace {t.bancoDias} días: el saldo puede no estar al día (conecta el BBVA o sube el extracto).</p>}
+            {t.saldos.avisos.map(a => <p key={a.fecha}>⚠️ El {formatDate(a.fecha)} el saldo del banco ({eur(a.banco)}) no cuadra con los movimientos cargados ({eur(a.esperado)}): falta algún movimiento de esos días.</p>)}
+          </Card>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Card className={kpi}><p className="text-[11px] font-bold uppercase text-neutral-500">Saldo hoy</p><p className={`text-2xl font-black mt-1 ${t.saldoHoy < 0 ? 'text-red-600' : ''}`}>{eur(t.saldoHoy)}</p><p className="text-xs text-neutral-500">{t.saldos.saldoEstimado ? 'calculado con los movimientos' : 'según el banco'} · {formatDate(t.saldos.fechaUltimo)}{t.stripePendiente > 0.005 ? ` · +${eur(t.stripePendiente)} en Stripe` : ''}</p></Card>
+          <Card className={kpi}><p className="text-[11px] font-bold uppercase text-neutral-500">Previsto en {H} días</p><p className={`text-2xl font-black mt-1 ${saldoH < 0 ? 'text-red-600' : ''}`}>{eur(saldoH)}</p><p className="text-xs text-neutral-500">+{eur(cobrosH)} cobros · −{eur(pagosH)} pagos</p></Card>
+          <Card className={kpi}><p className="text-[11px] font-bold uppercase text-neutral-500">Punto más bajo</p><p className={`text-2xl font-black mt-1 ${minH.saldo < t.umbral ? 'text-red-600' : ''}`}>{eur(minH.saldo)}</p><p className="text-xs text-neutral-500">el {fcorta(minH.fecha)}</p></Card>
+          <Card className={kpi}><p className="text-[11px] font-bold uppercase text-neutral-500">Por cobrar</p><p className="text-2xl font-black mt-1">{eur(t.porCobrar)}</p><p className={`text-xs ${t.vencido > 0 ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>{t.vencido > 0 ? `${eur(t.vencido)} vencido` : 'nada vencido'}</p></Card>
+          <Card className={kpi}><p className="text-[11px] font-bold uppercase text-neutral-500">Gasto medio al mes</p><p className="text-2xl font-black mt-1">{eur(t.salidasMes)}</p><p className="text-xs text-neutral-500">cobros {eur(t.cobrosMes)}/mes · socios {eur(t.aportacionesMes)}/mes</p></Card>
+        </div>
+
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <h3 className="font-bold">Saldo: últimos 90 días y previsión</h3>
+            <label className="text-xs text-neutral-600 flex items-center gap-1">Aviso si baja de <input type="number" step="50" defaultValue={t.umbral} onBlur={e => { const v = String(Math.round(Number(e.target.value) || 0)); if (v !== String(t.umbral)) guardarAjusteSistema('tesoreria_saldo_minimo', v); }} className="w-20 px-2 py-1 border rounded-lg text-right" /> €</label>
+          </div>
+          <div style={{ width: '100%', height: 260 }}>
+            <ResponsiveContainer>
+              <ComposedChart data={datos} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis dataKey="fecha" tickFormatter={fcorta} minTickGap={30} fontSize={11} />
+                <YAxis fontSize={11} tickFormatter={v => `${Math.round(v)}`} width={50} />
+                <Tooltip formatter={(v, n) => [eur(v), n === 'real' ? 'Saldo real' : 'Previsto']} labelFormatter={l => formatDate(l)} />
+                <ReferenceLine y={0} stroke="#dc2626" strokeDasharray="4 2" />
+                {t.umbral > 0 && <ReferenceLine y={t.umbral} stroke="#f97316" strokeDasharray="4 4" />}
+                <ReferenceLine x={t.hoy} stroke="#a3a3a3" label={{ value: 'hoy', fontSize: 10, fill: '#737373', position: 'top' }} />
+                <Area type="stepAfter" dataKey="real" stroke="#047857" fill="#04785722" strokeWidth={2} connectNulls />
+                <Line type="stepAfter" dataKey="previsto" stroke="#f97316" strokeWidth={2} strokeDasharray="5 3" dot={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="text-xs text-neutral-500 mt-1">La previsión suma las facturas pendientes en su vencimiento (las vencidas, dentro de 7 días), los pagos fijos detectados, los gastos sin pagar y los impuestos del trimestre. No incluye nuevas aportaciones de socios ni ventas aún no facturadas.</p>
+        </Card>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="overflow-hidden">
+            <div className="p-4 border-b"><h3 className="font-bold">Próximos cobros y pagos ({H} días)</h3></div>
+            <div className="divide-y max-h-[420px] overflow-y-auto">
+              {eventosH.length === 0 && <p className="p-4 text-sm text-neutral-500">Nada previsto.</p>}
+              {eventosH.map((e, i) => (
+                <div key={i} className="px-4 py-2 flex items-center gap-3 text-sm">
+                  <span className="w-14 text-xs text-neutral-500 shrink-0">{fcorta(e.fecha)}</span>
+                  <span className="flex-1 min-w-0 truncate">{e.tipo === 'recurrente' ? '🔁 ' : e.tipo === 'impuesto' ? '🏛️ ' : e.importe > 0 ? (e.vencida ? '⏰ ' : '🧾 ') : '📤 '}{e.concepto}{e.vencida ? <span className="text-red-600 text-xs"> (vencida)</span> : ''}</span>
+                  <span className={`font-semibold tabular-nums ${e.importe >= 0 ? 'text-green-700' : 'text-red-700'}`}>{e.importe >= 0 ? '+' : ''}{eur(e.importe)}</span>
+                  <span className={`w-20 text-right text-xs tabular-nums ${e.saldoDespues < 0 ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>{eur(e.saldoDespues)}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <div className="space-y-6">
+            <Card className="p-4">
+              <h3 className="font-bold mb-1">🔁 Pagos fijos detectados</h3>
+              <p className="text-xs text-neutral-500 mb-2">Cargos que se repiten cada mes en el banco. Desmarca los que no sean fijos para quitarlos de la previsión.</p>
+              {t.recurrentesTodos.length === 0 ? <p className="text-sm text-neutral-500">Aún no hay suficientes meses de movimientos.</p> : t.recurrentesTodos.map(r => (
+                <label key={r.clave} className="flex items-center gap-2 py-1 text-sm">
+                  <input type="checkbox" checked={!t.excluir.includes(r.clave)} onChange={e => guardarExclusionTesoreria(r.clave, !e.target.checked)} />
+                  <span className="flex-1 truncate">{r.concepto}</span>
+                  <span className="tabular-nums font-semibold">{eur(-r.importe)}/mes</span>
+                  <span className="text-xs text-neutral-400">último {fcorta(r.ultima)}</span>
+                </label>
+              ))}
+              {t.impuestos.map(i => <p key={i.concepto} className="text-sm py-1">🏛️ {i.concepto}: <strong>{eur(-i.importe)}</strong> el {formatDate(i.fecha)}</p>)}
+              {t.iva303 <= 0 && <p className="text-xs text-neutral-500 mt-1">IVA del trimestre: sale a compensar o devolver ({eur(t.iva303)}), así que no se prevé pago.</p>}
+            </Card>
+
+            <Card className="p-4">
+              <h3 className="font-bold mb-1">🧮 Banco ↔ contabilidad</h3>
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div><p className="text-xs text-neutral-500">BBVA</p><p className="font-bold">{eur(t.saldoHoy)}</p></div>
+                <div><p className="text-xs text-neutral-500">Cuenta 572</p><p className="font-bold">{eur(t.contable572)}</p></div>
+                <div><p className="text-xs text-neutral-500">Diferencia</p><p className={`font-bold ${Math.abs(diferencia) > 1 ? 'text-red-600' : 'text-green-700'}`}>{Math.abs(diferencia) > 1 ? eur(diferencia) : '✓ cuadra'}</p></div>
+              </div>
+              {Math.abs(diferencia) > 1 && <p className="text-xs text-neutral-600 mt-2">⚠️ La contabilidad no refleja todo lo que pasa en el banco. Lo normal es que falten los asientos de las aportaciones de socios (572 / 551), los movimientos con la tarjeta de crédito, las comisiones y los cargos que no tienen su gasto registrado. Revisadlo con la asesoría antes del cierre.</p>}
+            </Card>
+          </div>
+        </div>
+
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b"><h3 className="font-bold">En qué entra y en qué se va el dinero</h3><p className="text-xs text-neutral-500">Movimientos del BBVA agrupados por tipo, por mes.</p></div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 border-b"><tr><th className="px-3 py-2 text-left text-[11px] font-bold uppercase text-neutral-500">Tipo</th>{meses.map(m => <th key={m.mes} className="px-3 py-2 text-right text-[11px] font-bold uppercase text-neutral-500">{new Date(`${m.mes}-15`).toLocaleDateString('es-ES', { month: 'short', year: '2-digit' })}</th>)}</tr></thead>
+              <tbody>
+                {tiposUsados.map(k => (
+                  <tr key={k} className="border-b">
+                    <td className="px-3 py-1.5 whitespace-nowrap"><span className="inline-block w-2.5 h-2.5 rounded-full mr-2" style={{ background: TIPOS_MOVIMIENTO[k].color }} />{TIPOS_MOVIMIENTO[k].label}</td>
+                    {meses.map(m => <td key={m.mes} className={`px-3 py-1.5 text-right tabular-nums ${TIPOS_MOVIMIENTO[k].signo > 0 ? 'text-green-700' : 'text-red-700'}`}>{m.porTipo[k] ? `${TIPOS_MOVIMIENTO[k].signo > 0 ? '+' : '−'}${eur(m.porTipo[k])}` : '—'}</td>)}
+                  </tr>
+                ))}
+                <tr className="bg-neutral-50 font-bold"><td className="px-3 py-1.5">TOTAL neto</td>{meses.map(m => <td key={m.mes} className={`px-3 py-1.5 text-right tabular-nums ${m.entradas - m.salidas < 0 ? 'text-red-700' : 'text-green-700'}`}>{eur(m.entradas - m.salidas)}</td>)}</tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        {t.dso.length > 0 && (
+          <Card className="p-4">
+            <h3 className="font-bold mb-2">⏱️ Cuánto tarda en pagar cada cliente</h3>
+            <div className="flex flex-wrap gap-2">
+              {t.dso.map(d => <span key={d.cliente_id} className={`px-3 py-1.5 rounded-xl border text-sm ${d.media > 30 ? 'border-red-200 bg-red-50' : 'bg-neutral-50'}`}><strong>{clientes.find(c => c.id === d.cliente_id)?.nombre || 'Cliente'}</strong>: {d.media} días <span className="text-xs text-neutral-500">({d.n} factura{d.n > 1 ? 's' : ''})</span></span>)}
+            </div>
+          </Card>
+        )}
+      </div>
+    );
+  };
+
   const renderAjustes = () => {
     const notificacionesConfig = [
       { key: 'stock_bajo', label: 'Stock bajo', descripcion: 'Cuando un producto tiene stock bajo' },
@@ -32605,6 +32829,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           <NavItem icon={Tag} label="Tarifas" section="tarifas" />
           <div className="pt-3 mt-3 border-t border-neutral-700">{sidebarOpen && <p className="text-[10px] text-neutral-500 px-4 mb-2 uppercase tracking-wider">Finanzas</p>}</div>
           <NavItem icon={Receipt} label="Facturación" section="facturacion" />
+          <NavItem icon={Euro} label="Tesorería" section="tesoreria" badge={tesoreria.alerta ? '!' : null} />{/* V107 */}
           <NavItem icon={Wallet} label="Gastos" section="gastos" />
           <NavItem icon={Building2} label="Proveedores" section="proveedores" badge={pagosProveedor.filter(p => !p.pagado && new Date(p.fecha_vencimiento) <= new Date()).length} />
           <NavItem icon={BarChart3} label="Informes" section="informes" />
@@ -33004,6 +33229,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           {seccionVisible === 'productos' && renderProductos()}
           {seccionVisible === 'tarifas' && renderTarifas()}
           {seccionVisible === 'facturacion' && renderFacturacion()}
+          {seccionVisible === 'tesoreria' && renderTesoreria()}{/* V107 */}
           {seccionVisible === 'gastos' && renderGastos()}
           {seccionVisible === 'proveedores' && renderProveedores()}
           {seccionVisible === 'informes' && renderInformes()}
