@@ -50,13 +50,19 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - 🟠 **Plazo legal (V99)**: facturas ya enviadas que vencen más de 30 días después de la primera entrega: F-2026-0020 (25-nov; entrega 22-oct), F-2026-0025 (3-dic; entregas desde el 6-oct) y F-2026-0026 (3-dic; desde el 15-oct). No se han tocado porque el cliente ya las tiene. Con facturación **mensual** el límite de 30 días desde la primera entrega deja muy poco plazo: mejor semanal o quincenal para los clientes agrupados. El PDF de `portal-cliente` sigue diciendo «N días desde la fecha de factura»: cambiarlo al mismo texto que la factura del ERP la próxima vez que se despliegue.
 - Primeras facturas que vencen: F-2026-0018 (Soto del Lugar) y F-2026-0021 (Frutas Félix Vázquez) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
-- F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el extracto del 5-ago al 3-nov: confirmar si se cobró antes de agosto.
+- F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el BBVA: confirmar si se cobró (V108: Tesorería → 📒 Contabilizar el banco → «No se ha cobrado» / «Fue en efectivo»).
 
 ## 4d. 🟠 Tesorería (V107): lo que ha sacado a la luz
 
 - **La caja está al límite**: saldo ~400 € el 5-nov y, sin nuevas aportaciones, la previsión a 30–60 días sale negativa. El negocio se sostiene con aportaciones de socios (~887 €/mes de media) y la tarjeta de crédito.
 - **Recibo de luz de Iberdrola (191,26 €) devuelto** el 3-nov por falta de saldo: hay que pagarlo.
-- **La cuenta 572 de la contabilidad (−5.351 €) no cuadra con el BBVA (~400 €)**: faltan asientos de las aportaciones de socios (572/551), de la tarjeta de crédito (5201), comisiones y cargos sin gasto. Idea V108: botón «Contabilizar movimientos del banco sin asiento».
+- **La cuenta 572 no cuadra con el BBVA** (−5.164 € frente a 369,62 € el 6-nov). V108: Tesorería → 📒 Contabilizar el banco, en este orden:
+  1. «Arreglar 23 asientos» (gastos borrados o cambiados) y decidir los dos cobros sin ingreso (F-2026-0001, F-2026-0005);
+  2. revisar los 11 gastos «pagados por banco» que no salen en el BBVA (Anthropic, wifi, estantería… ¿con tarjeta?; alquiler de noviembre ¿pagado?);
+  3. registrar con su factura los cargos sin gasto (Envases 370,18 €, Bellbro luz 114,27 y 123,63 €, Organik 72 €, Amazon 21,51 €, Iberdrola 39,51 €, Google Cloud 12 €, adeudo «Ayuda T Soluciones» 217,74 €);
+  4. «Contabilizar lo propuesto» (tarjeta, aportaciones, comisiones, impuesto del 20-oct —comprobar si es el 303 o el 115—, tickets del TPV y el ajuste del saldo inicial en la 555, a revisar con la asesoría).
+- **Tarjeta de crédito (5201)**: tras contabilizar, su saldo deudor serán las compras con tarjeta que no tienen gasto registrado: pedir el extracto de la tarjeta y registrarlas.
+- Remesas del TPV de 4–18 € sin factura: ¿ventas de mostrador / muestras? Se proponen como ticket (701 + IVA 4 %).
 - Revisar los pagos fijos detectados (Envases y Organik son compras, no cuotas fijas) y desmarcar los que no sean fijos.
 
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
