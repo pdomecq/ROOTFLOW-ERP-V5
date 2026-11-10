@@ -43,6 +43,7 @@ export const CLASIFICACION_PYG = {
   seguridad_social: { grupo: 'estructura', label: 'Seguridad Social' },
   software: { grupo: 'estructura', label: 'Software' },
   formacion: { grupo: 'estructura', label: 'Formación' },
+  material: { grupo: 'estructura', label: 'Material, utensilios y limpieza' }, // V112
   otros: { grupo: 'estructura', label: 'Otros gastos' },
 };
 export const clasificarGasto = (categoria) => {

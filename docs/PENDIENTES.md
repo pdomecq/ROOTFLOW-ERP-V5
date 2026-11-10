@@ -65,6 +65,13 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - Remesas del TPV de 4–18 € sin factura: ¿ventas de mostrador / muestras? Se proponen como ticket (701 + IVA 4 %).
 - Revisar los pagos fijos detectados (Envases y Organik son compras, no cuotas fijas) y desmarcar los que no sean fijos.
 
+## 4e. 🟠 Gastos (auditoría V112)
+
+- **Posibles duplicados** (no se han borrado): gasto **174** = misma factura que el 173 (Ayuda T FAC2026-37313); gasto **185** (703,72 € a Bellbro, 6-oct) = mismo pago que los gastos 153 + 154 + 155 (alquiler, agua y luz de octubre); gasto **187** (recargo Finetwork 5 €) parece el mismo que el **165**. Si lo son, bórralos desde Gastos (su asiento se borra con ellos).
+- Gastos → «Rehacer asientos»: 7 asientos antiguos están a 0 € (notaría 72–76 y compras 88, 89, 91 de socios) y los de tarjeta anteriores a la V108 van contra la 572.
+- 119 «Brotes BABY GREEN» (Fronda) está en sustratos: si es producto comprado para revender, es mercadería (600).
+- 181 «AMAZON PAYMENTS» (21,51 €) sigue en «otros»: falta saber qué es.
+
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
 - Rellenar en Producción las fichas de coste de cada variedad (gramos y €/kg de semilla, sustrato) y en Productos el coste de envase y etiqueta: permitirá comparar el coste real (compras) con el estándar y ver la merma.

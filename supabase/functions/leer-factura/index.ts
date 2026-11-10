@@ -45,7 +45,7 @@ const MIMES_IMAGEN = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 // Claves de categoriasGasto del ERP (src/App.jsx). Si añades una categoría allí, añádela aquí.
 const CATEGORIAS = [
   "semillas", "sustratos", "embalajes", "alquiler", "reparaciones", "asesoria", "transporte", "seguros", "banco",
-  "publicidad", "energia", "servicios", "tributos", "nominas", "seguridad_social", "software", "formacion", "otros",
+  "publicidad", "energia", "servicios", "tributos", "nominas", "seguridad_social", "software", "formacion", "material", "otros",
   "capex_equipos", "capex_mobiliario", "capex_maquinaria", "capex_instalaciones", "capex_vehiculos", "capex_otros",
 ];
 
@@ -120,7 +120,7 @@ const INSTRUCCIONES = `Eres el contable de ROOTFLOW HYDROPONICS SL (CIF B2753513
 - iva_importe: la cuota total de IVA. iva_tipo: general (21 %), reducido (10 %), superreducido (4 %), exento (sin IVA o inversión del sujeto pasivo) o mixto (varios tipos).
 - retencion_pct y retencion_importe: la retención de IRPF si la hay (habitual en alquileres, 19 %, y profesionales, 15 % o 7 %); 0 si no hay.
 - total_a_pagar: el total del documento (base + IVA − retención).
-- categoria: la que mejor encaje de la lista. alquiler = arrendamiento del local; energia = luz, agua o gas; software = suscripciones y programas; asesoria = gestoría, abogados, notarios; capex_* solo para equipos o instalaciones que duren más de un año.
+- categoria: la que mejor encaje de la lista. alquiler = arrendamiento del local; energia = luz, agua o gas; software = suscripciones y programas; asesoria = gestoría, abogados, notarios, inmobiliarias; material = ferretería, cables, utensilios, limpieza, ropa de trabajo y pequeño material que no es un equipo; seguridad_social = cuotas de autónomos o de la Seguridad Social; transporte = gasolina, portes y mensajería; capex_* solo para equipos o instalaciones que duren más de un año.
 - es_factura: false si no es una factura ni un recibo de compra (por ejemplo, un presupuesto, una factura proforma o confirmación de pedido, un aviso o un documento que no es de un proveedor).
 - moneda: código ISO (EUR, USD…).
 - notas: cualquier cosa rara (moneda extranjera, IVA de otro país, importes que no cuadran, si es un recibo sin datos fiscales). null si no hay nada.
