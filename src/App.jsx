@@ -469,6 +469,7 @@ const categoriasGasto = {
   seguridad_social: { label: "🏥 Seg. Social empresa (642)", icon: Users, color: "bg-rose-100 text-rose-700", cuenta: "642", tipo: "opex" },
   software: { label: "💻 Software/IT (629)", icon: BarChart3, color: "bg-violet-100 text-violet-700", cuenta: "629", tipo: "opex" },
   formacion: { label: "📚 Formación (649)", icon: Star, color: "bg-emerald-100 text-emerald-700", cuenta: "649", tipo: "opex" },
+  mercaderias: { label: "🛒 Mercaderías: compra para reventa (600)", icon: ShoppingCart, color: "bg-emerald-100 text-emerald-700", cuenta: "600", tipo: "opex" }, // V113: brotes de otro productor para revender
   material: { label: "🧰 Material, utensilios y limpieza (602)", icon: Package, color: "bg-lime-100 text-lime-700", cuenta: "602", tipo: "opex" }, // V112: ferretería, utensilios, limpieza, ropa de trabajo
   otros: { label: "📝 Otros gastos (629)", icon: MoreVertical, color: "bg-gray-100 text-gray-700", cuenta: "629", tipo: "opex" },
   // CAPEX - Inversiones/Inmovilizado (cuenta 2xx)
@@ -1486,6 +1487,7 @@ const MainApp = () => {
     'software': { cuenta: '629', nombre: 'Otros servicios' },
     'formacion': { cuenta: '649', nombre: 'Otros gastos sociales' },
     'material': { cuenta: '602', nombre: 'Compras de otros aprovisionamientos' }, // V112
+    'mercaderias': { cuenta: '600', nombre: 'Compras de mercaderías' }, // V113
     'otros': { cuenta: '629', nombre: 'Otros servicios' },
   };
 
@@ -1507,6 +1509,7 @@ const MainApp = () => {
     { value: 'nominas', label: '👥 Sueldos y salarios (640)', cuenta: '640' },
     { value: 'seguridad_social', label: '🏥 Seguridad Social empresa (642)', cuenta: '642' },
     { value: 'material', label: '🧰 Material, utensilios y limpieza (602)', cuenta: '602' }, // V112
+    { value: 'mercaderias', label: '🛒 Mercaderías: compra para reventa (600)', cuenta: '600' }, // V113
     { value: 'otros', label: '📝 Otros gastos (629)', cuenta: '629' },
   ];
 

@@ -44,6 +44,7 @@ export const CLASIFICACION_PYG = {
   software: { grupo: 'estructura', label: 'Software' },
   formacion: { grupo: 'estructura', label: 'Formación' },
   material: { grupo: 'estructura', label: 'Material, utensilios y limpieza' }, // V112
+  mercaderias: { grupo: 'materiales', sub: 'mercaderia', label: 'Mercaderías (compra para reventa)' }, // V113
   otros: { grupo: 'estructura', label: 'Otros gastos' },
 };
 export const clasificarGasto = (categoria) => {
