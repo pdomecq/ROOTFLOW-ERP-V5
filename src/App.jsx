@@ -865,7 +865,8 @@ const MainApp = () => {
   const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
   const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
-  const [rentPuente, setRentPuente] = useState('anterior'); // V110: puente de beneficio frente al periodo anterior o de ventas a EBIT
+  const [rentPuente, setRentPuente] = useState('pyg'); // V110: puente de beneficio frente al periodo anterior o de ventas a EBIT (V114: por defecto Ventas → EBIT)
+  const [rentVerPuente, setRentVerPuente] = useState(false); // V114: el puente de beneficio va plegado
   const [rentVerTabla, setRentVerTabla] = useState({}); // V110: ver los gráficos como tabla
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
   useEffect(() => activarMejorasUI(document.getElementById('root')), []);
@@ -4700,14 +4701,15 @@ const MainApp = () => {
     const eur = (n) => (n == null ? '—' : formatCurrency(n));
     const pct = (n) => (n == null ? '—' : `${(n * 100).toFixed(1)} %`);
     // V110: periodo anterior (mismos meses justo antes) para el puente de beneficio
-    const pa = periodoAnterior(per.desde, per.hasta);
+    const pa = periodoAnterior(per.desde, per.hasta, { hoy: new Date().toISOString().slice(0, 10), anual: /^(anio|12m)/.test(rentPeriodo) }); // V114
     const perAnt = { ...pa, label: pa.meses === 12 && pa.desde.endsWith('-01-01') ? `${pa.desde.slice(0, 4)}` : pa.meses === 1 ? new Date(`${pa.desde.slice(0, 7)}-15`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : `${formatDate(pa.desde)} – ${formatDate(pa.hasta)}` };
-    const rAnt = rentPuente === 'anterior' ? calcularRentabilidad(
+    const rAnt = rentVerPuente && rentPuente === 'anterior' ? calcularRentabilidad(
       { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovActivo ? aprov : null },
       { desde: pa.desde, hasta: pa.hasta, reparto: rentReparto, linea: lineaFiltro },
       { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
     ) : null;
-    const barrasPuente = barrasCascada(rentPuente === 'anterior' ? puenteBeneficio(rAnt.tot, t) : puenteResultados(t));
+    const sinDatosAnt = !rAnt || (Math.abs(rAnt.tot.ventas) < 0.01 && Math.abs(rAnt.tot.materiales + rAnt.tot.variables + rAnt.tot.estructura) < 0.01); // V114
+    const barrasPuente = barrasCascada(rentPuente === 'anterior' && rAnt ? puenteBeneficio(rAnt.tot, t) : puenteResultados(t));
     // V110: río de caja con los movimientos del banco del periodo (origen y destino de cada euro)
     const filaBanco = new globalThis.Map((planBanco?.filas || []).map(f => [f.mov.id, f])); // Map = icono de lucide en este archivo
     const limpiaCat = (k) => String(categoriasGasto[k]?.label || k || 'Gastos').replace(/^[^A-Za-zÁÉÍÓÚáéíóúÑñ]+/, '').replace(/\s*\(\d+\)$/, '');
@@ -4907,32 +4909,7 @@ const MainApp = () => {
           <Card className="p-4 min-w-0">
             <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
               <div>
-                <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">01</span> Puente de beneficio</h3>
-                <p className="text-sm text-neutral-600">{rentPuente === 'anterior' ? <>EBITDA de {perAnt.label} → {per.label}: qué lo ha movido</> : <>De las ventas al resultado · {per.label}</>}</p>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs font-semibold">
-                  {[['anterior', 'vs anterior'], ['pyg', 'Ventas → EBIT']].map(([k, l]) => <button key={k} onClick={() => setRentPuente(k)} className={`px-2 py-1 rounded-md ${rentPuente === k ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{l}</button>)}
-                </div>
-                <button onClick={() => setRentVerTabla(v => ({ ...v, puente: !v.puente }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.puente ? 'Gráfico' : 'Tabla'}</button>
-              </div>
-            </div>
-            {rentVerTabla.puente ? (
-              <table className="w-full text-sm" data-rf-no>
-                <tbody>{barrasPuente.map(b => (
-                  <tr key={b.clave} className={`border-b ${b.tipo !== 'delta' ? 'font-bold bg-neutral-50' : ''}`}>
-                    <td className="px-2 py-1.5">{b.label}{b.nota ? <span className="text-xs text-neutral-500 font-normal"> · {b.nota}</span> : null}</td>
-                    <td className={`px-2 py-1.5 text-right tabular-nums ${b.tipo === 'delta' ? (b.valor >= 0 ? 'text-emerald-700' : 'text-red-600') : ''}`}>{b.tipo === 'delta' && b.valor > 0 ? '+' : ''}{eur(b.valor)}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            ) : renderCascada(barrasPuente)}
-          </Card>
-
-          <Card className="p-4 min-w-0">
-            <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
-              <div>
-                <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">02</span> Río de caja</h3>
+                <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">01</span> Río de caja</h3>
                 <p className="text-sm text-neutral-600">De dónde viene el dinero y en qué se ha gastado de verdad (banco, compras con tarjeta y gastos pagados por los socios) · {per.label} · <strong>{eur(rio.movido)}</strong></p>
               </div>
               <button onClick={() => setRentVerTabla(v => ({ ...v, rio: !v.rio }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.rio ? 'Gráfico' : 'Tabla'}</button>
@@ -4951,6 +4928,36 @@ const MainApp = () => {
               </div>
             ) : renderRio(rio)}
             {bancoDesde && bancoDesde > per.desde && <p className="text-xs text-amber-700 mt-2">⚠️ El banco solo tiene movimientos desde el {formatDate(bancoDesde)}: lo anterior no sale aquí.</p>}
+          </Card>
+          <Card className="p-4 min-w-0">
+            {/* V114: plegado por defecto; se abre al pulsar */}
+            <button onClick={() => setRentVerPuente(v => !v)} className="w-full flex items-center justify-between gap-2 text-left">
+              <span className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">02</span> Puente de beneficio <span className="text-sm font-normal text-neutral-600">· qué ha movido el EBITDA</span></span>
+              <ChevronDown size={18} className={`text-neutral-500 transition-transform ${rentVerPuente ? 'rotate-180' : ''}`} />
+            </button>
+            {rentVerPuente && <>
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-2 mt-3">
+              <div>
+                <p className="text-sm text-neutral-600">{rentPuente === 'anterior' ? <>EBITDA de {perAnt.label} → {per.label}: qué lo ha movido</> : <>De las ventas al resultado · {per.label}</>}</p>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs font-semibold">
+                  {[['anterior', 'vs anterior'], ['pyg', 'Ventas → EBIT']].map(([k, l]) => <button key={k} onClick={() => setRentPuente(k)} className={`px-2 py-1 rounded-md ${rentPuente === k ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{l}</button>)}
+                </div>
+                <button onClick={() => setRentVerTabla(v => ({ ...v, puente: !v.puente }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.puente ? 'Gráfico' : 'Tabla'}</button>
+              </div>
+            </div>
+            {rentVerTabla.puente ? (
+              <table className="w-full text-sm" data-rf-no>
+                <tbody>{barrasPuente.map(b => (
+                  <tr key={b.clave} className={`border-b ${b.tipo !== 'delta' ? 'font-bold bg-neutral-50' : ''}`}>
+                    <td className="px-2 py-1.5">{b.label}{b.nota ? <span className="text-xs text-neutral-500 font-normal"> · {b.nota}</span> : null}</td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${b.tipo === 'delta' ? (b.valor >= 0 ? 'text-emerald-700' : 'text-red-600') : ''}`}>{b.tipo === 'delta' && b.valor > 0 ? '+' : ''}{eur(b.valor)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            ) : rentPuente === 'anterior' && !sinDatosAnt ? renderCascada(barrasPuente) : rentPuente === 'anterior' ? <p className="text-sm text-amber-700 py-6 text-center">⚠️ No hay ventas ni gastos en {perAnt.label}: no hay con qué comparar. Mira «Ventas → EBIT» o elige otro periodo.</p> : renderCascada(barrasPuente)}
+          </>}
           </Card>
         </div>
 
