@@ -15,11 +15,12 @@ import {
 } from 'lucide-react';
 import { Copy } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { reconstruirSaldos, resumenMensual, pagosRecurrentes, prevision as previsionTesoreria, saldoEn, diasCobro, clasificarMovimiento, TIPOS_MOVIMIENTO, planContabilizarBanco, lineasAsientoBanco, CONTRAPARTIDAS_BANCO } from './tesoreria.js'; // V107 · V108
+import { reconstruirSaldos, resumenMensual, pagosRecurrentes, prevision as previsionTesoreria, saldoEn, diasCobro, clasificarMovimiento, TIPOS_MOVIMIENTO, planContabilizarBanco, lineasAsientoBanco, CONTRAPARTIDAS_BANCO, socioDeMovimiento } from './tesoreria.js'; // V107 · V108
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
+import { periodoAnterior, puenteBeneficio, puenteResultados, barrasCascada, rioCaja } from './graficosRentabilidad.js'; // V110
 import { periodoDashboard, resumenVentas, resumenCobros, pendienteFacturar, cobradoEntre, ventasEntregadas, variacion } from './dashboard.js'; // V109
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
@@ -815,6 +816,8 @@ const MainApp = () => {
   const [tarifasVista, setTarifasVista] = useState('clientes'); // V84: 'clientes' | 'lineas'
   const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
+  const [rentPuente, setRentPuente] = useState('anterior'); // V110: puente de beneficio frente al periodo anterior o de ventas a EBIT
+  const [rentVerTabla, setRentVerTabla] = useState({}); // V110: ver los gráficos como tabla
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
   useEffect(() => activarMejorasUI(document.getElementById('root')), []);
   // V105: Ajustes en pestañas (general · usuarios y permisos · historial de cambios)
@@ -4523,6 +4526,103 @@ const MainApp = () => {
     );
   };
 
+  // ==================== V110: GRÁFICOS DE RENTABILIDAD (SVG propio) ====================
+  const eurCorto = (v) => {
+    const a = Math.abs(Number(v) || 0);
+    return `${a >= 1000 ? `${(a / 1000).toLocaleString('es-ES', { maximumFractionDigits: 1 })}k` : a < 10 ? a.toLocaleString('es-ES', { maximumFractionDigits: 2 }) : Math.round(a).toLocaleString('es-ES')} €`;
+  };
+  // Cascada: barras { label, valor, tipo: total|subtotal|delta, desde, hasta }
+  const renderCascada = (barrasTodas) => {
+    const barras = barrasTodas.filter(b => b.tipo !== 'delta' || Math.abs(b.valor) >= 0.5); // los pasos de 0 € no aportan
+    if (!barras.length) return null;
+    const W = 900, H = 290, mL = 52, mR = 8, mT = 26, mB = 40;
+    let max = Math.max(0, ...barras.flatMap(b => [b.desde, b.hasta]));
+    let min = Math.min(0, ...barras.flatMap(b => [b.desde, b.hasta]));
+    if (max - min < 1) max = min + 1;
+    const holgura = (max - min) * 0.1; max += holgura; if (min < 0) min -= holgura;
+    const y = (v) => mT + ((max - v) / (max - min)) * (H - mT - mB);
+    const n = barras.length, paso = (W - mL - mR) / n, bw = Math.min(64, paso * 0.6);
+    const marcas = [0, 1, 2, 3, 4].map(i => min + ((max - min) * i) / 4);
+    const color = (b) => b.tipo === 'delta' ? (b.valor >= 0 ? '#2f855a' : '#c53030') : b.tipo === 'subtotal' ? '#64748b' : (b.clave === 'inicio' || b.clave === 'ventas') ? '#3b5bdb' : '#8a5a00';
+    return (
+      <div className="overflow-x-auto"><svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto min-w-[560px] max-w-[1100px] mx-auto block" role="img" aria-label="Puente de beneficio">
+        {marcas.map((v, i) => <g key={i}><line x1={mL} x2={W - mR} y1={y(v)} y2={y(v)} stroke="#eef0f3" /><text x={mL - 6} y={y(v) + 4} textAnchor="end" fontSize="11" fill="#8a8f98">{v < 0 ? '−' : ''}{eurCorto(v)}</text></g>)}
+        <line x1={mL} x2={W - mR} y1={y(0)} y2={y(0)} stroke="#9aa1ab" />
+        {barras.map((b, i) => {
+          const x = mL + i * paso + (paso - bw) / 2;
+          const top = y(Math.max(b.desde, b.hasta)), alto = Math.max(1.5, Math.abs(y(b.desde) - y(b.hasta)));
+          const sig = barras[i + 1];
+          const txt = b.tipo === 'delta' ? `${b.valor >= 0 ? '+' : '−'}${eurCorto(b.valor)}` : `${b.valor < 0 ? '−' : ''}${eurCorto(b.valor)}`;
+          return (
+            <g key={b.clave}>
+              <rect x={x} y={top} width={bw} height={alto} rx="3" fill={color(b)}><title>{`${b.label}: ${formatCurrency(b.valor)}${b.nota ? ` (${b.nota})` : ''}`}</title></rect>
+              {sig && <line x1={x + bw} x2={x + paso} y1={y(b.hasta)} y2={y(b.hasta)} stroke="#9aa1ab" strokeDasharray="3 3" />}
+              <text x={x + bw / 2} y={top - 6} textAnchor="middle" fontSize="12" fontWeight="700" fill={b.tipo === 'delta' ? color(b) : '#1f2937'}>{txt}</text>
+              <text x={x + bw / 2} y={H - mB + 16} textAnchor="middle" fontSize="11.5" fill="#4b5563">{b.label}</text>
+            </g>
+          );
+        })}
+      </svg></div>
+    );
+  };
+  // Río de caja (diagrama de Sankey): entradas → dinero movido → salidas
+  const renderRio = (rio) => {
+    const L = rio.entradas, R = rio.salidas, total = rio.movido || 1;
+    const W = 1000, nodo = 10, gap = 8, mT = 26, mB = 8, MIN = 16; // MIN: alto mínimo de una partida para que se lea
+    const filas = Math.max(L.length, R.length, 1);
+    const H = Math.max(300, filas * 30 + mT + mB);
+    const util = H - mT - mB;
+    // Escala: las partidas pequeñas ocupan al menos MIN px y el resto se reparte en proporción
+    const escala = (lista) => {
+      let k = (util - gap * (lista.length - 1)) / Math.max(1, lista.reduce((t, x) => t + x.importe, 0));
+      for (let i = 0; i < 6; i++) {
+        const peq = lista.filter(x => x.importe * k < MIN);
+        const resto = lista.reduce((t, x) => t + x.importe, 0) - peq.reduce((t, x) => t + x.importe, 0);
+        if (resto <= 0) break;
+        k = (util - gap * (lista.length - 1) - MIN * peq.length) / resto;
+      }
+      return k;
+    };
+    const k = Math.min(escala(L), escala(R));
+    const altoDe = (x) => Math.max(MIN, x.importe * k);
+    const COL_IN = { ventas: '#6d84d4', socios: '#4aa3cf', tarjeta: '#9b7bea', otros: '#a1a7b0', caja: '#e0a42b' };
+    const COL_OUT = { gasto: '#9ca3af', impuestos: '#dc4b4b', tarjeta: '#9b7bea', banco: '#6b7280', socios: '#4aa3cf', caja: '#2f9e5b' };
+    const xC = W / 2 - nodo / 2;
+    const altoC = Math.max(L.reduce((t, x) => t + altoDe(x), 0), R.reduce((t, x) => t + altoDe(x), 0));
+    const yC = mT + (util - altoC) / 2;
+    const columna = (lista, colores, lado) => {
+      const alto = lista.reduce((t, x) => t + altoDe(x), 0) + gap * (lista.length - 1);
+      let yy = mT + (util - alto) / 2, yc = yC, ultimaEtiqueta = -99;
+      return lista.map((x) => {
+        const h = altoDe(x), y0 = yy, c0 = yc;
+        yy += h + gap; yc += h;
+        const col = colores[x.grupo] || '#9ca3af';
+        const xN = lado === 'izq' ? 0 : W - nodo;
+        const a = lado === 'izq' ? nodo : xC + nodo, b = lado === 'izq' ? xC : W - nodo;
+        const [ya0, ya1, yb0, yb1] = lado === 'izq' ? [y0, y0 + h, c0, c0 + h] : [c0, c0 + h, y0, y0 + h];
+        const m = (a + b) / 2;
+        const d = `M${a},${ya0} C${m},${ya0} ${m},${yb0} ${b},${yb0} L${b},${yb1} C${m},${yb1} ${m},${ya1} ${a},${ya1} Z`;
+        const yEt = Math.max(y0 + h / 2 + 4, ultimaEtiqueta + 14); ultimaEtiqueta = yEt;
+        return (
+          <g key={`${lado}-${x.clave}`}>
+            <path d={d} fill={col} fillOpacity="0.28"><title>{`${x.label}: ${formatCurrency(x.importe)}${x.n ? ` · ${x.n} movimientos` : ''}`}</title></path>
+            <rect x={xN} y={y0} width={nodo} height={Math.max(2, h)} rx="2" fill={col} />
+            <text x={lado === 'izq' ? nodo + 6 : W - nodo - 6} y={yEt} textAnchor={lado === 'izq' ? 'start' : 'end'} fontSize="12.5" fill="#1f2937">
+              {x.label} <tspan fontWeight="700">{eurCorto(x.importe)}</tspan>
+            </text>
+          </g>
+        );
+      });
+    };
+    return (
+      <div className="overflow-x-auto"><svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto min-w-[620px] max-w-[1100px] mx-auto block" role="img" aria-label="Río de caja">
+        {columna(L, COL_IN, 'izq')}
+        {columna(R, COL_OUT, 'der')}
+        <rect x={xC} y={yC} width={nodo} height={Math.max(2, altoC)} rx="2" fill="#7c5a10" />
+        <text x={W / 2} y={yC - 8} textAnchor="middle" fontSize="12" fill="#4b5563" fontFamily="ui-monospace, monospace">Dinero movido {eurCorto(total)}</text>
+      </svg></div>
+    );
+  };
   const renderRentabilidad = () => {
     const per = periodoRentabilidad(rentPeriodo);
     let aprov = null; // V88: materiales por consumo real (si hay catálogo y líneas de compra)
@@ -4536,6 +4636,45 @@ const MainApp = () => {
     const t = r.tot;
     const eur = (n) => (n == null ? '—' : formatCurrency(n));
     const pct = (n) => (n == null ? '—' : `${(n * 100).toFixed(1)} %`);
+    // V110: periodo anterior (mismos meses justo antes) para el puente de beneficio
+    const pa = periodoAnterior(per.desde, per.hasta);
+    const perAnt = { ...pa, label: pa.meses === 12 && pa.desde.endsWith('-01-01') ? `${pa.desde.slice(0, 4)}` : pa.meses === 1 ? new Date(`${pa.desde.slice(0, 7)}-15`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }) : `${formatDate(pa.desde)} – ${formatDate(pa.hasta)}` };
+    const rAnt = rentPuente === 'anterior' ? calcularRentabilidad(
+      { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovActivo ? aprov : null },
+      { desde: pa.desde, hasta: pa.hasta, reparto: rentReparto, linea: lineaFiltro },
+      { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
+    ) : null;
+    const barrasPuente = barrasCascada(rentPuente === 'anterior' ? puenteBeneficio(rAnt.tot, t) : puenteResultados(t));
+    // V110: río de caja con los movimientos del banco del periodo (origen y destino de cada euro)
+    const filaBanco = new globalThis.Map((planBanco?.filas || []).map(f => [f.mov.id, f])); // Map = icono de lucide en este archivo
+    const limpiaCat = (k) => String(categoriasGasto[k]?.label || k || 'Gastos').replace(/^[^A-Za-zÁÉÍÓÚáéíóúÑñ]+/, '').replace(/\s*\(\d+\)$/, '');
+    const origenDe = (m) => {
+      const tipo = clasificarMovimiento(m, tesoreria.socios);
+      const txt = String(`${m.concepto || ''} ${m.contraparte || ''}`).toLowerCase();
+      if (tipo === 'cobro') {
+        const f = facturas.find(ff => (m.factura_ids || []).includes(ff.id));
+        if (f) { const ln = lineaDeClienteId(f.cliente_id); return { clave: `cobro_${ln}`, label: `Cobros ${LINEAS_NEGOCIO[ln]?.label || ''}`.trim(), grupo: 'ventas' }; }
+        if (/remesa|tpv/.test(txt)) return { clave: 'tpv', label: 'Ventas con tarjeta (TPV)', grupo: 'ventas' };
+        return { clave: 'cobro_otros', label: 'Otros cobros', grupo: 'ventas' };
+      }
+      if (tipo === 'stripe') return { clave: 'stripe', label: 'Cobros con Stripe', grupo: 'ventas' };
+      if (tipo === 'socios' || (socioDeMovimiento(m) && /aportaci/.test(txt))) return { clave: 'socios', label: 'Aportaciones de socios', grupo: 'socios' };
+      if (tipo === 'tarjeta_entrada') return { clave: 'tarjeta', label: 'Tarjeta de crédito', grupo: 'tarjeta' };
+      if (/cashback|bonif/.test(txt)) return { clave: 'bonif', label: 'Bonificaciones del banco', grupo: 'otros' };
+      if (/devoluc|anulacion/.test(txt)) return { clave: 'devol', label: 'Devoluciones', grupo: 'otros' };
+      return { clave: 'otros_ing', label: 'Otros ingresos', grupo: 'otros' };
+    };
+    const destinoDe = (m) => {
+      const f = filaBanco.get(m.id);
+      if (f?.estado === 'gasto' && f.gasto) return { clave: `cat_${f.gasto.categoria || 'otros'}`, label: limpiaCat(f.gasto.categoria), grupo: 'gasto' };
+      const tipo = clasificarMovimiento(m, tesoreria.socios);
+      const MAPA = { tarjeta_salida: ['Pago de la tarjeta', 'tarjeta'], impuestos: ['Impuestos', 'impuestos'], comisiones: ['Comisiones del banco', 'banco'], socios_salida: ['Pagos a socios', 'socios'], suministros: ['Suministros sin gasto', 'gasto'], proveedores: ['Proveedores sin gasto', 'gasto'] };
+      const [label, grupo] = MAPA[tipo] || ['Otros pagos', 'gasto'];
+      return { clave: tipo, label, grupo };
+    };
+    const excluirRio = new Set((planBanco?.filas || []).filter(f => f.estado === 'compensado').map(f => f.mov.id));
+    const rio = rioCaja({ movs: movimientosBanco, desde: per.desde, hasta: per.hasta, origenDe, destinoDe, excluir: excluirRio });
+    const bancoDesde = movimientosBanco.length ? movimientosBanco.map(m => String(m.fecha).slice(0, 10)).sort()[0] : null;
     const kgf = (n) => `${(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg`;
     const colorPct = (n) => n == null ? 'text-neutral-400' : n >= 0.3 ? 'text-emerald-700' : n >= 0 ? 'text-amber-700' : 'text-red-600';
     const colorEur = (n) => (n || 0) >= 0 ? 'text-emerald-700' : 'text-red-600';
@@ -4671,6 +4810,58 @@ const MainApp = () => {
               : <>hay que vender <strong>{eur(t.puntoEquilibrioMes)} al mes</strong> para cubrir la estructura ({eur(t.estructuraMes)} al mes con un margen de contribución del {pct(t.contribucionPct)}). Ahora se venden {eur(t.ventasMes)} al mes{t.ventasMes < t.puntoEquilibrioMes ? `: faltan ${eur(t.puntoEquilibrioMes - t.ventasMes)} (×${(t.puntoEquilibrioMes / Math.max(1, t.ventasMes)).toFixed(1)}).` : '.'}</>}
           </p>
         </Card>
+
+        {/* V110: puente de beneficio y río de caja */}
+        <div className="grid grid-cols-1 gap-4">
+          <Card className="p-4 min-w-0">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+              <div>
+                <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">01</span> Puente de beneficio</h3>
+                <p className="text-sm text-neutral-600">{rentPuente === 'anterior' ? <>EBITDA de {perAnt.label} → {per.label}: qué lo ha movido</> : <>De las ventas al resultado · {per.label}</>}</p>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="inline-flex rounded-lg border bg-white p-0.5 text-xs font-semibold">
+                  {[['anterior', 'vs anterior'], ['pyg', 'Ventas → EBIT']].map(([k, l]) => <button key={k} onClick={() => setRentPuente(k)} className={`px-2 py-1 rounded-md ${rentPuente === k ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}>{l}</button>)}
+                </div>
+                <button onClick={() => setRentVerTabla(v => ({ ...v, puente: !v.puente }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.puente ? 'Gráfico' : 'Tabla'}</button>
+              </div>
+            </div>
+            {rentVerTabla.puente ? (
+              <table className="w-full text-sm" data-rf-no>
+                <tbody>{barrasPuente.map(b => (
+                  <tr key={b.clave} className={`border-b ${b.tipo !== 'delta' ? 'font-bold bg-neutral-50' : ''}`}>
+                    <td className="px-2 py-1.5">{b.label}{b.nota ? <span className="text-xs text-neutral-500 font-normal"> · {b.nota}</span> : null}</td>
+                    <td className={`px-2 py-1.5 text-right tabular-nums ${b.tipo === 'delta' ? (b.valor >= 0 ? 'text-emerald-700' : 'text-red-600') : ''}`}>{b.tipo === 'delta' && b.valor > 0 ? '+' : ''}{eur(b.valor)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            ) : renderCascada(barrasPuente)}
+          </Card>
+
+          <Card className="p-4 min-w-0">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+              <div>
+                <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">02</span> Río de caja</h3>
+                <p className="text-sm text-neutral-600">Lo que ha entrado y salido del BBVA · {per.label} · dinero movido <strong>{eur(rio.movido)}</strong></p>
+              </div>
+              <button onClick={() => setRentVerTabla(v => ({ ...v, rio: !v.rio }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.rio ? 'Gráfico' : 'Tabla'}</button>
+            </div>
+            {rio.n === 0 ? <p className="text-sm text-neutral-500 py-10 text-center">No hay movimientos del banco en este periodo.</p> : rentVerTabla.rio ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm" data-rf-no>
+                {[['Entra', rio.entradas, rio.totalEntradas], ['Sale', rio.salidas, rio.totalSalidas + Math.max(0, rio.variacion)]].map(([tit, lista, tot]) => (
+                  <table key={tit} className="w-full">
+                    <thead><tr className="border-b"><th className="text-left px-2 py-1 text-xs uppercase text-neutral-500">{tit}</th><th className="text-right px-2 py-1 text-xs uppercase text-neutral-500">€</th></tr></thead>
+                    <tbody>
+                      {lista.map(x => <tr key={x.clave} className="border-b"><td className="px-2 py-1">{x.label}{x.n ? <span className="text-xs text-neutral-500"> · {x.n} mov.</span> : null}</td><td className="px-2 py-1 text-right tabular-nums">{eur(x.importe)}</td></tr>)}
+                      <tr className="font-bold"><td className="px-2 py-1">Total</td><td className="px-2 py-1 text-right tabular-nums">{eur(tot)}</td></tr>
+                    </tbody>
+                  </table>
+                ))}
+              </div>
+            ) : renderRio(rio)}
+            {bancoDesde && bancoDesde > per.desde && <p className="text-xs text-amber-700 mt-2">⚠️ El banco solo tiene movimientos desde el {formatDate(bancoDesde)}: lo anterior no sale aquí.</p>}
+          </Card>
+        </div>
 
         {/* Cuenta de resultados mensual */}
         <Card className="overflow-hidden">
