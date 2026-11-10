@@ -348,6 +348,7 @@ export function calcularRentabilidad(datos, op, h) {
     const ventasProducto = ls.filter((l) => !l.porte).reduce((t, l) => t + l.importe, 0);
     const portes = ls.filter((l) => l.porte).reduce((t, l) => t + l.importe, 0);
     const ventas = ventasProducto + portes;
+    const ventasKg = ls.filter((l) => !l.porte && l.gramos > 0).reduce((t, l) => t + l.importe, 0); // V114: ventas con kilos (para precio/volumen)
     const conceptosMes = gastosMes[mes] || {};
     const sumaGrupo = (grupo) => Object.entries(conceptosMes).filter(([k]) => conceptos[k]?.grupo === grupo).reduce((t, [, v]) => t + v, 0);
     const materiales = sumaGrupo('materiales');
@@ -359,14 +360,14 @@ export function calcularRentabilidad(datos, op, h) {
     const ebitda = contribucion - estructura;
     const gramos = ls.reduce((t, l) => t + l.gramos, 0);
     return {
-      mes, ventasProducto, portes, ventas, conceptos: conceptosMes, materiales, margenBruto: mb, mbPct: ventas > 0 ? mb / ventas : null,
+      mes, ventasProducto, ventasKg, portes, ventas, conceptos: conceptosMes, materiales, margenBruto: mb, mbPct: ventas > 0 ? mb / ventas : null,
       variables, contribucion, estructura, ebitda, ebitdaPct: ventas > 0 ? ebitda / ventas : null, amortizacion, ebit: ebitda - amortizacion,
       kg: gramos / 1000,
     };
   });
   const sumaPyg = (campo) => pyg.reduce((t, m) => t + (m[campo] || 0), 0);
   const tot = {};
-  ['ventasProducto', 'portes', 'ventas', 'materiales', 'margenBruto', 'variables', 'contribucion', 'estructura', 'ebitda', 'amortizacion', 'ebit', 'kg'].forEach((c) => { tot[c] = sumaPyg(c); });
+  ['ventasProducto', 'ventasKg', 'portes', 'ventas', 'materiales', 'margenBruto', 'variables', 'contribucion', 'estructura', 'ebitda', 'amortizacion', 'ebit', 'kg'].forEach((c) => { tot[c] = sumaPyg(c); });
   tot.mbPct = tot.ventas > 0 ? tot.margenBruto / tot.ventas : null;
   tot.contribucionPct = tot.ventas > 0 ? tot.contribucion / tot.ventas : null;
   tot.ebitdaPct = tot.ventas > 0 ? tot.ebitda / tot.ventas : null;

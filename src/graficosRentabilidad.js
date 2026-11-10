@@ -9,13 +9,18 @@
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const dia = (f) => String(f || '').slice(0, 10);
 
-export function periodoAnterior(desde, hasta) {
+// V114: el periodo actual se corta en el mes de hoy (no se compara un año entero con uno a medias) y un año o
+// 12 meses se comparan con los mismos meses del año anterior; un mes o trimestre, con el inmediatamente anterior.
+export function periodoAnterior(desde, hasta, { hoy = null, anual = false } = {}) {
+  const finMesDe = (iso) => { const [y, m] = dia(iso).split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+  const hastaAct = hoy && finMesDe(hoy) < dia(hasta) ? finMesDe(hoy) : dia(hasta);
   const [y0, m0] = dia(desde).split('-').map(Number);
-  const [y1, m1] = dia(hasta).split('-').map(Number);
-  const meses = (y1 - y0) * 12 + (m1 - m0) + 1;
-  const ini = new Date(Date.UTC(y0, m0 - 1 - meses, 1));
-  const fin = new Date(Date.UTC(y0, m0 - 1, 0));
-  return { desde: ini.toISOString().slice(0, 10), hasta: fin.toISOString().slice(0, 10), meses };
+  const [y1, m1] = hastaAct.split('-').map(Number);
+  const meses = Math.max(1, (y1 - y0) * 12 + (m1 - m0) + 1);
+  const atras = anual ? 12 : meses;
+  const ini = new Date(Date.UTC(y0, m0 - 1 - atras, 1));
+  const fin = new Date(Date.UTC(y0, m0 - 1 - atras + meses, 0));
+  return { desde: ini.toISOString().slice(0, 10), hasta: fin.toISOString().slice(0, 10), meses, hastaActual: hastaAct };
 }
 
 const paso = (clave, label, valor, tipo, nota) => ({ clave, label, valor: r2(valor), tipo, nota });
@@ -23,7 +28,9 @@ const paso = (clave, label, valor, tipo, nota) => ({ clave, label, valor: r2(val
 /** ant y act: `tot` de calcularRentabilidad. Pasos: total inicial, deltas y total final. */
 export function puenteBeneficio(ant, act) {
   const kg0 = Number(ant.kg) || 0, kg1 = Number(act.kg) || 0;
-  const vp0 = Number(ant.ventasProducto) || 0, vp1 = Number(act.ventasProducto) || 0;
+  // V114: precio y volumen solo con las ventas que tienen kilos; las facturas sin detalle van aparte
+  const vp0 = Number(ant.ventasKg ?? ant.ventasProducto) || 0, vp1 = Number(act.ventasKg ?? act.ventasProducto) || 0;
+  const sinKg = ((Number(act.ventasProducto) || 0) - vp1) - ((Number(ant.ventasProducto) || 0) - vp0);
   let volumen, precio;
   if (kg0 > 0 && kg1 > 0) {
     const p0 = vp0 / kg0, p1 = vp1 / kg1;
@@ -34,6 +41,7 @@ export function puenteBeneficio(ant, act) {
     paso('inicio', 'EBITDA anterior', ant.ebitda, 'total'),
     paso('volumen', 'Volumen', volumen, 'delta', kg0 > 0 && kg1 > 0 ? `${r2(kg1 - kg0)} kg a ${r2(vp0 / kg0)} €/kg` : 'cambio de ventas'),
     paso('precio', 'Precio', precio, 'delta', kg0 > 0 && kg1 > 0 ? `${r2(vp1 / kg1 - vp0 / kg0)} €/kg` : ''),
+    paso('sin_kg', 'Ventas sin kilos', sinKg, 'delta', 'facturas sin detalle de producto'),
     paso('portes', 'Portes', (Number(act.portes) || 0) - (Number(ant.portes) || 0), 'delta'),
     paso('materiales', 'Materiales', -((Number(act.materiales) || 0) - (Number(ant.materiales) || 0)), 'delta', 'semilla, sustrato, envases'),
     paso('variables', 'Variables', -((Number(act.variables) || 0) - (Number(ant.variables) || 0)), 'delta', 'luz, agua, transporte'),
