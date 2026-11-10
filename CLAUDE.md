@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V108**; la siguiente es **V109**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V109: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V109-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V109**; la siguiente es **V110**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V110: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V110-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V109 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V110 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V109: <resumen corto>`.
+- Mensaje de commit: `V110: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -50,6 +50,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - `src/plazosPago.js` (V99): `fechaVencimientoFactura(fecha, cliente, primeraEntrega)` = plazo del cliente (30 por defecto desde la V100, máx. 30) y nunca más de 30 días desde la primera entrega (perecederos). Úsala en toda factura de venta nueva.
 - `src/tablasInteractivas.js` (V99): `activarMejorasUI()` (useEffect de `MainApp`) hace ordenables, filtrables y con selector de columnas todas las `<table>`, y convierte las notas explicativas (texto `text-xs` gris ≥ 55 caracteres o que empieza por 💡) en un icono ⓘ con nube. No hace falta código en cada tabla; para excluir algo, pon `data-rf-no` en la tabla o su contenedor. Los avisos importantes escríbelos con ⚠️/❌/⛔ o en color (no gris) para que sigan a la vista. V102: en el móvil (≤ 700 px) las tablas se ven compactas y `ajustarMovil()` oculta columnas secundarias hasta que caben (nunca la primera, importes ni botones); las tarjetas (`data-rf-movil`) son opcionales con el botón de la barra. No pongas anchos mínimos fijos a las tablas. Para imprimir o descargar una factura usa siempre el PDF de portal-cliente (`imprimirPdfDocumento` / `descargarPdfDocumento`), no plantillas HTML propias.
 - `src/tesoreria.js` (V107): saldos diarios del BBVA (`reconstruirSaldos`), clasificación de movimientos, resumen mensual, pagos fijos detectados y previsión; el `useMemo` `tesoreria` de `MainApp` lo junta con facturas, gastos e impuestos y lo usan `renderTesoreria()`, el Dashboard y la campana. Ajustes: `tesoreria_saldo_minimo`, `tesoreria_excluir`. Pruébalo en Node con movimientos reales. V108: `planContabilizarBanco()` casa cada movimiento con su asiento (COB-, GAS-, APO- aportaciones de socios, STR-, BAN-<movimiento>, BAN-INICIO) y propone la contrapartida del resto (`renderContabilizarBanco()` en Tesorería); los gastos con `tarjeta_empresa` van contra la **5201**. El conciliador de `banco` casa remesas del TPV con varias facturas (`combinacionesFacturas`).
+- `src/dashboard.js` (V109): cifras del Dashboard (`periodoDashboard`, `ventasEntregadas` por fecha de entrega, `resumenVentas` facturado, `cobradoEntre`, `resumenCobros` por cobrar con antigüedad, `pendienteFacturar`). `renderDashboard()` las junta con el `useMemo` `dashRent` (Rentabilidad del periodo y 12 meses, solo con el Dashboard abierto). Una factura cobrable = `esFacturaVenta(f)` y estado `pendiente`/`vencida` (no existe `estado_pago`).
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
 - Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)` (V104: lee por páginas de 1.000, sin límite de filas).

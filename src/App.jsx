@@ -20,6 +20,7 @@ import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
+import { periodoDashboard, resumenVentas, resumenCobros, pendienteFacturar, cobradoEntre, ventasEntregadas, variacion } from './dashboard.js'; // V109
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
 import { importeEsperado, cuadra as facturaCuadra, revisarFacturas } from './controlFacturas.js'; // V97
@@ -11587,151 +11588,108 @@ ${pedidoLinea ? `^FO260,258
 
   // ==================== RENDER SECTIONS ====================
   const renderDashboard = () => {
-    // ==================== CÁLCULOS BÁSICOS ====================
+    // V109: Dashboard rehecho. Antes «Por cobrar» miraba `estado_pago` (no existe) y sumaba TODAS las facturas
+    // (cobradas, anuladas y rectificativas), y ventas/gastos/beneficio salían de los pedidos con IVA.
+    // Ahora: ventas = lo entregado (albaranes por fecha de entrega, sin IVA), facturado y cobrado del periodo,
+    // margen bruto y EBITDA como en Rentabilidad, por cobrar con su antigüedad y lo que necesita atención.
+    // Cálculos puros en src/dashboard.js.
     const hoyStr = new Date().toISOString().split('T')[0];
     const ahora = new Date();
-    
-    // Filtrar pedidos del periodo
-    const pedidosPeriodo = filtrarPorPeriodo(pedidos, 'fecha', dashboardPeriodo);
-    const gastosPeriodo = filtrarPorPeriodo(gastos, 'fecha', dashboardPeriodo);
-    
-    // KPIs principales
-    const ventasMes = pedidosPeriodo.filter(p => p.estado === 'entregado').reduce((s, p) => s + (p.total || 0), 0);
-    const gastosMes = gastosPeriodo.reduce((s, g) => s + (g.importe || 0), 0);
-    const beneficioMes = ventasMes - gastosMes;
-    const margenPct = ventasMes > 0 ? ((beneficioMes / ventasMes) * 100).toFixed(1) : 0;
-    
-    // Comparativa con mes anterior
-    const mesAnteriorDate = new Date();
-    mesAnteriorDate.setMonth(mesAnteriorDate.getMonth() - 1);
-    const mesAnteriorKey = `${mesAnteriorDate.getFullYear()}-${String(mesAnteriorDate.getMonth() + 1).padStart(2, '0')}`;
-    const pedidosMesAnt = filtrarPorPeriodo(pedidos, 'fecha', mesAnteriorKey);
-    const ventasMesAnt = pedidosMesAnt.filter(p => p.estado === 'entregado').reduce((s, p) => s + (p.total || 0), 0);
-    const variacionVentas = ventasMesAnt > 0 ? ((ventasMes - ventasMesAnt) / ventasMesAnt * 100) : (ventasMes > 0 ? 100 : 0);
-    
-    // Operaciones día actual
+    const verFinanzas = puedeVer('facturacion') || puedeVer('rentabilidad') || puedeVer('tesoreria');
+    const per = periodoDashboard(dashboardPeriodo, hoyStr);
+    const nombreCli = (id) => clientes.find(c => c.id === id)?.nombre?.trim() || 'Cliente';
+    const impAlb = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
+    const kgDe = (albs) => albs.reduce((t, a) => t + (Array.isArray(a.items_json) ? a.items_json : []).reduce((s, it) => s + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0), 0) / 1000;
+
+    // ==================== CIFRAS DEL PERIODO ====================
+    const vent = ventasEntregadas(albaranes, per.desde, per.hasta, impAlb);
+    const ventAnt = ventasEntregadas(albaranes, per.antDesde, per.antHasta, impAlb);
+    const varVentas = variacion(vent.base, ventAnt.base);
+    const kgPer = kgDe(vent.albaranes);
+    const fact = resumenVentas(facturas, per.desde, per.hasta);
+    const cobrado = cobradoEntre(facturas, per.desde, per.hasta);
+    const cobros = resumenCobros(facturas, hoyStr);
+    const sinFacturar = pendienteFacturar({ albaranes, facturas, albaranPedidos, importeDe: impAlb });
+    const rt = dashRent?.per?.tot || null;
+    const pyg12 = (dashRent?.r12?.pyg || []).map(m => ({
+      mes: new Date(`${m.mes}-15`).toLocaleDateString('es-ES', { month: 'short' }).replace('.', ''),
+      ventas: Math.round(m.ventas), costes: Math.round((m.materiales || 0) + (m.variables || 0) + (m.estructura || 0)), ebitda: Math.round(m.ebitda),
+    }));
+    const hayPyg = pyg12.some(m => m.ventas || m.costes);
+
+    // Top clientes y productos del periodo (lo entregado)
+    const porCli = {}, porProd = {};
+    vent.albaranes.forEach(a => {
+      porCli[a.cliente_id] = porCli[a.cliente_id] || { id: a.cliente_id, base: 0, n: 0 };
+      porCli[a.cliente_id].base += impAlb(a); porCli[a.cliente_id].n++;
+      (Array.isArray(a.items_json) ? a.items_json : []).forEach(it => {
+        const prod = productos.find(p => p.id === Number(it.producto_id));
+        const nombre = prod?.nombre || it.nombre || 'Otros';
+        porProd[nombre] = porProd[nombre] || { nombre, importe: 0, ud: 0 };
+        porProd[nombre].importe += (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0);
+        porProd[nombre].ud += Number(it.cantidad) || 0;
+      });
+    });
+    const topClientes = Object.values(porCli).sort((a, b) => b.base - a.base).slice(0, 5);
+    const topProductos = Object.values(porProd).sort((a, b) => b.importe - a.importe).slice(0, 5);
+
+    // ==================== OPERACIONES ====================
     const turnosHoyD = turnos.filter(t => t.fecha === hoyStr && !t.completado);
     const tareasHoyD = tareas.filter(t => t.fecha_limite === hoyStr && !t.completada);
     const tareasAtrasD = tareas.filter(t => !t.completada && t.fecha_limite && t.fecha_limite < hoyStr);
     const entregasHoy = pedidos.filter(p => p.fecha_entrega === hoyStr && ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
     const cosechasHoy = lotes.filter(l => l.fecha_cosecha_prevista === hoyStr && l.estado !== 'cosechado');
     const totalHoy = turnosHoyD.length + tareasHoyD.length + entregasHoy.length + cosechasHoy.length;
-    
-    // Pedidos pendientes y atrasados
-    const pedidosPendientes = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado));
-    const pedidosAtrasados = pedidos.filter(p => 
-      ['pendiente', 'confirmado', 'preparando'].includes(p.estado) && 
-      p.fecha_entrega && new Date(p.fecha_entrega) < new Date(hoyStr)
-    );
-    const valorPendiente = pedidosPendientes.reduce((s, p) => s + (p.total || 0), 0);
-    
-    // Stock
-    const productosStockBajo = productos.filter(p => 
-      p.estado_inventario === 'empaquetado' && (p.stock || 0) < (p.stock_minimo || 20) && (p.stock || 0) > 0
-    );
-    const productosSinStock = productos.filter(p => 
-      p.estado_inventario === 'empaquetado' && (p.stock || 0) === 0
-    );
-    
-    // Facturas pendientes de cobro
-    const facturasPendientes = facturas.filter(f => f.estado_pago !== 'pagada' && f.estado_pago !== 'pagado');
-    const valorFacturasPendientes = facturasPendientes.reduce((s, f) => s + (f.total || 0), 0);
-    const facturasVencidas = facturasPendientes.filter(f => 
-      f.fecha_vencimiento && new Date(f.fecha_vencimiento) < new Date(hoyStr)
-    );
-    
-    // Gastos pendientes de pago
-    const gastosPendientes = gastos.filter(g => !g.pagado);
-    const valorGastosPendientes = gastosPendientes.reduce((s, g) => s + (g.importe || 0), 0);
-    
-    // === GRÁFICA: Ventas vs Gastos últimos 6 meses ===
-    const ultimos6Meses = [];
-    for (let i = 5; i >= 0; i--) {
-      const fecha = new Date();
-      fecha.setMonth(fecha.getMonth() - i);
-      const key = `${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}`;
-      const nombreMes = fecha.toLocaleDateString('es-ES', { month: 'short' });
-      
-      const vM = pedidos.filter(p => p.estado === 'entregado' && p.fecha?.startsWith(key)).reduce((s, p) => s + (p.total || 0), 0);
-      const gM = gastos.filter(g => g.fecha?.startsWith(key)).reduce((s, g) => s + (g.importe || 0), 0);
-      
-      ultimos6Meses.push({ 
-        mes: nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1),
-        ventas: Math.round(vM),
-        gastos: Math.round(gM),
-        beneficio: Math.round(vM - gM),
-      });
-    }
-    
-    // === Top productos vendidos del periodo ===
-    const ventasPorProducto = {};
-    pedidosPeriodo.filter(p => p.estado === 'entregado').forEach(p => {
-      const items = pedidoItems.filter(i => i.pedido_id === p.id);
-      items.forEach(item => {
-        const prod = productos.find(pr => pr.id === item.producto_id);
-        const variedad = prod ? variedades.find(v => v.id === prod.variedad_id) : null;
-        const nombre = variedad ? `${variedad.nombre}${prod.formato_gramos ? ' ' + prod.formato_gramos + 'g' : ''}` : (prod?.nombre || 'Otros');
-        if (!ventasPorProducto[nombre]) ventasPorProducto[nombre] = { cantidad: 0, importe: 0 };
-        ventasPorProducto[nombre].cantidad += item.cantidad || 0;
-        ventasPorProducto[nombre].importe += (item.cantidad || 0) * (item.precio_unitario || 0);
-      });
-    });
-    const topProductos = Object.entries(ventasPorProducto)
-      .sort((a, b) => b[1].importe - a[1].importe)
-      .slice(0, 5);
-    
-    // === Top clientes del periodo ===
-    const clientesPorImporte = {};
-    pedidosPeriodo.filter(p => p.estado === 'entregado').forEach(p => {
-      if (!p.cliente_id) return;
-      if (!clientesPorImporte[p.cliente_id]) clientesPorImporte[p.cliente_id] = 0;
-      clientesPorImporte[p.cliente_id] += p.total || 0;
-    });
-    const topClientes = Object.entries(clientesPorImporte)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([id, imp]) => ({ cliente: clientes.find(c => c.id === parseInt(id)), importe: imp }));
-    
-    // === Próximas cosechas (siguientes 7 días) ===
-    const proximasCosechas = lotes
-      .filter(l => 
-        l.estado !== 'cosechado' && 
-        l.fecha_cosecha_prevista &&
-        new Date(l.fecha_cosecha_prevista) >= new Date(hoyStr) &&
-        new Date(l.fecha_cosecha_prevista) <= new Date(new Date().setDate(new Date().getDate() + 7))
-      )
-      .sort((a, b) => new Date(a.fecha_cosecha_prevista) - new Date(b.fecha_cosecha_prevista))
-      .slice(0, 5);
-    
-    // === Próximas entregas (siguientes 7 días) ===
-    const proximasEntregas = pedidos
-      .filter(p => 
-        ['pendiente', 'confirmado', 'preparando'].includes(p.estado) &&
-        p.fecha_entrega &&
-        new Date(p.fecha_entrega) >= new Date(hoyStr) &&
-        new Date(p.fecha_entrega) <= new Date(new Date().setDate(new Date().getDate() + 7))
-      )
-      .sort((a, b) => new Date(a.fecha_entrega) - new Date(b.fecha_entrega))
-      .slice(0, 5);
-    
+    const pedidosAtrasados = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado) && p.fecha_entrega && p.fecha_entrega < hoyStr);
+    const en7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const proximasCosechas = lotes.filter(l => l.estado !== 'cosechado' && l.fecha_cosecha_prevista && l.fecha_cosecha_prevista >= hoyStr && l.fecha_cosecha_prevista <= en7)
+      .sort((a, b) => String(a.fecha_cosecha_prevista).localeCompare(String(b.fecha_cosecha_prevista))).slice(0, 5);
+    const proximasEntregas = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado) && p.fecha_entrega && p.fecha_entrega >= hoyStr && p.fecha_entrega <= en7)
+      .sort((a, b) => String(a.fecha_entrega).localeCompare(String(b.fecha_entrega))).slice(0, 5);
+    const gastosSinPagar = gastos.filter(g => !g.pagado);
+
+    // ==================== LO QUE NECESITA ATENCIÓN ====================
+    const movsRevisar = movimientosBanco.filter(m => Number(m.importe) > 0 && ['sugerido', 'sin_casar'].includes(m.estado)).length;
+    const problemasFacturas = (controlFacturas?.descuadres?.length || 0) + (controlFacturas?.duplicadas?.length || 0) + (controlFacturas?.sinFactura?.length || 0);
+    const pendContab = (planBanco?.pendientes?.length || 0) + (planBanco?.revisar?.length || 0);
+    const atencion = [
+      verFinanzas && cobros.nVencidas > 0 && { nivel: 'rojo', icono: '💶', titulo: `${cobros.nVencidas} factura${cobros.nVencidas === 1 ? '' : 's'} vencida${cobros.nVencidas === 1 ? '' : 's'} sin cobrar`, detalle: `${formatCurrency(cobros.vencido)} · ${cobros.deudores.filter(d => d.vencido > 0).map(d => nombreCli(d.cliente_id)).slice(0, 3).join(', ')}`, ir: 'facturacion' },
+      verFinanzas && tesoreria.alerta && { nivel: 'rojo', icono: '🏦', titulo: 'El banco bajará del mínimo en 30 días', detalle: `Mínimo previsto ${formatCurrency(tesoreria.min30)} (umbral ${formatCurrency(tesoreria.umbral)})`, ir: 'tesoreria' },
+      puedeVer('facturacion') && problemasFacturas > 0 && { nivel: 'rojo', icono: '🧾', titulo: `${problemasFacturas} factura${problemasFacturas === 1 ? '' : 's'} con problemas`, detalle: 'No cuadran con su albarán, duplicadas o entregas sin factura', ir: 'facturacion' },
+      pedidosAtrasados.length > 0 && { nivel: 'rojo', icono: '🚚', titulo: `${pedidosAtrasados.length} pedido${pedidosAtrasados.length === 1 ? '' : 's'} con la entrega pasada`, detalle: pedidosAtrasados.slice(0, 3).map(p => nombreCli(p.cliente_id)).join(', '), ir: 'pedidos' },
+      puedeVer('facturacion') && sinFacturar.n > 0 && { nivel: 'ambar', icono: '📄', titulo: `${sinFacturar.n} albarán${sinFacturar.n === 1 ? '' : 'es'} entregado${sinFacturar.n === 1 ? '' : 's'} sin facturar`, detalle: `${formatCurrency(sinFacturar.base)} sin IVA · el más antiguo del ${formatDate(sinFacturar.lista.map(x => x.fecha).sort()[0])}`, ir: 'albaranes' },
+      puedeVer('facturacion') && movsRevisar > 0 && { nivel: 'ambar', icono: '🔎', titulo: `${movsRevisar} ingreso${movsRevisar === 1 ? '' : 's'} del banco por revisar`, detalle: 'Cobros que el ERP no ha podido casar solo con una factura', ir: 'facturacion' },
+      puedeVer('tesoreria') && pendContab > 0 && { nivel: 'ambar', icono: '📒', titulo: `${pendContab} movimiento${pendContab === 1 ? '' : 's'} del banco por contabilizar o arreglar`, detalle: 'Tesorería → Contabilizar el banco', ir: 'tesoreria' },
+      puedeVer('gastos') && gastosSinPagar.length > 0 && { nivel: 'azul', icono: '💳', titulo: `${gastosSinPagar.length} gasto${gastosSinPagar.length === 1 ? '' : 's'} sin pagar`, detalle: `${formatCurrency(gastosSinPagar.reduce((t, g) => t + (Number(g.importe) || 0), 0))} a proveedores`, ir: 'gastos' },
+      tareasAtrasD.length > 0 && { nivel: 'azul', icono: '📋', titulo: `${tareasAtrasD.length} tarea${tareasAtrasD.length === 1 ? '' : 's'} atrasada${tareasAtrasD.length === 1 ? '' : 's'}`, detalle: tareasAtrasD.slice(0, 2).map(t => t.titulo || t.descripcion || '').filter(Boolean).join(' · '), ir: 'calendario' },
+    ].filter(Boolean);
+    const COLOR_AT = { rojo: 'bg-red-50 border-red-200 hover:bg-red-100 text-red-900', ambar: 'bg-amber-50 border-amber-200 hover:bg-amber-100 text-amber-900', azul: 'bg-sky-50 border-sky-200 hover:bg-sky-100 text-sky-900' };
+
     // Saludo dinámico
     const horaNum = ahora.getHours();
     const saludo = horaNum < 12 ? 'Buenos días' : horaNum < 20 ? 'Buenas tardes' : 'Buenas noches';
     const nombreUsuario = userProfile?.nombre?.split(' ')[0] || 'equipo';
+    const pctTxt = (n) => (n == null ? '—' : `${(n * 100).toFixed(0)} %`);
+    const Variacion = ({ v }) => v == null ? null : (
+      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${v >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{v >= 0 ? '↑' : '↓'} {Math.abs(v).toFixed(0)} %</span>
+    );
+    const Kpi = ({ titulo, valor, sub, icono: Icono, color, ir, extra, rojo }) => (
+      <button onClick={() => ir && setActiveSection(ir)} className={`text-left rounded-2xl border p-4 bg-white hover:shadow-md transition-all min-w-0 ${rojo ? 'border-red-200 bg-red-50/40' : 'border-neutral-200'}`}>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <span className={`p-2 rounded-xl ${color}`}><Icono size={18} /></span>
+          {extra}
+        </div>
+        <p className="text-[11px] text-neutral-500 uppercase tracking-wider font-bold">{titulo}</p>
+        <p className={`text-xl md:text-2xl font-black mt-0.5 tabular-nums ${rojo ? 'text-red-600' : 'text-neutral-900'}`}>{valor}</p>
+        {sub && <p className="text-xs text-neutral-600 mt-1">{sub}</p>}
+      </button>
+    );
+    const maxTramo = Math.max(1, ...cobros.tramos.map(t => t.importe));
+    const COLOR_TRAMO = { al_dia: 'bg-emerald-500', '1_15': 'bg-amber-400', '16_30': 'bg-orange-500', mas_30: 'bg-red-600' };
 
     return (
       <div className="space-y-6">
         {/* ============ HEADER ============ */}
-        {/* V107: tesorería en el dashboard */}
-        {puedeVer('tesoreria') && movimientosBanco.length > 0 && (
-          <button onClick={() => setActiveSection('tesoreria')} className={`w-full text-left rounded-2xl border p-4 flex flex-wrap items-center gap-x-6 gap-y-1 ${tesoreria.alerta ? 'bg-red-50 border-red-300' : 'bg-white border-neutral-200'} hover:shadow-md transition-all`}>
-            <span className="font-bold">💰 Banco</span>
-            <span>Hoy <strong className={tesoreria.saldoHoy < 0 ? 'text-red-600' : ''}>{formatCurrency(tesoreria.saldoHoy)}</strong></span>
-            <span>En 30 días <strong className={saldoEn(tesoreria.prev, 30) < 0 ? 'text-red-600' : ''}>{formatCurrency(saldoEn(tesoreria.prev, 30))}</strong></span>
-            <span>Por cobrar <strong>{formatCurrency(tesoreria.porCobrar)}</strong>{tesoreria.vencido > 0 && <span className="text-red-600"> ({formatCurrency(tesoreria.vencido)} vencido)</span>}</span>
-            {tesoreria.alerta && <span className="text-red-700 font-semibold">⛔ Baja de {formatCurrency(tesoreria.umbral)} en los próximos 30 días</span>}
-          </button>
-        )}
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
           <div>
             <p className="text-sm text-neutral-500 font-medium capitalize">
@@ -11741,28 +11699,78 @@ ${pedidoLinea ? `^FO260,258
               {saludo}, {nombreUsuario} <span className="inline-block animate-wiggle">👋</span>
             </h1>
             <p className="text-neutral-600 mt-1">
-              {totalHoy === 0 && tareasAtrasD.length === 0
-                ? '🌟 Día tranquilo, sin urgencias hoy'
-                : `Hoy tienes ${totalHoy} cosa${totalHoy !== 1 ? 's' : ''} pendiente${totalHoy !== 1 ? 's' : ''}${tareasAtrasD.length > 0 ? ` · ⚠️ ${tareasAtrasD.length} atrasada${tareasAtrasD.length !== 1 ? 's' : ''}` : ''}`
-              }
+              {atencion.length === 0 && totalHoy === 0
+                ? '🌟 Todo en orden, sin urgencias hoy'
+                : `${totalHoy > 0 ? `Hoy: ${totalHoy} cosa${totalHoy !== 1 ? 's' : ''} en el calendario` : 'Nada en el calendario hoy'}${atencion.length ? ` · ${atencion.length} asunto${atencion.length !== 1 ? 's' : ''} que mirar` : ''}`}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <select 
-              value={dashboardPeriodo} 
-              onChange={e => setDashboardPeriodo(e.target.value)}
-              className="px-4 py-2.5 rounded-xl border-2 border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none text-sm shadow-sm"
-            >
-              <option value="mes_actual">📅 Este mes</option>
-              <option value="año_actual">📊 Año {new Date().getFullYear()}</option>
-              <optgroup label="Meses anteriores">
-                {getMesesDisponibles().slice(1).map(m => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
+          <select
+            value={dashboardPeriodo}
+            onChange={e => setDashboardPeriodo(e.target.value)}
+            className="px-4 py-2.5 rounded-xl border-2 border-neutral-200 bg-white font-semibold text-neutral-700 focus:ring-2 focus:ring-orange-500 outline-none text-sm shadow-sm"
+          >
+            <option value="mes_actual">📅 Este mes</option>
+            <option value="año_actual">📊 Año {new Date().getFullYear()}</option>
+            <optgroup label="Meses anteriores">
+              {getMesesDisponibles().slice(1).map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </optgroup>
+          </select>
         </div>
+
+        {/* ============ KPIs DEL NEGOCIO (V109) ============ */}
+        {verFinanzas && (
+          <div>
+            <p className="text-sm text-neutral-700 mb-2">Periodo: <strong>{per.label}</strong> · comparado con {per.antLabel} · importes sin IVA salvo cobros</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+              <Kpi titulo="Ventas (entregado)" valor={formatCurrency(vent.base)} icono={TrendingUp} color="bg-emerald-100 text-emerald-700" ir="albaranes"
+                extra={<Variacion v={varVentas} />} sub={`${kgPer.toLocaleString('es-ES', { maximumFractionDigits: 1 })} kg · ${vent.n} entrega${vent.n === 1 ? '' : 's'} · antes ${formatCurrency(ventAnt.base)}`} />
+              <Kpi titulo="Facturado" valor={formatCurrency(fact.base)} icono={FileCheck} color="bg-sky-100 text-sky-700" ir="facturacion"
+                sub={`${fact.n} factura${fact.n === 1 ? '' : 's'}${sinFacturar.n ? ` · ${formatCurrency(sinFacturar.base)} entregado sin facturar` : ''}`} />
+              <Kpi titulo="Margen bruto" valor={rt ? formatCurrency(rt.margenBruto) : '—'} icono={Percent} color="bg-violet-100 text-violet-700" ir="rentabilidad"
+                extra={rt && rt.mbPct != null ? <span className="text-xs font-bold text-violet-700">{pctTxt(rt.mbPct)}</span> : null} sub="Ventas − semilla, sustrato y envases (según facturas)" rojo={rt && rt.margenBruto < 0} />
+              <Kpi titulo="EBITDA" valor={rt ? formatCurrency(rt.ebitda) : '—'} icono={Calculator} color="bg-blue-100 text-blue-700" ir="rentabilidad"
+                extra={rt && rt.ebitdaPct != null ? <span className={`text-xs font-bold ${rt.ebitda < 0 ? 'text-red-600' : 'text-blue-700'}`}>{pctTxt(rt.ebitdaPct)}</span> : null}
+                sub={rt?.puntoEquilibrioMes ? `Equilibrio: ${formatCurrency(rt.puntoEquilibrioMes)}/mes de ventas` : 'Resultado antes de amortizaciones'} rojo={rt && rt.ebitda < 0} />
+              <Kpi titulo="Cobrado" valor={formatCurrency(cobrado.total)} icono={Banknote} color="bg-green-100 text-green-700" ir="facturacion"
+                sub={`${cobrado.n} factura${cobrado.n === 1 ? '' : 's'} cobrada${cobrado.n === 1 ? '' : 's'} (con IVA)`} />
+              <Kpi titulo="Por cobrar" valor={formatCurrency(cobros.total)} icono={Receipt} color="bg-purple-100 text-purple-700" ir="facturacion" rojo={cobros.vencido > 0}
+                extra={cobros.nVencidas > 0 ? <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">⚠️ {cobros.nVencidas} venc.</span> : null}
+                sub={`${cobros.n} factura${cobros.n === 1 ? '' : 's'}${cobros.vencido > 0 ? ` · ${formatCurrency(cobros.vencido)} vencido` : ' · nada vencido'} (con IVA, a hoy)`} />
+            </div>
+          </div>
+        )}
+
+        {/* V107: tesorería en el dashboard */}
+        {puedeVer('tesoreria') && movimientosBanco.length > 0 && (
+          <button onClick={() => setActiveSection('tesoreria')} className={`w-full text-left rounded-2xl border p-4 flex flex-wrap items-center gap-x-6 gap-y-1 ${tesoreria.alerta ? 'bg-red-50 border-red-300' : 'bg-white border-neutral-200'} hover:shadow-md transition-all`}>
+            <span className="font-bold">💰 Banco</span>
+            <span>Hoy <strong className={tesoreria.saldoHoy < 0 ? 'text-red-600' : ''}>{formatCurrency(tesoreria.saldoHoy)}</strong></span>
+            <span>En 30 días <strong className={saldoEn(tesoreria.prev, 30) < 0 ? 'text-red-600' : ''}>{formatCurrency(saldoEn(tesoreria.prev, 30))}</strong></span>
+            <span>Salidas medias <strong>{formatCurrency(tesoreria.salidasMes)}/mes</strong></span>
+            {tesoreria.alerta && <span className="text-red-700 font-semibold">⛔ Baja de {formatCurrency(tesoreria.umbral)} en los próximos 30 días</span>}
+          </button>
+        )}
+
+        {/* ============ NECESITA ATENCIÓN (V109) ============ */}
+        {atencion.length > 0 && (
+          <Card className="p-4">
+            <h3 className="font-bold text-neutral-900 mb-3">⚡ Necesita atención</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+              {atencion.map(a => (
+                <button key={a.titulo} onClick={() => setActiveSection(a.ir)} className={`flex items-start gap-3 p-3 rounded-xl border text-left transition-colors ${COLOR_AT[a.nivel]}`}>
+                  <span className="text-xl leading-none">{a.icono}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block font-bold text-sm">{a.titulo}</span>
+                    {a.detalle && <span className="block text-xs opacity-80 truncate">{a.detalle}</span>}
+                  </span>
+                  <ArrowUpRight size={14} className="flex-shrink-0 opacity-60 mt-0.5" />
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
 
         {/* ============ MI DÍA - CTA CARD ============ */}
         {(totalHoy > 0 || tareasAtrasD.length > 0) && (
@@ -11843,305 +11851,127 @@ ${pedidoLinea ? `^FO260,258
           </div>
         )}
 
-        {/* ============ KPIs FINANCIEROS PRINCIPALES ============ */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Ventas */}
-          <Card className="p-5 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveSection('pedidos')}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="p-2.5 bg-emerald-100 rounded-xl">
-                <TrendingUp size={22} className="text-emerald-600" />
+        {/* ============ EVOLUCIÓN + POR COBRAR (V109) ============ */}
+        {verFinanzas && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <Card className="p-5 lg:col-span-2 min-w-0">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">Evolución 12 meses</h3>
+                  <p className="text-xs text-neutral-500">Ventas, costes y EBITDA por mes de factura (como en Rentabilidad)</p>
+                </div>
+                <button onClick={() => setActiveSection('rentabilidad')} className="text-xs text-orange-600 hover:underline font-semibold whitespace-nowrap">Ver rentabilidad</button>
               </div>
-              {variacionVentas !== 0 && (
-                <span className={`text-xs font-bold px-2 py-1 rounded-full ${variacionVentas > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                  {variacionVentas > 0 ? '↑' : '↓'} {Math.abs(variacionVentas).toFixed(0)}%
-                </span>
+              {!dashRent ? <p className="text-sm text-neutral-500 py-10 text-center">Calculando…</p> : !hayPyg ? <p className="text-sm text-neutral-500 py-10 text-center">Aún no hay facturas ni gastos en los últimos 12 meses.</p> : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <ComposedChart data={pyg12} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis dataKey="mes" axisLine={false} tickLine={false} style={{ fontSize: 11 }} />
+                    <YAxis axisLine={false} tickLine={false} style={{ fontSize: 11 }} width={48} tickFormatter={(v) => Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${v}`} />
+                    <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e5e5e5' }} formatter={(v) => formatCurrency(v)} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+                    <ReferenceLine y={0} stroke="#a3a3a3" />
+                    <Bar dataKey="ventas" name="Ventas" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="costes" name="Costes" fill="#f87171" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="ebitda" name="EBITDA" stroke="#2563eb" strokeWidth={3} dot={{ r: 3 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
               )}
-            </div>
-            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Ventas</p>
-            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(ventasMes)}</p>
-            <p className="text-xs text-neutral-400 mt-1">
-              {pedidosPeriodo.filter(p => p.estado === 'entregado').length} pedidos entregados
-            </p>
-          </Card>
-          
-          {/* Gastos */}
-          <Card className="p-5 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => setActiveSection('gastos')}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="p-2.5 bg-red-100 rounded-xl">
-                <TrendingDown size={22} className="text-red-600" />
+            </Card>
+
+            <Card className="p-5 min-w-0">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">💶 Por cobrar</h3>
+                  <p className="text-xs text-neutral-500">{formatCurrency(cobros.total)} en {cobros.n} factura{cobros.n === 1 ? '' : 's'} · con IVA</p>
+                </div>
+                <button onClick={() => setActiveSection('facturacion')} className="text-xs text-orange-600 hover:underline font-semibold whitespace-nowrap">Ver facturas</button>
               </div>
-              {ventasMes > 0 && (
-                <span className="text-xs font-bold px-2 py-1 rounded-full bg-neutral-100 text-neutral-600">
-                  {((gastosMes / ventasMes) * 100).toFixed(0)}% s/ventas
-                </span>
+              {cobros.n === 0 ? (
+                <div className="text-center py-8"><CheckCircle size={36} className="mx-auto text-green-500 mb-2" /><p className="font-medium text-green-700">Todo cobrado</p></div>
+              ) : (
+                <>
+                  <div className="space-y-1.5 mb-4">
+                    {cobros.tramos.map(t => (
+                      <div key={t.clave} className="grid grid-cols-[78px_1fr_auto] items-center gap-2 text-xs">
+                        <span className="text-neutral-600">{t.label}</span>
+                        <div className="h-3 bg-neutral-100 rounded-full overflow-hidden"><div className={`h-full ${COLOR_TRAMO[t.clave]}`} style={{ width: `${(t.importe / maxTramo) * 100}%` }} /></div>
+                        <span className={`tabular-nums font-semibold ${t.clave !== 'al_dia' && t.importe > 0 ? 'text-red-700' : 'text-neutral-700'}`}>{formatCurrency(t.importe)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    {cobros.deudores.slice(0, 5).map(d => (
+                      <button key={d.cliente_id ?? 'x'} onClick={() => setActiveSection('facturacion')} className="w-full flex items-center gap-2 p-2 rounded-lg bg-neutral-50 hover:bg-orange-50 text-left">
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-sm font-semibold truncate">{nombreCli(d.cliente_id)}</span>
+                          <span className={`block text-[11px] ${d.vencido > 0 ? 'text-red-700 font-semibold' : 'text-neutral-500'}`}>
+                            {d.n} factura{d.n === 1 ? '' : 's'} · {d.vencido > 0 ? `vencida hace ${d.retrasoMax} día${d.retrasoMax === 1 ? '' : 's'}` : d.proximoVto ? `vence el ${formatDate(d.proximoVto)}` : ''}
+                          </span>
+                        </span>
+                        <span className="tabular-nums font-bold text-sm">{formatCurrency(d.total)}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
-            </div>
-            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Gastos</p>
-            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(gastosMes)}</p>
-            <p className="text-xs text-neutral-400 mt-1">
-              {gastosPeriodo.length} facturas de gasto
-            </p>
-          </Card>
-          
-          {/* Beneficio */}
-          <Card className={`p-5 hover:shadow-lg transition-shadow cursor-pointer ${beneficioMes < 0 ? 'border-red-200 bg-red-50/30' : ''}`}>
-            <div className="flex items-center justify-between mb-3">
-              <div className={`p-2.5 rounded-xl ${beneficioMes >= 0 ? 'bg-blue-100' : 'bg-red-100'}`}>
-                <Banknote size={22} className={beneficioMes >= 0 ? 'text-blue-600' : 'text-red-600'} />
-              </div>
-              <span className={`text-xs font-bold px-2 py-1 rounded-full ${beneficioMes >= 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>
-                {margenPct}% margen
-              </span>
-            </div>
-            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Beneficio</p>
-            <p className={`text-2xl md:text-3xl font-black mt-1 ${beneficioMes >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-              {formatCurrency(beneficioMes)}
-            </p>
-            <p className="text-xs text-neutral-400 mt-1">
-              Ventas − Gastos
-            </p>
-          </Card>
-          
-          {/* Pendientes de cobro */}
-          <Card className={`p-5 hover:shadow-lg transition-shadow cursor-pointer ${facturasVencidas.length > 0 ? 'border-amber-300 bg-amber-50/30' : ''}`} onClick={() => setActiveSection('facturacion')}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="p-2.5 bg-purple-100 rounded-xl">
-                <Receipt size={22} className="text-purple-600" />
-              </div>
-              {facturasVencidas.length > 0 && (
-                <span className="text-xs font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-700">
-                  ⚠️ {facturasVencidas.length} venc.
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-neutral-500 uppercase tracking-wider font-bold">Por cobrar</p>
-            <p className="text-2xl md:text-3xl font-black text-neutral-900 mt-1">{formatCurrency(valorFacturasPendientes)}</p>
-            <p className="text-xs text-neutral-400 mt-1">
-              {facturasPendientes.length} facturas
-            </p>
-          </Card>
-        </div>
+            </Card>
+          </div>
+        )}
 
         {/* ============ V84: DOS LÍNEAS DE NEGOCIO ============ */}
-        {renderResumenLineas(pedidosPeriodo, dashboardPeriodo === 'mes_actual' ? 'este mes' : dashboardPeriodo === 'año_actual' ? `año ${new Date().getFullYear()}` : (getMesesDisponibles().find(m => m.value === dashboardPeriodo)?.label || dashboardPeriodo))}
+        {verFinanzas && renderResumenLineas(filtrarPorPeriodo(pedidos, 'fecha', dashboardPeriodo), per.label)}
 
-        {/* ============ FILA: GRÁFICA + ALERTAS ============ */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* Gráfica de evolución 6 meses */}
-          <Card className="p-5 lg:col-span-2">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-bold text-neutral-900">Evolución últimos 6 meses</h3>
-                <p className="text-xs text-neutral-500">Ventas (verde) vs Gastos (rojo) vs Beneficio (azul)</p>
+        {/* ============ TOP CLIENTES + TOP PRODUCTOS (lo entregado en el periodo) ============ */}
+        {verFinanzas && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">⭐ Mejores clientes</h3>
+                  <p className="text-xs text-neutral-500">Lo entregado en {per.label}, sin IVA</p>
+                </div>
+                <button onClick={() => setActiveSection('clientes')} className="text-xs text-orange-600 hover:underline font-semibold">Ver todos</button>
               </div>
-              <BarChart3 size={20} className="text-neutral-400" />
-            </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <ComposedChart data={ultimos6Meses}>
-                <defs>
-                  <linearGradient id="ventasGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.4}/>
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.05}/>
-                  </linearGradient>
-                  <linearGradient id="gastosGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3}/>
-                    <stop offset="100%" stopColor="#ef4444" stopOpacity={0.05}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="mes" axisLine={false} tickLine={false} style={{ fontSize: 12 }} />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  style={{ fontSize: 12 }}
-                  tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}k€` : `${v}€`}
-                />
-                <Tooltip 
-                  contentStyle={{ borderRadius: 12, border: '1px solid #e5e5e5', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                  formatter={(v) => formatCurrency(v)}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
-                <Area type="monotone" dataKey="ventas" stroke="#10b981" strokeWidth={3} fill="url(#ventasGrad)" name="Ventas" />
-                <Area type="monotone" dataKey="gastos" stroke="#ef4444" strokeWidth={2} fill="url(#gastosGrad)" name="Gastos" />
-                <Line type="monotone" dataKey="beneficio" stroke="#3b82f6" strokeWidth={3} dot={{ fill: '#3b82f6', r: 4 }} name="Beneficio" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </Card>
-          
-          {/* Alertas críticas */}
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-neutral-900">⚡ Alertas</h3>
-              <button onClick={() => setShowAlertasPanel(true)} className="text-xs text-orange-600 hover:underline font-semibold">
-                Ver todas
-              </button>
-            </div>
-            <div className="space-y-2.5 max-h-72 overflow-y-auto">
-              {pedidosAtrasados.length > 0 && (
-                <button onClick={() => setActiveSection('pedidos')} className="w-full flex items-center gap-3 p-3 bg-red-50 hover:bg-red-100 rounded-xl text-left transition-colors">
-                  <div className="p-2 bg-red-200 rounded-lg flex-shrink-0">
-                    <AlertTriangle size={16} className="text-red-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-red-900 text-sm">{pedidosAtrasados.length} pedido{pedidosAtrasados.length !== 1 ? 's' : ''} atrasado{pedidosAtrasados.length !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-red-700">Entrega vencida</p>
-                  </div>
-                  <ArrowUpRight size={14} className="text-red-600 flex-shrink-0" />
-                </button>
-              )}
-              
-              {facturasVencidas.length > 0 && (
-                <button onClick={() => setActiveSection('facturacion')} className="w-full flex items-center gap-3 p-3 bg-amber-50 hover:bg-amber-100 rounded-xl text-left transition-colors">
-                  <div className="p-2 bg-amber-200 rounded-lg flex-shrink-0">
-                    <Receipt size={16} className="text-amber-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-amber-900 text-sm">{facturasVencidas.length} factura{facturasVencidas.length !== 1 ? 's' : ''} vencida{facturasVencidas.length !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-amber-700">{formatCurrency(facturasVencidas.reduce((s,f) => s + (f.total || 0), 0))}</p>
-                  </div>
-                  <ArrowUpRight size={14} className="text-amber-600 flex-shrink-0" />
-                </button>
-              )}
-              
-              {productosSinStock.length > 0 && (
-                <button onClick={() => setActiveSection('productos')} className="w-full flex items-center gap-3 p-3 bg-red-50 hover:bg-red-100 rounded-xl text-left transition-colors">
-                  <div className="p-2 bg-red-200 rounded-lg flex-shrink-0">
-                    <Package size={16} className="text-red-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-red-900 text-sm">{productosSinStock.length} sin stock</p>
-                    <p className="text-xs text-red-700 truncate">{productosSinStock.slice(0, 2).map(p => p.nombre).join(', ')}</p>
-                  </div>
-                  <ArrowUpRight size={14} className="text-red-600 flex-shrink-0" />
-                </button>
-              )}
-              
-              {productosStockBajo.length > 0 && (
-                <button onClick={() => setActiveSection('productos')} className="w-full flex items-center gap-3 p-3 bg-orange-50 hover:bg-orange-100 rounded-xl text-left transition-colors">
-                  <div className="p-2 bg-orange-200 rounded-lg flex-shrink-0">
-                    <AlertCircle size={16} className="text-orange-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-orange-900 text-sm">{productosStockBajo.length} con stock bajo</p>
-                    <p className="text-xs text-orange-700">Mínimo no alcanzado</p>
-                  </div>
-                  <ArrowUpRight size={14} className="text-orange-600 flex-shrink-0" />
-                </button>
-              )}
-              
-              {gastosPendientes.length > 0 && (
-                <button onClick={() => setActiveSection('gastos')} className="w-full flex items-center gap-3 p-3 bg-blue-50 hover:bg-blue-100 rounded-xl text-left transition-colors">
-                  <div className="p-2 bg-blue-200 rounded-lg flex-shrink-0">
-                    <Wallet size={16} className="text-blue-700" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-blue-900 text-sm">{gastosPendientes.length} pago{gastosPendientes.length !== 1 ? 's' : ''} pendiente{gastosPendientes.length !== 1 ? 's' : ''}</p>
-                    <p className="text-xs text-blue-700">{formatCurrency(valorGastosPendientes)} a proveedores</p>
-                  </div>
-                  <ArrowUpRight size={14} className="text-blue-600 flex-shrink-0" />
-                </button>
-              )}
-              
-              {pedidosAtrasados.length === 0 && facturasVencidas.length === 0 && productosSinStock.length === 0 && productosStockBajo.length === 0 && gastosPendientes.length === 0 && (
-                <div className="text-center py-8">
-                  <CheckCircle size={40} className="mx-auto text-green-500 mb-2" />
-                  <p className="font-medium text-green-700">¡Todo en orden!</p>
-                  <p className="text-xs text-neutral-500">No hay alertas pendientes</p>
+              {topClientes.length === 0 ? <div className="text-center py-8 text-neutral-400 text-sm">Sin entregas en el periodo</div> : (
+                <div className="space-y-3">
+                  {topClientes.map((c, idx) => (
+                    <div key={c.id ?? idx} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-sm truncate">{idx + 1}. {nombreCli(c.id)} <span className="text-xs text-neutral-500 font-normal">· {c.n} entrega{c.n === 1 ? '' : 's'}</span></span>
+                        <span className="font-bold text-sm tabular-nums">{formatCurrency(c.base)} <span className="text-xs text-neutral-500 font-normal">{vent.base > 0 ? `${Math.round((c.base / vent.base) * 100)} %` : ''}</span></span>
+                      </div>
+                      <div className="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-gradient-to-r from-orange-400 to-orange-600 rounded-full" style={{ width: `${(c.base / topClientes[0].base) * 100}%` }} /></div>
+                    </div>
+                  ))}
+                  {topClientes[0] && vent.base > 0 && topClientes[0].base / vent.base > 0.5 && <p className="text-sm text-amber-700">⚠️ {nombreCli(topClientes[0].id)} es más de la mitad de las ventas: mucha dependencia de un cliente.</p>}
                 </div>
               )}
-            </div>
-          </Card>
-        </div>
-
-        {/* ============ FILA: TOP PRODUCTOS + TOP CLIENTES ============ */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Top productos */}
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-bold text-neutral-900">🏆 Top productos</h3>
-                <p className="text-xs text-neutral-500">Más vendidos del periodo</p>
+            </Card>
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">🏆 Productos más vendidos</h3>
+                  <p className="text-xs text-neutral-500">Lo entregado en {per.label}, sin IVA</p>
+                </div>
+                <button onClick={() => setActiveSection('productos')} className="text-xs text-orange-600 hover:underline font-semibold">Ver todos</button>
               </div>
-              <button onClick={() => setActiveSection('productos')} className="text-xs text-orange-600 hover:underline font-semibold">
-                Ver todos
-              </button>
-            </div>
-            {topProductos.length === 0 ? (
-              <div className="text-center py-8 text-neutral-400 text-sm">Sin ventas en el periodo</div>
-            ) : (
-              <div className="space-y-3">
-                {topProductos.map(([nombre, datos], idx) => {
-                  const maxImporte = topProductos[0][1].importe;
-                  const pctBarra = (datos.importe / maxImporte) * 100;
-                  const medallas = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
-                  return (
-                    <div key={nombre} className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <span className="text-lg flex-shrink-0">{medallas[idx]}</span>
-                          <span className="font-semibold text-sm text-neutral-900 truncate">{nombre}</span>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <p className="font-bold text-sm">{formatCurrency(datos.importe)}</p>
-                          <p className="text-[10px] text-neutral-400">{datos.cantidad} ud</p>
-                        </div>
+              {topProductos.length === 0 ? <div className="text-center py-8 text-neutral-400 text-sm">Sin entregas en el periodo</div> : (
+                <div className="space-y-3">
+                  {topProductos.map((p, idx) => (
+                    <div key={p.nombre} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-sm truncate">{idx + 1}. {p.nombre}</span>
+                        <span className="font-bold text-sm tabular-nums">{formatCurrency(p.importe)} <span className="text-xs text-neutral-500 font-normal">{p.ud} ud</span></span>
                       </div>
-                      <div className="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden">
-                        <div 
-                          className="h-full bg-gradient-to-r from-orange-400 to-orange-600 rounded-full transition-all"
-                          style={{ width: `${pctBarra}%` }}
-                        />
-                      </div>
+                      <div className="w-full bg-neutral-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full" style={{ width: `${(p.importe / topProductos[0].importe) * 100}%` }} /></div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-          
-          {/* Top clientes */}
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-bold text-neutral-900">⭐ Top clientes</h3>
-                <p className="text-xs text-neutral-500">Mayores compradores del periodo</p>
-              </div>
-              <button onClick={() => setActiveSection('clientes')} className="text-xs text-orange-600 hover:underline font-semibold">
-                Ver todos
-              </button>
-            </div>
-            {topClientes.length === 0 ? (
-              <div className="text-center py-8 text-neutral-400 text-sm">Sin ventas en el periodo</div>
-            ) : (
-              <div className="space-y-2">
-                {topClientes.map(({ cliente, importe }, idx) => {
-                  if (!cliente) return null;
-                  const totalPedidos = pedidosPeriodo.filter(p => p.cliente_id === cliente.id && p.estado === 'entregado').length;
-                  return (
-                    <button 
-                      key={cliente.id}
-                      onClick={() => setActiveSection('clientes')}
-                      className="w-full flex items-center gap-3 p-3 bg-neutral-50 hover:bg-orange-50 rounded-xl transition-all text-left group"
-                    >
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 bg-gradient-to-br from-orange-400 to-orange-600">
-                        {cliente.nombre?.charAt(0).toUpperCase() || '?'}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm text-neutral-900 truncate group-hover:text-orange-600">{cliente.nombre}</p>
-                        <p className="text-xs text-neutral-500">{totalPedidos} pedido{totalPedidos !== 1 ? 's' : ''}</p>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="font-bold text-sm text-neutral-900">{formatCurrency(importe)}</p>
-                        <p className="text-[10px] text-neutral-400">#{idx + 1}</p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </div>
-
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
         {/* ============ FILA: PRÓXIMAS COSECHAS + ENTREGAS ============ */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Próximas cosechas */}
@@ -25014,6 +24844,28 @@ SELECT cron.schedule(
     descuentoPct: descuentoClienteEnFecha, ivaPct: IVA_VENTAS, rePct: RE_VENTAS,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [facturas, clientes, albaranes, albaranPedidos, pedidoItems, pedidos]);
+  // V109: cuenta de resultados del Dashboard (periodo elegido y últimos 12 meses), solo con el Dashboard abierto
+  const dashRent = useMemo(() => {
+    if (activeSection !== 'dashboard') return null;
+    try {
+      let aprov = null;
+      try { aprov = calcularAprov(); } catch (e) { aprov = null; }
+      const datos = { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprov && comprasMaterial.length > 0 ? aprov : null };
+      const h = { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 };
+      const hoyD = new Date();
+      const hoy = hoyD.toISOString().slice(0, 10);
+      const pd = periodoDashboard(dashboardPeriodo, hoy);
+      const finMesD = (iso) => { const [y, m] = iso.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+      const per = calcularRentabilidad(datos, { desde: pd.desde, hasta: finMesD(pd.hasta), reparto: rentReparto, linea: 'todas' }, h);
+      const ini12 = new Date(Date.UTC(hoyD.getFullYear(), hoyD.getMonth() - 11, 1)).toISOString().slice(0, 10);
+      const r12 = calcularRentabilidad(datos, { desde: ini12, hasta: finMesD(hoy), reparto: rentReparto, linea: 'todas' }, h);
+      return { per, r12 };
+    } catch (e) {
+      console.error('Dashboard: rentabilidad', e);
+      return null;
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, dashboardPeriodo, facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, comprasMaterial, rentReparto]);
 
   // V97: panel rojo en Facturación con lo que no cuadra
   const renderControlFacturas = () => {
