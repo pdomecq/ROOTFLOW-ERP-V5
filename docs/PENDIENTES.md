@@ -67,10 +67,9 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 
 ## 4e. 🟠 Gastos (auditoría V112)
 
-- **Posibles duplicados** (no se han borrado): gasto **174** = misma factura que el 173 (Ayuda T FAC2026-37313); gasto **185** (703,72 € a Bellbro, 6-oct) = mismo pago que los gastos 153 + 154 + 155 (alquiler, agua y luz de octubre); gasto **187** (recargo Finetwork 5 €) parece el mismo que el **165**. Si lo son, bórralos desde Gastos (su asiento se borra con ellos).
+- ✅ Duplicados borrados en la V113 (173, 185 y 165).
 - Gastos → «Rehacer asientos»: 7 asientos antiguos están a 0 € (notaría 72–76 y compras 88, 89, 91 de socios) y los de tarjeta anteriores a la V108 van contra la 572.
-- 119 «Brotes BABY GREEN» (Fronda) está en sustratos: si es producto comprado para revender, es mercadería (600).
-- 181 «AMAZON PAYMENTS» (21,51 €) sigue en «otros»: falta saber qué es.
+- ✅ 119 Brotes Baby Green → mercaderías (600) y 181 Amazon → hongos beneficiosos en sustratos (V113).
 
 ## 5. 🟡 Rentabilidad (V86): mejorar la precisión
 
