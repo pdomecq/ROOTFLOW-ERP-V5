@@ -469,6 +469,7 @@ const categoriasGasto = {
   seguridad_social: { label: "🏥 Seg. Social empresa (642)", icon: Users, color: "bg-rose-100 text-rose-700", cuenta: "642", tipo: "opex" },
   software: { label: "💻 Software/IT (629)", icon: BarChart3, color: "bg-violet-100 text-violet-700", cuenta: "629", tipo: "opex" },
   formacion: { label: "📚 Formación (649)", icon: Star, color: "bg-emerald-100 text-emerald-700", cuenta: "649", tipo: "opex" },
+  material: { label: "🧰 Material, utensilios y limpieza (602)", icon: Package, color: "bg-lime-100 text-lime-700", cuenta: "602", tipo: "opex" }, // V112: ferretería, utensilios, limpieza, ropa de trabajo
   otros: { label: "📝 Otros gastos (629)", icon: MoreVertical, color: "bg-gray-100 text-gray-700", cuenta: "629", tipo: "opex" },
   // CAPEX - Inversiones/Inmovilizado (cuenta 2xx)
   capex_equipos: { label: "🖥️ CAPEX: Equipos informáticos (217)", icon: BarChart3, color: "bg-indigo-200 text-indigo-800", cuenta: "217", tipo: "capex", amortizacion: 4 },
@@ -621,10 +622,10 @@ const CONSEJOS_ERP = [
   ['🎯', 'Vigila el €/kg de cada línea en el Dashboard: el plan es 44 €/kg en distribución y 173 €/kg en restaurantes.'],
   ['💶', 'Por cobrar del Dashboard se ordena por antigüedad: lo de más de 30 días es lo primero que hay que reclamar.'],
 ];
-const LoadingScreen = () => {
+const LoadingScreen = ({ listo = false, onEntrar }) => { // V112: listo = datos cargados (se puede entrar ya)
   const [i, setI] = useState(() => Math.floor(Math.random() * CONSEJOS_ERP.length));
   useEffect(() => {
-    const t = setInterval(() => setI(x => (x + 1) % CONSEJOS_ERP.length), 6000);
+    const t = setInterval(() => setI(x => (x + 1) % CONSEJOS_ERP.length), 9000);
     return () => clearInterval(t);
   }, []);
   const [icono, texto] = CONSEJOS_ERP[i];
@@ -632,10 +633,14 @@ const LoadingScreen = () => {
     <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-6">
       <div className="flex flex-col items-center gap-4 max-w-md w-full">
         <RootFlowLogo size={80} />
-        <div className="flex items-center gap-2">
-          <Loader2 size={24} className="animate-spin text-orange-500" />
-          <span className="text-neutral-600 font-semibold">Cargando...</span>
-        </div>
+        {listo ? (
+          <button onClick={onEntrar} className="px-5 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold shadow-sm">Entrar ya →</button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Loader2 size={24} className="animate-spin text-orange-500" />
+            <span className="text-neutral-600 font-semibold">Cargando...</span>
+          </div>
+        )}
         <div key={i} className="mt-4 w-full rounded-2xl border border-orange-200 bg-white p-4 shadow-sm" data-rf-no>
           <p className="text-[11px] font-bold uppercase tracking-wider text-orange-600 mb-1">¿Sabías que…?</p>
           <p className="text-sm text-neutral-800 leading-relaxed"><span className="mr-1.5">{icono}</span>{texto}</p>
@@ -878,6 +883,9 @@ const MainApp = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, ajustesTab, historialFiltros]);
   const [tesoHorizonte, setTesoHorizonte] = useState(60); // V107: días de previsión en Tesorería
+  // V112: la pantalla de carga se queda al menos 5 s para que dé tiempo a leer el consejo («Entrar ya» la salta)
+  const [cargaMinima, setCargaMinima] = useState(true);
+  useEffect(() => { const t = setTimeout(() => setCargaMinima(false), 5000); return () => clearTimeout(t); }, []);
   const [contaCuentas, setContaCuentas] = useState({}); // V108: contrapartida elegida por movimiento del banco
   const [contaVerTodo, setContaVerTodo] = useState(false); // V108
   const [contaTrabajando, setContaTrabajando] = useState(false); // V108
@@ -1477,6 +1485,7 @@ const MainApp = () => {
     'impuestos': { cuenta: '631', nombre: 'Otros tributos' },
     'software': { cuenta: '629', nombre: 'Otros servicios' },
     'formacion': { cuenta: '649', nombre: 'Otros gastos sociales' },
+    'material': { cuenta: '602', nombre: 'Compras de otros aprovisionamientos' }, // V112
     'otros': { cuenta: '629', nombre: 'Otros servicios' },
   };
 
@@ -1497,6 +1506,7 @@ const MainApp = () => {
     { value: 'tributos', label: '📋 Tributos e impuestos (631)', cuenta: '631' },
     { value: 'nominas', label: '👥 Sueldos y salarios (640)', cuenta: '640' },
     { value: 'seguridad_social', label: '🏥 Seguridad Social empresa (642)', cuenta: '642' },
+    { value: 'material', label: '🧰 Material, utensilios y limpieza (602)', cuenta: '602' }, // V112
     { value: 'otros', label: '📝 Otros gastos (629)', cuenta: '629' },
   ];
 
@@ -1507,7 +1517,7 @@ const MainApp = () => {
     { value: 'socio_nico', label: '👤 Deuda a Nico (551)', cuenta: '551' },
     { value: 'socio_peri', label: '👤 Deuda a Peri (551)', cuenta: '551' },
     { value: 'socio_guzman', label: '👤 Deuda a Guzmán (551)', cuenta: '551' },
-    { value: 'tarjeta_empresa', label: '💳 Tarjeta empresa (572)', cuenta: '572' },
+    { value: 'tarjeta_empresa', label: '💳 Tarjeta empresa (5201)', cuenta: '5201' }, // V108
     { value: 'transferencia', label: '📤 Transferencia (572)', cuenta: '572' },
   ];
 
@@ -2889,7 +2899,7 @@ const MainApp = () => {
         </div>
         {desactualizados.length > 0 && (
           <div className="mb-3 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 flex flex-wrap items-center justify-between gap-2">
-            <span>⚠️ {desactualizados.length} gasto(s) con retención tienen el asiento antiguo (sin la 4751 o con base e IVA mal calculados).</span>
+            <span>⚠️ {desactualizados.length} gasto(s) tienen el asiento desactualizado: a 0 €, con otra cuenta de gasto, contra otra forma de pago o sin la retención (4751).</span>
             <Button size="sm" onClick={rehacerTodos}>Rehacer asientos</Button>
           </div>
         )}
@@ -2914,14 +2924,21 @@ const MainApp = () => {
   };
 
   // V85: gastos con desglose guardado (retención o varias bases) cuyo asiento no cuadra con él
+  // V112: también asientos a 0 €, con la cuenta de gasto de otra categoría o pagados contra otra cuenta (forma de pago cambiada)
   const gastosConAsientoDesactualizado = () => gastos.filter(g => {
     const d = desgloseGasto(g);
-    if (!d.explicito) return false;
+    const importe = Number(g.importe) || 0;
+    if (importe <= 0) return false;
     const asiento = asientosContables.find(a => a.referencia === `GAS-${g.id}`);
     if (!asiento) return true;
     const lineas = asientoLineasDB.filter(l => l.asiento_id === asiento.id);
     const suma = (cuenta, campo) => lineas.filter(l => String(l.cuenta) === cuenta).reduce((t, l) => t + (parseFloat(l[campo]) || 0), 0);
     const cerca = (a, b) => Math.abs(a - b) < 0.02;
+    const cuentaPago = String(g.forma_pago || '').startsWith('socio_') ? '551' : g.forma_pago === 'caja' ? '570' : g.forma_pago === 'tarjeta_empresa' ? '5201' : '572';
+    const cuentaGasto = CATEGORIA_A_CUENTA[g.categoria]?.cuenta || categoriasGasto[g.categoria]?.cuenta || '629';
+    if (!cerca(suma(cuentaPago, 'haber'), importe)) return true;
+    if (!cerca(suma(cuentaGasto, 'debe'), Math.round(d.base * 100) / 100)) return true;
+    if (!d.explicito) return false;
     return !cerca(suma('4751', 'haber'), d.retencion) || !cerca(suma('472', 'debe'), Math.round((d.aPagar + d.retencion - d.base) * 100) / 100);
   });
 
@@ -33168,7 +33185,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
   };
 
   // ==================== MAIN RENDER ====================
-  if (loading) return <LoadingScreen />;
+  if (loading || cargaMinima) return <LoadingScreen listo={!loading} onEntrar={() => setCargaMinima(false)} />;
   const seccionVisible = puedeVer(activeSection) ? activeSection : '__sin_permiso__'; // V105
   // V105: usuario desactivado (cuenta nueva sin aprobar o dado de baja): no ve el ERP
   if (currentUserProfile && 'permisos' in currentUserProfile && currentUserProfile.activo === false) return (
