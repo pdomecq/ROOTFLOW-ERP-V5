@@ -590,17 +590,60 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
   </div>
 );
 
-const LoadingScreen = () => (
-  <div className="min-h-screen flex items-center justify-center bg-neutral-50">
-    <div className="flex flex-col items-center gap-4">
-      <RootFlowLogo size={80} />
-      <div className="flex items-center gap-2">
-        <Loader2 size={24} className="animate-spin text-orange-500" />
-        <span className="text-neutral-600 font-semibold">Cargando...</span>
+// V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
+const CONSEJOS_ERP = [
+  ['🧾', 'Una factura enviada no se borra ni se edita: usa «↩️ Rectificar y reemitir» y el ERP hace la rectificativa y la nueva.'],
+  ['⊗', 'No borres pedidos: cancélalos. El ERP anula en cascada su albarán y su factura y la numeración no tiene huecos.'],
+  ['🚚', 'Marca el albarán como entregado al entregar: la factura se cuadra sola con lo entregado de verdad.'],
+  ['🏦', 'El banco se sincroniza solo dos veces al día y cobra solo las facturas que casa con los ingresos. Lo dudoso queda en Banco y cobros → Revisar.'],
+  ['💳', 'Un cobro con el TPV puede pagar varias facturas a la vez: el ERP busca la combinación que suma la remesa.'],
+  ['📒', 'Tesorería → Contabilizar el banco deja la cuenta 572 igual que el BBVA: arregla primero lo marcado en rojo y luego «Contabilizar lo propuesto».'],
+  ['📥', 'Sube la foto o el PDF de una factura de proveedor en Gastos → Facturas recibidas: la IA la lee y deja el gasto casi relleno.'],
+  ['💡', 'Base, IVA y retención de un gasto salen del desglose de la factura: si lleva retención (alquiler, gestoría), rellénala y va sola a la 4751.'],
+  ['🤝', '¿Lo pagó un socio de su bolsillo? Pon la forma de pago «Pagado por …» y queda como deuda con él (cuenta 551).'],
+  ['💳', 'Lo pagado con la tarjeta de empresa ponlo como «Tarjeta empresa»: así el río de caja enseña en qué se gastó de verdad.'],
+  ['📈', 'Rentabilidad → Puente de beneficio enseña qué ha movido el EBITDA: más kilos, mejor precio o más costes.'],
+  ['🌊', 'El río de caja de Rentabilidad dice de dónde viene cada euro y en qué se ha ido, con las inversiones (CAPEX) aparte.'],
+  ['💰', 'Tesorería prevé el saldo a 30, 60 y 90 días con lo que hay por cobrar y los pagos fijos. Pon un saldo mínimo y te avisará.'],
+  ['⚡', 'El Dashboard junta lo que necesita atención: facturas vencidas, albaranes sin facturar, pedidos atrasados… Pulsa cada aviso para ir directo.'],
+  ['🔁', 'Los pedidos recurrentes se generan solos con su fecha de entrega: cambia cantidades con «± Ampliar o reducir» y queda en el historial.'],
+  ['🔎', 'Todas las tablas se ordenan pulsando la cabecera, tienen buscador, filtros y «▦ Columnas» para elegir qué ver.'],
+  ['ⓘ', 'Las notas largas están detrás del icono ⓘ: pasa el ratón o tócalo para leerlas.'],
+  ['📱', 'En el móvil, «▦ Ver como tarjetas» enseña cada fila como una ficha. Y puedes añadir el ERP a la pantalla de inicio.'],
+  ['📅', 'Las facturas vencen a 30 días y nunca más de 30 días desde la primera entrega (productos frescos, Ley 12/2013).'],
+  ['✉️', 'Las facturas se envían solas por email con su PDF según la periodicidad de cada cliente; si una no cuadra con su albarán, no sale.'],
+  ['🔔', 'Cuando vence una factura sin cobrar te llega un email con lo que debe ese cliente, y al cliente un recordatorio a los 1, 7 y 15 días.'],
+  ['🛒', 'Precio de cada cliente: su tarifa especial, si no el precio de su línea (distribución o restaurantes) y si no el general.'],
+  ['🌱', 'Registra cada lote sembrado: el ERP calcula el coste real por gramo de cada variedad y la rentabilidad es mucho más exacta.'],
+  ['📦', 'Haz un recuento de semillas, sustrato y envases de vez en cuando (Rentabilidad → Aprovisionamientos): la diferencia es merma.'],
+  ['🕓', 'Ajustes → Historial de cambios dice quién cambió qué y cuándo (antes → después) en clientes, pedidos, facturas, gastos…'],
+  ['👥', 'Ajustes → Usuarios: cada persona ve solo las secciones de su rol. Las cuentas nuevas entran desactivadas hasta que un admin las activa.'],
+  ['🎯', 'Vigila el €/kg de cada línea en el Dashboard: el plan es 44 €/kg en distribución y 173 €/kg en restaurantes.'],
+  ['💶', 'Por cobrar del Dashboard se ordena por antigüedad: lo de más de 30 días es lo primero que hay que reclamar.'],
+];
+const LoadingScreen = () => {
+  const [i, setI] = useState(() => Math.floor(Math.random() * CONSEJOS_ERP.length));
+  useEffect(() => {
+    const t = setInterval(() => setI(x => (x + 1) % CONSEJOS_ERP.length), 6000);
+    return () => clearInterval(t);
+  }, []);
+  const [icono, texto] = CONSEJOS_ERP[i];
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-6">
+      <div className="flex flex-col items-center gap-4 max-w-md w-full">
+        <RootFlowLogo size={80} />
+        <div className="flex items-center gap-2">
+          <Loader2 size={24} className="animate-spin text-orange-500" />
+          <span className="text-neutral-600 font-semibold">Cargando...</span>
+        </div>
+        <div key={i} className="mt-4 w-full rounded-2xl border border-orange-200 bg-white p-4 shadow-sm" data-rf-no>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-orange-600 mb-1">¿Sabías que…?</p>
+          <p className="text-sm text-neutral-800 leading-relaxed"><span className="mr-1.5">{icono}</span>{texto}</p>
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 const EmptyState = ({ icon: Icon, title, description, action }) => (
   <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -4586,7 +4629,7 @@ const MainApp = () => {
     const k = Math.min(escala(L), escala(R));
     const altoDe = (x) => Math.max(MIN, x.importe * k);
     const COL_IN = { ventas: '#6d84d4', socios: '#4aa3cf', tarjeta: '#9b7bea', otros: '#a1a7b0', caja: '#e0a42b' };
-    const COL_OUT = { gasto: '#9ca3af', impuestos: '#dc4b4b', tarjeta: '#9b7bea', banco: '#6b7280', socios: '#4aa3cf', caja: '#2f9e5b' };
+    const COL_OUT = { gasto: '#9ca3af', capex: '#4f46e5', impuestos: '#dc4b4b', tarjeta: '#9b7bea', banco: '#6b7280', socios: '#4aa3cf', caja: '#2f9e5b' };
     const xC = W / 2 - nodo / 2;
     const altoC = Math.max(L.reduce((t, x) => t + altoDe(x), 0), R.reduce((t, x) => t + altoDe(x), 0));
     const yC = mT + (util - altoC) / 2;
@@ -4648,7 +4691,14 @@ const MainApp = () => {
     // V110: río de caja con los movimientos del banco del periodo (origen y destino de cada euro)
     const filaBanco = new globalThis.Map((planBanco?.filas || []).map(f => [f.mov.id, f])); // Map = icono de lucide en este archivo
     const limpiaCat = (k) => String(categoriasGasto[k]?.label || k || 'Gastos').replace(/^[^A-Za-zÁÉÍÓÚáéíóúÑñ]+/, '').replace(/\s*\(\d+\)$/, '');
+    // V111: destino por categoría del gasto; el CAPEX (inversiones) aparte
+    const destinoGasto = (g) => {
+      const cat = categoriasGasto[g?.categoria];
+      if (cat?.tipo === 'capex') return { clave: `capex_${g.categoria}`, label: `Inversión · ${limpiaCat(g.categoria).replace(/^CAPEX:\s*/i, '')}`, grupo: 'capex' };
+      return { clave: `cat_${g?.categoria || 'otros'}`, label: limpiaCat(g?.categoria), grupo: 'gasto' };
+    };
     const origenDe = (m) => {
+      if (m._origen) return m._origen;
       const tipo = clasificarMovimiento(m, tesoreria.socios);
       const txt = String(`${m.concepto || ''} ${m.contraparte || ''}`).toLowerCase();
       if (tipo === 'cobro') {
@@ -4665,16 +4715,37 @@ const MainApp = () => {
       return { clave: 'otros_ing', label: 'Otros ingresos', grupo: 'otros' };
     };
     const destinoDe = (m) => {
+      if (m._destino) return m._destino;
+      if (m._gasto) return destinoGasto(m._gasto);
       const f = filaBanco.get(m.id);
-      if (f?.estado === 'gasto' && f.gasto) return { clave: `cat_${f.gasto.categoria || 'otros'}`, label: limpiaCat(f.gasto.categoria), grupo: 'gasto' };
+      if (f?.estado === 'gasto' && f.gasto) return destinoGasto(f.gasto);
       const tipo = clasificarMovimiento(m, tesoreria.socios);
       const MAPA = { tarjeta_salida: ['Pago de la tarjeta', 'tarjeta'], impuestos: ['Impuestos', 'impuestos'], comisiones: ['Comisiones del banco', 'banco'], socios_salida: ['Pagos a socios', 'socios'], suministros: ['Suministros sin gasto', 'gasto'], proveedores: ['Proveedores sin gasto', 'gasto'] };
       const [label, grupo] = MAPA[tipo] || ['Otros pagos', 'gasto'];
       return { clave: tipo, label, grupo };
     };
     const excluirRio = new Set((planBanco?.filas || []).filter(f => f.estado === 'compensado').map(f => f.mov.id));
-    const rio = rioCaja({ movs: movimientosBanco, desde: per.desde, hasta: per.hasta, origenDe, destinoDe, excluir: excluirRio });
     const bancoDesde = movimientosBanco.length ? movimientosBanco.map(m => String(m.fecha).slice(0, 10)).sort()[0] : null;
+    // V111: la tarjeta de crédito es un paso intermedio: en vez de «pago de la tarjeta» salen las compras hechas con ella
+    // (por categoría) y la diferencia es deuda nueva de la tarjeta o compras sin gasto registrado. Los gastos que pagan
+    // los socios también cuentan: entran como «Pagado por los socios» y salen por su categoría.
+    const desdeRio = bancoDesde && bancoDesde > per.desde ? bancoDesde : per.desde;
+    const enRio = (f) => String(f || '').slice(0, 10) >= desdeRio && String(f || '').slice(0, 10) <= per.hasta;
+    const movsTarjeta = movimientosBanco.filter(m => enRio(m.fecha) && !excluirRio.has(m.id) && ['tarjeta_entrada', 'tarjeta_salida'].includes(clasificarMovimiento(m, tesoreria.socios)));
+    movsTarjeta.forEach(m => excluirRio.add(m.id));
+    const pagadoTarjeta = -movsTarjeta.reduce((t, m) => t + (Number(m.importe) || 0), 0); // recobros − dinero sacado de la tarjeta
+    const gastosTarjeta = gastos.filter(g => g.forma_pago === 'tarjeta_empresa' && enRio(g.fecha) && Number(g.importe) > 0);
+    const gastosSocios = gastos.filter(g => /^socio_/.test(g.forma_pago || '') && enRio(g.fecha) && Number(g.importe) > 0);
+    const compradoTarjeta = gastosTarjeta.reduce((t, g) => t + Number(g.importe), 0);
+    const difTarjeta = Math.round((compradoTarjeta - pagadoTarjeta) * 100) / 100;
+    const sinteticos = [
+      ...gastosTarjeta.map(g => ({ id: `gt-${g.id}`, fecha: g.fecha, importe: -Number(g.importe), _gasto: g })),
+      ...gastosSocios.map(g => ({ id: `gs-${g.id}`, fecha: g.fecha, importe: -Number(g.importe), _gasto: g })),
+      ...gastosSocios.map(g => ({ id: `gsi-${g.id}`, fecha: g.fecha, importe: Number(g.importe), _origen: { clave: 'socios_pagan', label: 'Pagado por los socios', grupo: 'socios' } })),
+      ...(difTarjeta > 0.004 ? [{ id: 'tarjeta-deuda', fecha: desdeRio, importe: difTarjeta, _origen: { clave: 'tarjeta_deuda', label: 'Financiado con la tarjeta', grupo: 'tarjeta' } }] : []),
+      ...(difTarjeta < -0.004 ? [{ id: 'tarjeta-sin', fecha: desdeRio, importe: difTarjeta, _destino: { clave: 'tarjeta_sin', label: 'Tarjeta: compras sin gasto registrado', grupo: 'tarjeta' } }] : []),
+    ];
+    const rio = rioCaja({ movs: [...movimientosBanco, ...sinteticos], desde: desdeRio, hasta: per.hasta, origenDe, destinoDe, excluir: excluirRio, maxGrupos: 11 });
     const kgf = (n) => `${(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg`;
     const colorPct = (n) => n == null ? 'text-neutral-400' : n >= 0.3 ? 'text-emerald-700' : n >= 0 ? 'text-amber-700' : 'text-red-600';
     const colorEur = (n) => (n || 0) >= 0 ? 'text-emerald-700' : 'text-red-600';
@@ -4842,7 +4913,7 @@ const MainApp = () => {
             <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
               <div>
                 <h3 className="font-bold text-neutral-900"><span className="text-xs text-neutral-400 font-mono mr-1">02</span> Río de caja</h3>
-                <p className="text-sm text-neutral-600">Lo que ha entrado y salido del BBVA · {per.label} · dinero movido <strong>{eur(rio.movido)}</strong></p>
+                <p className="text-sm text-neutral-600">De dónde viene el dinero y en qué se ha gastado de verdad (banco, compras con tarjeta y gastos pagados por los socios) · {per.label} · <strong>{eur(rio.movido)}</strong></p>
               </div>
               <button onClick={() => setRentVerTabla(v => ({ ...v, rio: !v.rio }))} className="px-2 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wide text-neutral-600 hover:bg-neutral-50">{rentVerTabla.rio ? 'Gráfico' : 'Tabla'}</button>
             </div>
