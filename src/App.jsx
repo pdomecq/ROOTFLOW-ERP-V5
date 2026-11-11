@@ -5054,6 +5054,7 @@ const MainApp = () => {
             : <p>• Los gastos cuentan <strong>sin IVA</strong> (base del desglose del gasto). Las compras de semilla y envases cuentan el mes en que se compran: si se compra para varios meses, mira el trimestre o el año (o ejecuta el SQL V88 para calcularlo por consumo real).</p>}
           {r.avisos.mesesSinLotes > 0 && <p className="text-amber-700">⚠️ {r.avisos.mesesSinLotes} mes(es) con ventas pero sin lotes sembrados registrados: ahí el reparto por variedad se hace con bandejas estimadas a partir de los kg vendidos.</p>}
           {r.avisos.facturasSinDetalle > 0 && <p className="text-amber-700">⚠️ {r.avisos.facturasSinDetalle} factura(s) sin líneas de pedido o albarán ({eur(r.avisos.importeSinDetalle)}): cuentan en la cuenta de resultados pero no se pueden asignar a ninguna variedad.</p>}
+          {r.avisos.entregasGratis > 0 && <p className="text-emerald-700">🎁 {r.avisos.entregasGratis} entrega(s) gratis (albarán al 100 % de descuento, p. ej. el primer mes de prueba): {r.avisos.kgGratis.toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg que no cuentan como vendidos ni bajan el €/kg; su coste de producción sí está en la cuenta de resultados.</p>}{/* V116 */}
           {r.avisos.lineasSinGramos > 0 && <p className="text-amber-700">⚠️ {r.avisos.lineasSinGramos} línea(s) de productos sin formato en gramos: no suman kilos (rellena el formato del producto).</p>}
           {Math.abs(r.noAsignado) > 1 && <p>• {eur(r.noAsignado)} de costes no se cargan a ningún cliente: meses sin ventas (p. ej. antes de empezar a facturar), producción sembrada que no se vendió en el mes y facturas sin detalle. Sí están en la cuenta de resultados.</p>}
         </Card>
@@ -11888,7 +11889,7 @@ ${pedidoLinea ? `^FO260,258
     const per = periodoDashboard(dashboardPeriodo, hoyStr);
     const nombreCli = (id) => clientes.find(c => c.id === id)?.nombre?.trim() || 'Cliente';
     const impAlb = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
-    const kgDe = (albs) => albs.reduce((t, a) => t + (Array.isArray(a.items_json) ? a.items_json : []).reduce((s, it) => s + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0), 0) / 1000;
+    const kgDe = (albs) => albs.filter(a => !(Number(a.descuento_pct) >= 100)).reduce((t, a) => t + (Array.isArray(a.items_json) ? a.items_json : []).reduce((s, it) => s + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0), 0) / 1000; // V116: las entregas gratis (100 % dto.) no cuentan como kg vendidos
 
     // ==================== CIFRAS DEL PERIODO ====================
     const vent = ventasEntregadas(albaranes, per.desde, per.hasta, impAlb);

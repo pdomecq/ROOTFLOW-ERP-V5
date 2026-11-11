@@ -98,7 +98,7 @@ export function calcularRentabilidad(datos, op, h) {
 
   // ---------- 1. Ventas por línea ----------
   const lineas = []; // { mes, cliente_id, linea, variedad, producto, importe, gramos, unidades, porte }
-  const avisos = { facturasSinDetalle: 0, importeSinDetalle: 0, lineasSinGramos: 0 };
+  const avisos = { facturasSinDetalle: 0, importeSinDetalle: 0, lineasSinGramos: 0, entregasGratis: 0, kgGratis: 0 }; // V116: entregas al 100 % de dto. (promoción)
   const facturasPeriodo = facturas.filter((f) => !['cancelada', 'anulada', 'rectificativa'].includes(f.estado) && enPeriodo(f.fecha)); // V87: anuladas y sus rectificativas no son ventas
   for (const f of facturasPeriodo) {
     const cli = cliById.get(f.cliente_id);
@@ -111,9 +111,19 @@ export function calcularRentabilidad(datos, op, h) {
     const albIds = Array.isArray(f.albaranes_ids) ? f.albaranes_ids.map(String) : [];
     if (albIds.length) {
       for (const a of albaranes.filter((x) => albIds.includes(String(x.id)))) {
+        // V116: cada albarán pesa según su propio descuento; uno al 100 % (p. ej. el primer mes gratis) no es venta:
+        // sus kilos no cuentan como vendidos (no hunden el €/kg) y se avisan como entregas gratis
+        const pctA = a.descuento_pct;
+        const fact = pctA !== null && pctA !== undefined && pctA !== '' && !isNaN(Number(pctA)) ? Math.max(0, 1 - Number(pctA) / 100) : 1;
+        const itsA = Array.isArray(a.items_json) ? a.items_json : [];
+        if (fact <= 0) {
+          avisos.entregasGratis++;
+          for (const it of itsA) avisos.kgGratis += (h.gramosPorUnidad(prodById.get(Number(it.producto_id))) * (Number(it.cantidad) || 0)) / 1000;
+          continue;
+        }
         portes += Number(a.coste_envio) || 0;
-        for (const it of Array.isArray(a.items_json) ? a.items_json : []) {
-          items.push({ producto_id: Number(it.producto_id), cantidad: Number(it.cantidad) || 0, importe: (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) });
+        for (const it of itsA) {
+          items.push({ producto_id: Number(it.producto_id), cantidad: Number(it.cantidad) || 0, importe: (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * fact });
         }
       }
       if (Number(f.portes_importe) > 0) portes = Number(f.portes_importe);
@@ -392,6 +402,6 @@ export function calcularRentabilidad(datos, op, h) {
     porVariedad, porCliente: porCliente.filter(filtroLinea), porLinea, porProducto, // V88
     compras: aprov ? meses.reduce((t, m) => t + (aprov.comprasMes?.[m] || 0), 0) : null, // V88: compras con líneas (pasan a existencias)
     noAsignado,
-    avisos: { ...avisos, importeSinDetalle: r2(avisos.importeSinDetalle), mesesSinLotes, bandejas: Object.values(prodMes).reduce((t, x) => t + sumaDe(x, 'bandejas'), 0) },
+    avisos: { ...avisos, importeSinDetalle: r2(avisos.importeSinDetalle), kgGratis: Math.round(avisos.kgGratis * 1000) / 1000, mesesSinLotes, bandejas: Object.values(prodMes).reduce((t, x) => t + sumaDe(x, 'bandejas'), 0) },
   };
 }
