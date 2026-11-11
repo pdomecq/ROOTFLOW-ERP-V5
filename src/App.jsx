@@ -21,6 +21,7 @@ import JSZip from 'jszip';
 import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { periodoAnterior, puenteBeneficio, puenteResultados, barrasCascada, rioCaja } from './graficosRentabilidad.js'; // V110
+import { ventanaEquilibrio, calcularEquilibrio } from './equilibrio.js'; // V118
 import { periodoDashboard, resumenVentas, resumenCobros, pendienteFacturar, cobradoEntre, ventasEntregadas, variacion } from './dashboard.js'; // V109
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
@@ -594,6 +595,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['⚖️', 'En Rentabilidad, el panel «Punto de equilibrio» dice cuántos kg al mes hay que vender para no perder dinero y para pagar sueldos, con el ritmo de los 3 últimos meses.'], // V118
   ['🌙', 'Pulsa la luna de arriba a la derecha para el modo oscuro: se aplica a todo el ERP y se recuerda en este dispositivo.'], // V117
   ['🧾', 'Una factura enviada no se borra ni se edita: usa «↩️ Rectificar y reemitir» y el ERP hace la rectificativa y la nueva.'],
   ['⊗', 'No borres pedidos: cancélalos. El ERP anula en cascada su albarán y su factura y la numeración no tiene huecos.'],
@@ -867,6 +869,9 @@ const MainApp = () => {
   const [rentPeriodo, setRentPeriodo] = useState(`anio:${new Date().getFullYear()}`); // V86: periodo de la sección Rentabilidad
   const [rentReparto, setRentReparto] = useState('bandeja_dia'); // V86: cómo se reparten los costes indirectos
   const [rentPuente, setRentPuente] = useState('pyg'); // V110: puente de beneficio frente al periodo anterior o de ventas a EBIT (V114: por defecto Ventas → EBIT)
+  // V118: supuestos del panel de punto de equilibrio (sueldo por socio, nº de socios y objetivo de g por bandeja), recordados en el dispositivo
+  const [eqCfg, setEqCfg] = useState(() => { try { return { sueldoSocio: 1500, socios: 3, objetivoG: 250, ...JSON.parse(localStorage.getItem('rf_equilibrio') || '{}') }; } catch { return { sueldoSocio: 1500, socios: 3, objetivoG: 250 }; } });
+  const cambiarEqCfg = (campo, valor) => setEqCfg(c => { const n = { ...c, [campo]: Math.max(0, Number(valor) || 0) }; try { localStorage.setItem('rf_equilibrio', JSON.stringify(n)); } catch { /* sin almacenamiento */ } return n; });
   const [rentVerPuente, setRentVerPuente] = useState(false); // V114: el puente de beneficio va plegado
   const [rentVerTabla, setRentVerTabla] = useState({}); // V110: ver los gráficos como tabla
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
@@ -4776,6 +4781,112 @@ const MainApp = () => {
     ];
     const rio = rioCaja({ movs: [...movimientosBanco, ...sinteticos], desde: desdeRio, hasta: per.hasta, origenDe, destinoDe, excluir: excluirRio, maxGrupos: 11 });
     const kgf = (n) => `${(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 2 })} kg`;
+
+    // V118: punto de equilibrio con el ritmo de los 3 últimos meses cerrados: ventas y kg ENTREGADOS (La Huerta factura a mes
+    // vencido), costes de Rentabilidad de esos meses y bandejas sembradas. Supuestos (sueldos, g/bandeja) editables.
+    const renderEquilibrio = () => {
+      const hoyEq = new Date().toISOString().slice(0, 10);
+      const ven = ventanaEquilibrio(hoyEq, 3);
+      const rEq = calcularRentabilidad(
+        { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovActivo ? aprov : null },
+        { desde: ven.desde, hasta: ven.hasta, reparto: rentReparto, linea: lineaFiltro },
+        { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
+      );
+      const impAlb = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
+      const ent = ventasEntregadas(albaranes, ven.desde, ven.hasta, impAlb).albaranes.filter(a => enLineaFiltro(a.cliente_id) && !(Number(a.descuento_pct) >= 100));
+      const kgAlb = (a) => (Array.isArray(a.items_json) ? a.items_json : []).reduce((s2, it) => s2 + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0) / 1000;
+      const porCli = {};
+      let ventasEnt = 0, kgEnt = 0;
+      for (const a of ent) { const b = impAlb(a); ventasEnt += b; kgEnt += kgAlb(a); porCli[a.cliente_id] = (porCli[a.cliente_id] || 0) + b; }
+      const [topId, topVentas] = Object.entries(porCli).sort((x, y) => y[1] - x[1])[0] || [];
+      const e = calcularEquilibrio({
+        meses: ven.meses, ventas: ventasEnt, kg: kgEnt,
+        materiales: rEq.tot.materiales, variables: rEq.tot.variables, estructura: rEq.tot.estructura,
+        bandejas: rEq.avisos.bandejas, sueldoSocio: eqCfg.sueldoSocio, socios: eqCfg.socios, objetivoG: eqCfg.objetivoG,
+        topCliente: topId ? { nombre: clientes.find(c => String(c.id) === String(topId))?.nombre?.trim() || 'Cliente', ventas: topVentas } : null,
+      });
+      const mesL = (iso) => new Date(`${iso.slice(0, 7)}-15`).toLocaleDateString('es-ES', { month: 'short' });
+      const barra = (p, color) => (
+        <div className="h-2.5 rounded-full bg-neutral-200 overflow-hidden"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(100, Math.max(2, (p || 0) * 100))}%` }} /></div>
+      );
+      const Cifra = ({ titulo, kg, eurTxt, nota, color = 'text-neutral-900' }) => (
+        <div className="p-3 rounded-xl border border-neutral-200 bg-neutral-50 min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">{titulo}</p>
+          <p className={`text-2xl font-black ${color}`}>{kg}</p>
+          <p className="text-sm font-semibold text-neutral-700">{eurTxt}</p>
+          {nota && <p className="text-[11px] text-neutral-500 mt-0.5">{nota}</p>}
+        </div>
+      );
+      const kgTxt = (n) => (n == null ? '—' : `${n.toLocaleString('es-ES', { maximumFractionDigits: n < 10 ? 1 : 0 })} kg/mes`);
+      const inp = (campo, ancho = 'w-20') => <input type="number" min="0" value={eqCfg[campo]} onChange={ev => cambiarEqCfg(campo, ev.target.value)} className={`${ancho} px-2 py-1 rounded-lg border text-sm text-right`} />;
+      return (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+            <div>
+              <h3 className="font-bold text-neutral-900">⚖️ Punto de equilibrio</h3>
+              <p className="text-sm text-neutral-600">Ritmo de {mesL(ven.desde)}–{mesL(ven.hasta)} (lo entregado, sin las entregas gratis){lineaFiltro !== 'todas' ? ` · ${LINEAS_NEGOCIO[lineaFiltro]?.label || ''}` : ''}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+              <label className="flex items-center gap-1">Sueldo por socio {inp('sueldoSocio', 'w-24')} €/mes</label>
+              <label className="flex items-center gap-1">Socios {inp('socios', 'w-14')}</label>
+              <label className="flex items-center gap-1">Objetivo {inp('objetivoG', 'w-16')} g/bandeja</label>
+            </div>
+          </div>
+          {e.kgMes <= 0 ? <p className="text-sm text-neutral-500 py-6 text-center">No hay entregas en {mesL(ven.desde)}–{mesL(ven.hasta)} para calcularlo.</p> : <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Cifra titulo="Ahora" kg={kgTxt(e.kgMes)} eurTxt={`${formatCurrency(e.ventasMes)} al mes`} nota={`a ${e.eurKg?.toFixed(0)} €/kg`} />
+            <Cifra titulo="Sin pérdidas" kg={kgTxt(e.kgEq)} eurTxt={e.ventasEq != null ? `${formatCurrency(e.ventasEq)} al mes` : 'el margen no cubre los costes'} nota={e.kgEq ? `×${(e.kgEq / e.kgMes).toFixed(1)} lo de ahora` : null} color="text-amber-700" />
+            <Cifra titulo={`Con sueldos (${eqCfg.socios} × ${formatCurrency(eqCfg.sueldoSocio)})`} kg={kgTxt(e.kgEqSueldos)} eurTxt={e.ventasEqSueldos != null ? `${formatCurrency(e.ventasEqSueldos)} al mes` : '—'} nota={e.kgEqSueldos ? `×${(e.kgEqSueldos / e.kgMes).toFixed(1)} lo de ahora` : null} color="text-sky-700" />
+            <Cifra titulo="Resultado al mes" kg={formatCurrency(e.ebitdaMes)} eurTxt="EBITDA, sin sueldos de socios" color={e.ebitdaMes >= 0 ? 'text-emerald-700' : 'text-red-600'} />
+          </div>
+          {e.margenNegativo ? <p className="mt-3 text-sm text-red-600 font-semibold">❌ Cada kilo cuesta más de lo que se vende ({e.varKg?.toFixed(0)} €/kg de coste variable frente a {e.eurKg?.toFixed(0)} €/kg de precio): vender más no lo arregla. Hay que subir el rendimiento por bandeja o el precio.</p> : (
+            <div className="mt-4 space-y-2 text-sm">
+              <div><div className="flex justify-between mb-1"><span>Hacia «sin pérdidas»</span><strong>{Math.round((e.progreso || 0) * 100)} %</strong></div>{barra(e.progreso, e.progreso >= 1 ? 'bg-emerald-500' : 'bg-amber-500')}</div>
+              {e.sueldosMes > 0 && <div><div className="flex justify-between mb-1"><span>Hacia pagar sueldos</span><strong>{Math.round((e.progresoSueldos || 0) * 100)} %</strong></div>{barra(e.progresoSueldos, 'bg-sky-500')}</div>}
+            </div>
+          )}
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+              <p className="font-bold mb-1">💶 Cada kilo</p>
+              <p>Precio <strong>{e.eurKg?.toFixed(2)} €</strong> − coste variable <strong>{e.varKg?.toFixed(2)} €</strong> = deja <strong className={e.contribKg > 0 ? 'text-emerald-700' : 'text-red-600'}>{e.contribKg?.toFixed(2)} €</strong> ({e.contribPct != null ? Math.round(e.contribPct * 100) : '—'} %)</p>
+              <p className="text-xs text-neutral-500 mt-1">Coste variable = semilla, sustrato, envases, luz, agua y transporte de esos meses entre los kg vendidos: incluye lo que se sembró y no se vendió. Fijos: {formatCurrency(e.fijosMes)} al mes.</p>
+            </div>
+            <div className={`p-3 rounded-xl border ${e.gBandeja == null ? 'bg-neutral-50 border-neutral-200' : e.gBandeja < e.objetivoG ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+              <p className="font-bold mb-1">🌱 Rendimiento por bandeja</p>
+              {e.gBandeja == null ? <p>No hay lotes sembrados registrados en esos meses.</p> : <>
+                <p><strong>{e.gBandeja} g</strong> vendidos por bandeja sembrada ({Math.round(e.bandejasMes)} bandejas/mes) · objetivo {e.objetivoG} g</p>
+                {e.extraObjetivo > 0 && <p className="mt-1 text-amber-800">A {e.objetivoG} g/bandeja serían <strong>{kgTxt(e.kgConObjetivo)}</strong> con las mismas bandejas: <strong>+{formatCurrency(e.extraObjetivo)} al mes</strong> de ventas sin más semilla ni sustrato.</p>}
+              </>}
+            </div>
+            <div className={`p-3 rounded-xl border ${e.top && e.top.pct > 0.4 ? 'bg-red-50 border-red-200' : 'bg-neutral-50 border-neutral-200'}`}>
+              <p className="font-bold mb-1">🎯 Dependencia de clientes</p>
+              {e.top ? <p><strong>{e.top.nombre}</strong> es el <strong>{Math.round(e.top.pct * 100)} %</strong> de lo entregado.{e.top.pct > 0.4 ? ' ⚠️ Si se va, se pierde casi todo el volumen: conviene sumar clientes de su tamaño antes de crecer en gastos.' : ''}</p> : <p>—</p>}
+            </div>
+          </div>
+          {e.escenarios.length > 0 && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-left text-xs text-neutral-500 border-b border-neutral-200"><th className="py-2 pr-2">Escenario</th><th className="py-2 px-2 text-right">kg/mes</th><th className="py-2 px-2 text-right">Bandejas/mes</th><th className="py-2 px-2 text-right">Ventas/mes</th><th className="py-2 px-2 text-right">Resultado</th>{e.sueldosMes > 0 && <th className="py-2 pl-2 text-right">Tras sueldos</th>}</tr></thead>
+                <tbody>
+                  {e.escenarios.map(x => (
+                    <tr key={x.etiqueta} className={`border-b border-neutral-100 ${x.etiqueta === 'Ahora' ? 'font-bold' : ''}`}>
+                      <td className="py-2 pr-2">{x.etiqueta}</td>
+                      <td className="py-2 px-2 text-right">{x.kg.toLocaleString('es-ES', { maximumFractionDigits: x.kg < 10 ? 1 : 0 })}</td>
+                      <td className="py-2 px-2 text-right">{x.bandejasMes.toLocaleString('es-ES')}</td>
+                      <td className="py-2 px-2 text-right">{x.ventas != null ? formatCurrency(x.ventas) : '—'}</td>
+                      <td className={`py-2 px-2 text-right ${x.ebitda >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{x.ebitda != null ? formatCurrency(x.ebitda) : '—'}</td>
+                      {e.sueldosMes > 0 && <td className={`py-2 pl-2 text-right ${x.trasSueldos >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{x.trasSueldos != null ? formatCurrency(x.trasSueldos) : '—'}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-xs text-neutral-500 mt-1">💡 Con el precio y el coste por kilo de ahora. Las bandejas/mes salen del rendimiento actual por bandeja; si sube el rendimiento, hacen falta menos. No cuenta empleados ni un local más grande.</p>
+            </div>
+          )}
+          </>}
+        </Card>
+      );
+    };
     const colorPct = (n) => n == null ? 'text-neutral-400' : n >= 0.3 ? 'text-emerald-700' : n >= 0 ? 'text-amber-700' : 'text-red-600';
     const colorEur = (n) => (n || 0) >= 0 ? 'text-emerald-700' : 'text-red-600';
     const anioActual = new Date().getFullYear();
@@ -4902,14 +5013,7 @@ const MainApp = () => {
           <Kpi titulo="EBIT" valor={eur(t.ebit)} sub={`tras ${eur(t.amortizacion)} de amortización`} color={colorEur(t.ebit)} />
           <Kpi titulo="Precio vs coste por kg" valor={t.eurKg == null ? '—' : `${t.eurKg.toFixed(0)} € / ${t.costeKg?.toFixed(0) ?? '—'} €`} sub="venta media / coste total (antes de amortización)" />
         </div>
-        <Card className={`p-4 border-2 ${t.puntoEquilibrioMes && t.ventasMes >= t.puntoEquilibrioMes ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}`}>
-          <p className="text-sm">
-            <strong>Punto de equilibrio:</strong>{' '}
-            {t.puntoEquilibrioMes == null
-              ? 'no se puede calcular (el margen de contribución es negativo: cada venta cuesta más de lo que deja).'
-              : <>hay que vender <strong>{eur(t.puntoEquilibrioMes)} al mes</strong> para cubrir la estructura ({eur(t.estructuraMes)} al mes con un margen de contribución del {pct(t.contribucionPct)}). Ahora se venden {eur(t.ventasMes)} al mes{t.ventasMes < t.puntoEquilibrioMes ? `: faltan ${eur(t.puntoEquilibrioMes - t.ventasMes)} (×${(t.puntoEquilibrioMes / Math.max(1, t.ventasMes)).toFixed(1)}).` : '.'}</>}
-          </p>
-        </Card>
+        {renderEquilibrio()}{/* V118: panel de punto de equilibrio */}
 
         {/* V110: puente de beneficio y río de caja */}
         <div className="grid grid-cols-1 gap-4">
