@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
+import './modoOscuro.css' // V117: modo oscuro completo
 
 // V82: /area-cliente es la página pública para clientes (sin login del ERP).
 // Cada parte se carga por separado para que el cliente no descargue el ERP entero.
