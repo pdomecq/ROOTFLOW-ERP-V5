@@ -594,6 +594,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['🌙', 'Pulsa la luna de arriba a la derecha para el modo oscuro: se aplica a todo el ERP y se recuerda en este dispositivo.'], // V117
   ['🧾', 'Una factura enviada no se borra ni se edita: usa «↩️ Rectificar y reemitir» y el ERP hace la rectificativa y la nueva.'],
   ['⊗', 'No borres pedidos: cancélalos. El ERP anula en cascada su albarán y su factura y la numeración no tiene huecos.'],
   ['🚚', 'Marca el albarán como entregado al entregar: la factura se cuadra sola con lo entregado de verdad.'],
@@ -903,6 +904,12 @@ const MainApp = () => {
     }
     return false;
   });
+  // V117: modo oscuro en toda la app (src/modoOscuro.css oscurece fondos, textos y bordes claros de cualquier pantalla)
+  useEffect(() => {
+    const raiz = document.documentElement;
+    raiz.classList.toggle('rf-oscuro', !!darkMode);
+    return () => raiz.classList.remove('rf-oscuro');
+  }, [darkMode]);
   
   // Panel de alertas
   const [showAlertasPanel, setShowAlertasPanel] = useState(false);
