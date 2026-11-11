@@ -50,7 +50,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - 🟠 **Plazo legal (V99)**: facturas ya enviadas que vencen más de 30 días después de la primera entrega: F-2026-0020 (25-nov; entrega 22-oct), F-2026-0025 (3-dic; entregas desde el 6-oct) y F-2026-0026 (3-dic; desde el 15-oct). No se han tocado porque el cliente ya las tiene. Con facturación **mensual** el límite de 30 días desde la primera entrega deja muy poco plazo: mejor semanal o quincenal para los clientes agrupados. El PDF de `portal-cliente` sigue diciendo «N días desde la fecha de factura»: cambiarlo al mismo texto que la factura del ERP la próxima vez que se despliegue.
 - Primeras facturas que vencen: F-2026-0018 (Soto del Lugar) y F-2026-0021 (Frutas Félix Vázquez) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
-- F-2026-0001 (La Huerta, junio): dejada en **483,29 €** (40 % de descuento, como sus 5 albaranes; los 644,38 € eran el 20 % por defecto) y cobrada el 10-nov contra el banco (572), pero en el BBVA no hay ningún ingreso de 483,29 €: si se cobró en efectivo, pasar el cobro a caja (570).
+- ✅ F-2026-0001 (La Huerta, junio): el primer mes fue gratis. Los albaranes A-0001 a A-0004 van al 100 % de descuento y solo se cobra el A-0005 (37,02 €), casado con la transferencia del 15-jul «FACTURA F2026-1».
 
 ## 4d. 🟠 Tesorería (V107): lo que ha sacado a la luz
 
