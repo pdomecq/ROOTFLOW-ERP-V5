@@ -50,7 +50,7 @@ Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por
 - 🟠 **Plazo legal (V99)**: facturas ya enviadas que vencen más de 30 días después de la primera entrega: F-2026-0020 (25-nov; entrega 22-oct), F-2026-0025 (3-dic; entregas desde el 6-oct) y F-2026-0026 (3-dic; desde el 15-oct). No se han tocado porque el cliente ya las tiene. Con facturación **mensual** el límite de 30 días desde la primera entrega deja muy poco plazo: mejor semanal o quincenal para los clientes agrupados. El PDF de `portal-cliente` sigue diciendo «N días desde la fecha de factura»: cambiarlo al mismo texto que la factura del ERP la próxima vez que se despliegue.
 - Primeras facturas que vencen: F-2026-0018 (Soto del Lugar) y F-2026-0021 (Frutas Félix Vázquez) el 8-nov → 1.er recordatorio el lunes 9-nov si el banco está al día.
 - Revisar con la asesoría: cuenta 5721 (saldo en Stripe pendiente de transferir) y comisiones de Stripe en la 626.
-- F-2026-0001 (La Huerta, 644,38 €) está cobrada el 26-oct en el ERP pero ese ingreso no está en el BBVA: confirmar si se cobró (V108: Tesorería → 📒 Contabilizar el banco → «No se ha cobrado» / «Fue en efectivo»).
+- F-2026-0001 (La Huerta, 644,38 €, junio) está marcada cobrada el 10-nov, pero en el BBVA (que ya está completo desde la apertura, V115) no hay ningún ingreso de ese importe: solo 37,02 € el 15-jul con «FACTURA F2026-1». Confirmar con La Huerta cómo la pagaron (¿en efectivo? ¿la deben?).
 
 ## 4d. 🟠 Tesorería (V107): lo que ha sacado a la luz
 
