@@ -25198,13 +25198,23 @@ SELECT cron.schedule(
   };
 
   // Al cargar el ERP: las facturas descuadradas que NO se han enviado se corrigen solas con su albarán
+  // V115: solo facturas de octubre en adelante (las anteriores se enviaron a mano y no constan como enviadas: no se
+  // tocan nunca), nunca una que ya estuvo cobrada, una sola corrección por factura y sesión y nunca dos rondas a la
+  // vez (antes, al volver la F-2026-0001 de junio a «pendiente», se recalculó varias veces en paralelo).
   const autoControlFacturasRef = useRef('');
+  const autoControlEnCurso = useRef(false);
+  const autoControlHechas = useRef(new Set());
   useEffect(() => {
-    const arreglables = controlFacturas.descuadres.filter(d => !d.enviada && !facturaBloqueadaStripe(d.factura));
+    const arreglables = controlFacturas.descuadres.filter(d => !d.enviada && !facturaBloqueadaStripe(d.factura)
+      && String(d.factura.fecha || '') >= '2026-10-01' && !autoControlHechas.current.has(d.factura.id));
     const clave = arreglables.map(d => `${d.factura.id}:${d.esperado.total}`).join('|');
-    if (!clave || autoControlFacturasRef.current === clave || !albaranesData || !albaranPedidosData || !pedidoItemsData) return;
+    if (!clave || autoControlEnCurso.current || autoControlFacturasRef.current === clave || !albaranesData || !albaranPedidosData || !pedidoItemsData) return;
     autoControlFacturasRef.current = clave;
-    (async () => { for (const d of arreglables) await corregirFacturaConAlbaran(d, true); })();
+    autoControlEnCurso.current = true;
+    (async () => {
+      try { for (const d of arreglables) { autoControlHechas.current.add(d.factura.id); await corregirFacturaConAlbaran(d, true); } }
+      finally { autoControlEnCurso.current = false; }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controlFacturas]);
 
