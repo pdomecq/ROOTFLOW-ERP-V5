@@ -4195,6 +4195,20 @@ const MainApp = () => {
   );
 
   // Ingresos, kilos y €/kg por línea a partir de los pedidos (sin cancelados)
+  const resumenPorLineaAlbaranes = (albs) => { // V120
+    const r = {};
+    Object.keys(LINEAS_NEGOCIO).forEach(k => { r[k] = { importe: 0, gramos: 0, pedidos: 0, clientes: new Set() }; });
+    albs.filter(a => !(Number(a.descuento_pct) >= 100)).forEach(a => {
+      const linea = lineaDeClienteId(a.cliente_id);
+      let base = Number(a.base_imponible) || 0;
+      try { base = calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { /* base guardada */ }
+      r[linea].importe += base;
+      r[linea].gramos += (Array.isArray(a.items_json) ? a.items_json : []).reduce((t, it) => t + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(x => x.id === Number(it.producto_id))), 0);
+      r[linea].pedidos += 1;
+      r[linea].clientes.add(a.cliente_id);
+    });
+    return r;
+  };
   const resumenPorLinea = (listaPedidos) => {
     const r = {};
     Object.keys(LINEAS_NEGOCIO).forEach(k => { r[k] = { importe: 0, gramos: 0, pedidos: 0, clientes: new Set() }; });
@@ -4212,8 +4226,9 @@ const MainApp = () => {
   };
 
   // Tarjeta "Dos líneas de negocio": reparto de ingresos y kilos, €/kg frente al objetivo del plan
-  const renderResumenLineas = (listaPedidos, titulo) => {
-    const r = resumenPorLinea(listaPedidos);
+  const renderResumenLineas = (listaPedidos, titulo, albaranesEntregados = null) => {
+    // V120: con albaranes entregados (Dashboard) cuenta lo entregado sin IVA, con su descuento y sin entregas gratis
+    const r = albaranesEntregados ? resumenPorLineaAlbaranes(albaranesEntregados) : resumenPorLinea(listaPedidos);
     const totImporte = Object.values(r).reduce((t, x) => t + x.importe, 0);
     const totGramos = Object.values(r).reduce((t, x) => t + x.gramos, 0);
     const pct = (v, tot) => tot > 0 ? Math.round((v / tot) * 100) : 0;
@@ -4226,7 +4241,7 @@ const MainApp = () => {
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <h3 className="font-bold text-neutral-900">🌱 Dos líneas de negocio <span className="text-neutral-400 font-medium text-sm">· {titulo}</span></h3>
-          <span className="text-xs text-neutral-400">Base de pedidos sin IVA · kg según el formato de cada producto</span>
+          <span className="text-xs text-neutral-400">{albaranesEntregados ? 'Lo entregado sin IVA (sin entregas gratis)' : 'Base de pedidos sin IVA'} · kg según el formato de cada producto</span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Object.entries(LINEAS_NEGOCIO).map(([k, l]) => {
@@ -4242,7 +4257,7 @@ const MainApp = () => {
                   <div><p className="opacity-70">€/kg (plan {l.objetivoEurKg})</p><p className={`font-bold ${eurKg > 0 && eurKg < l.objetivoEurKg * 0.8 ? 'text-red-600' : ''}`}>{eurKg > 0 ? `${eurKg.toFixed(0)} €/kg` : '—'}</p></div>
                   <div><p className="opacity-70">Ticket medio</p><p className="font-bold">{x.pedidos ? formatCurrency(x.importe / x.pedidos) : '—'}</p></div>
                 </div>
-                <p className="text-[11px] opacity-70 mt-2">{x.pedidos} pedido{x.pedidos === 1 ? '' : 's'} · {x.clientes.size} cliente{x.clientes.size === 1 ? '' : 's'}</p>
+                <p className="text-[11px] opacity-70 mt-2">{x.pedidos} {albaranesEntregados ? `entrega${x.pedidos === 1 ? '' : 's'}` : `pedido${x.pedidos === 1 ? '' : 's'}`} · {x.clientes.size} cliente{x.clientes.size === 1 ? '' : 's'}</p>
               </div>
             );
           })}
@@ -4699,6 +4714,32 @@ const MainApp = () => {
       </svg></div>
     );
   };
+  // V120: punto de equilibrio con el ritmo de los 3 últimos meses cerrados (lo usan Rentabilidad y el Dashboard)
+  const equilibrioActual = (aprovUsado, linea = 'todas') => {
+    const hoyEq = new Date().toISOString().slice(0, 10);
+    const ven = ventanaEquilibrio(hoyEq, 3);
+    const enLinea = (clienteId) => linea === 'todas' || lineaDeClienteId(clienteId) === linea;
+    const rEq = calcularRentabilidad(
+      { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovUsado },
+      { desde: ven.desde, hasta: ven.hasta, reparto: rentReparto, linea },
+      { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
+    );
+    const impAlb = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
+    const ent = ventasEntregadas(albaranes, ven.desde, ven.hasta, impAlb).albaranes.filter(a => enLinea(a.cliente_id) && !(Number(a.descuento_pct) >= 100));
+    const kgAlb = (a) => (Array.isArray(a.items_json) ? a.items_json : []).reduce((s2, it) => s2 + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0) / 1000;
+    const porCli = {};
+    let ventasEnt = 0, kgEnt = 0;
+    for (const a of ent) { const b = impAlb(a); ventasEnt += b; kgEnt += kgAlb(a); porCli[a.cliente_id] = (porCli[a.cliente_id] || 0) + b; }
+    const [topId, topVentas] = Object.entries(porCli).sort((x, y) => y[1] - x[1])[0] || [];
+    const e = calcularEquilibrio({
+      meses: ven.meses, ventas: ventasEnt, kg: kgEnt,
+      materiales: rEq.tot.materiales, variables: rEq.tot.variables, estructura: rEq.tot.estructura,
+      bandejas: rEq.avisos.bandejas, sueldoSocio: eqCfg.sueldoSocio, socios: eqCfg.socios, objetivoG: eqCfg.objetivoG,
+      topCliente: topId ? { nombre: clientes.find(c => String(c.id) === String(topId))?.nombre?.trim() || 'Cliente', ventas: topVentas } : null,
+    });
+    return { e, ven };
+  };
+
   const renderRentabilidad = () => {
     const per = periodoRentabilidad(rentPeriodo);
     let aprov = null; // V88: materiales por consumo real (si hay catálogo y líneas de compra)
@@ -4785,26 +4826,7 @@ const MainApp = () => {
     // V118: punto de equilibrio con el ritmo de los 3 últimos meses cerrados: ventas y kg ENTREGADOS (La Huerta factura a mes
     // vencido), costes de Rentabilidad de esos meses y bandejas sembradas. Supuestos (sueldos, g/bandeja) editables.
     const renderEquilibrio = () => {
-      const hoyEq = new Date().toISOString().slice(0, 10);
-      const ven = ventanaEquilibrio(hoyEq, 3);
-      const rEq = calcularRentabilidad(
-        { facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, aprov: aprovActivo ? aprov : null },
-        { desde: ven.desde, hasta: ven.hasta, reparto: rentReparto, linea: lineaFiltro },
-        { desgloseGasto, lineaDeCliente, gramosPorUnidad, vidaUtilAnios: (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10 }
-      );
-      const impAlb = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
-      const ent = ventasEntregadas(albaranes, ven.desde, ven.hasta, impAlb).albaranes.filter(a => enLineaFiltro(a.cliente_id) && !(Number(a.descuento_pct) >= 100));
-      const kgAlb = (a) => (Array.isArray(a.items_json) ? a.items_json : []).reduce((s2, it) => s2 + (Number(it.cantidad) || 0) * gramosPorUnidad(productos.find(p => p.id === Number(it.producto_id))), 0) / 1000;
-      const porCli = {};
-      let ventasEnt = 0, kgEnt = 0;
-      for (const a of ent) { const b = impAlb(a); ventasEnt += b; kgEnt += kgAlb(a); porCli[a.cliente_id] = (porCli[a.cliente_id] || 0) + b; }
-      const [topId, topVentas] = Object.entries(porCli).sort((x, y) => y[1] - x[1])[0] || [];
-      const e = calcularEquilibrio({
-        meses: ven.meses, ventas: ventasEnt, kg: kgEnt,
-        materiales: rEq.tot.materiales, variables: rEq.tot.variables, estructura: rEq.tot.estructura,
-        bandejas: rEq.avisos.bandejas, sueldoSocio: eqCfg.sueldoSocio, socios: eqCfg.socios, objetivoG: eqCfg.objetivoG,
-        topCliente: topId ? { nombre: clientes.find(c => String(c.id) === String(topId))?.nombre?.trim() || 'Cliente', ventas: topVentas } : null,
-      });
+      const { e, ven } = equilibrioActual(aprovActivo ? aprov : null, lineaFiltro); // V120: mismo cálculo que el Dashboard
       const mesL = (iso) => new Date(`${iso.slice(0, 7)}-15`).toLocaleDateString('es-ES', { month: 'short' });
       const barra = (p, color) => (
         <div className="h-2.5 rounded-full bg-neutral-200 overflow-hidden"><div className={`h-full rounded-full ${color}`} style={{ width: `${Math.min(100, Math.max(2, (p || 0) * 100))}%` }} /></div>
@@ -12021,13 +12043,15 @@ ${pedidoLinea ? `^FO260,258
     // Top clientes y productos del periodo (lo entregado)
     const porCli = {}, porProd = {};
     vent.albaranes.forEach(a => {
+      const factDto = Number(a.descuento_pct) > 0 ? Math.max(0, 1 - Number(a.descuento_pct) / 100) : 1; // V120: el top de productos lleva el descuento del albarán
       porCli[a.cliente_id] = porCli[a.cliente_id] || { id: a.cliente_id, base: 0, n: 0 };
       porCli[a.cliente_id].base += impAlb(a); porCli[a.cliente_id].n++;
+      if (factDto <= 0) return; // V120: las entregas gratis no son ventas de producto
       (Array.isArray(a.items_json) ? a.items_json : []).forEach(it => {
         const prod = productos.find(p => p.id === Number(it.producto_id));
         const nombre = prod?.nombre || it.nombre || 'Otros';
         porProd[nombre] = porProd[nombre] || { nombre, importe: 0, ud: 0 };
-        porProd[nombre].importe += (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0);
+        porProd[nombre].importe += (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0) * factDto;
         porProd[nombre].ud += Number(it.cantidad) || 0;
       });
     });
@@ -12047,7 +12071,8 @@ ${pedidoLinea ? `^FO260,258
       .sort((a, b) => String(a.fecha_cosecha_prevista).localeCompare(String(b.fecha_cosecha_prevista))).slice(0, 5);
     const proximasEntregas = pedidos.filter(p => ['pendiente', 'confirmado', 'preparando'].includes(p.estado) && p.fecha_entrega && p.fecha_entrega >= hoyStr && p.fecha_entrega <= en7)
       .sort((a, b) => String(a.fecha_entrega).localeCompare(String(b.fecha_entrega))).slice(0, 5);
-    const gastosSinPagar = gastos.filter(g => !g.pagado);
+    // V120: sin pagar = a un proveedor de verdad: ni a 0 €, ni pagados por un socio (eso es deuda con el socio) ni con la tarjeta
+    const gastosSinPagar = gastos.filter(g => !g.pagado && Number(g.importe) > 0 && !/^socio_/.test(g.forma_pago || '') && g.forma_pago !== 'tarjeta_empresa');
 
     // ==================== LO QUE NECESITA ATENCIÓN ====================
     const movsRevisar = movimientosBanco.filter(m => Number(m.importe) > 0 && ['sugerido', 'sin_casar'].includes(m.estado)).length;
@@ -12135,7 +12160,7 @@ ${pedidoLinea ? `^FO260,258
                 extra={rt && rt.mbPct != null ? <span className="text-xs font-bold text-violet-700">{pctTxt(rt.mbPct)}</span> : null} sub="Ventas − semilla, sustrato y envases (según facturas)" rojo={rt && rt.margenBruto < 0} />
               <Kpi titulo="EBITDA" valor={rt ? formatCurrency(rt.ebitda) : '—'} icono={Calculator} color="bg-blue-100 text-blue-700" ir="rentabilidad"
                 extra={rt && rt.ebitdaPct != null ? <span className={`text-xs font-bold ${rt.ebitda < 0 ? 'text-red-600' : 'text-blue-700'}`}>{pctTxt(rt.ebitdaPct)}</span> : null}
-                sub={rt?.puntoEquilibrioMes ? `Equilibrio: ${formatCurrency(rt.puntoEquilibrioMes)}/mes de ventas` : 'Resultado antes de amortizaciones'} rojo={rt && rt.ebitda < 0} />
+                sub={dashRent?.eq?.kgEq ? `Sin pérdidas: ${Math.round(dashRent.eq.kgEq)} kg/mes (ahora ${dashRent.eq.kgMes.toLocaleString('es-ES', { maximumFractionDigits: 1 })})` : 'Resultado antes de amortizaciones'} rojo={rt && rt.ebitda < 0} />
               <Kpi titulo="Cobrado" valor={formatCurrency(cobrado.total)} icono={Banknote} color="bg-green-100 text-green-700" ir="facturacion"
                 sub={`${cobrado.n} factura${cobrado.n === 1 ? '' : 's'} cobrada${cobrado.n === 1 ? '' : 's'} (con IVA)`} />
               <Kpi titulo="Por cobrar" valor={formatCurrency(cobros.total)} icono={Receipt} color="bg-purple-100 text-purple-700" ir="facturacion" rojo={cobros.vencido > 0}
@@ -12152,7 +12177,7 @@ ${pedidoLinea ? `^FO260,258
             <span>Hoy <strong className={tesoreria.saldoHoy < 0 ? 'text-red-600' : ''}>{formatCurrency(tesoreria.saldoHoy)}</strong></span>
             <span>En 30 días <strong className={saldoEn(tesoreria.prev, 30) < 0 ? 'text-red-600' : ''}>{formatCurrency(saldoEn(tesoreria.prev, 30))}</strong></span>
             <span>Salidas medias <strong>{formatCurrency(tesoreria.salidasMes)}/mes</strong></span>
-            {tesoreria.alerta && <span className="text-red-700 font-semibold">⛔ Baja de {formatCurrency(tesoreria.umbral)} en los próximos 30 días</span>}
+            {tesoreria.alerta && <span className="text-red-700 font-semibold">⛔ En los próximos 30 días baja hasta {formatCurrency(tesoreria.min30)} (mínimo fijado {formatCurrency(tesoreria.umbral)})</span>}{/* V120 */}
           </button>
         )}
 
@@ -12323,7 +12348,7 @@ ${pedidoLinea ? `^FO260,258
         )}
 
         {/* ============ V84: DOS LÍNEAS DE NEGOCIO ============ */}
-        {verFinanzas && renderResumenLineas(filtrarPorPeriodo(pedidos, 'fecha', dashboardPeriodo), per.label)}
+        {verFinanzas && renderResumenLineas(null, per.label, vent.albaranes)}{/* V120: lo entregado del periodo, como «Ventas» */}
 
         {/* ============ TOP CLIENTES + TOP PRODUCTOS (lo entregado en el periodo) ============ */}
         {verFinanzas && (
@@ -25290,13 +25315,14 @@ SELECT cron.schedule(
       const per = calcularRentabilidad(datos, { desde: pd.desde, hasta: finMesD(pd.hasta), reparto: rentReparto, linea: 'todas' }, h);
       const ini12 = new Date(Date.UTC(hoyD.getFullYear(), hoyD.getMonth() - 11, 1)).toISOString().slice(0, 10);
       const r12 = calcularRentabilidad(datos, { desde: ini12, hasta: finMesD(hoy), reparto: rentReparto, linea: 'todas' }, h);
-      return { per, r12 };
+      let eq = null; try { eq = equilibrioActual(datos.aprov).e; } catch (e) { eq = null; } // V120: mismo equilibrio que Rentabilidad
+      return { per, r12, eq };
     } catch (e) {
       console.error('Dashboard: rentabilidad', e);
       return null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSection, dashboardPeriodo, facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, comprasMaterial, rentReparto]);
+  }, [activeSection, dashboardPeriodo, facturas, pedidoItems, albaranes, productos, variedades, clientes, gastos, lotes, comprasMaterial, rentReparto, eqCfg]);
 
   // V97: panel rojo en Facturación con lo que no cuadra
   const renderControlFacturas = () => {
