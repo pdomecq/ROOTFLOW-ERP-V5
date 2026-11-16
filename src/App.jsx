@@ -12010,7 +12010,7 @@ ${pedidoLinea ? `^FO260,258
     const fact = resumenVentas(facturas, per.desde, per.hasta);
     const cobrado = cobradoEntre(facturas, per.desde, per.hasta);
     const cobros = resumenCobros(facturas, hoyStr);
-    const sinFacturar = pendienteFacturar({ albaranes, facturas, albaranPedidos, importeDe: impAlb });
+    const sinFacturar = pendienteFacturar({ albaranes, facturas, albaranPedidos, importeDe: impAlb, clientes, hoy: hoyStr }); // V119: atrasados / esperan su factura agrupada
     const rt = dashRent?.per?.tot || null;
     const pyg12 = (dashRent?.r12?.pyg || []).map(m => ({
       mes: new Date(`${m.mes}-15`).toLocaleDateString('es-ES', { month: 'short' }).replace('.', ''),
@@ -12058,7 +12058,9 @@ ${pedidoLinea ? `^FO260,258
       verFinanzas && tesoreria.alerta && { nivel: 'rojo', icono: '🏦', titulo: 'El banco bajará del mínimo en 30 días', detalle: `Mínimo previsto ${formatCurrency(tesoreria.min30)} (umbral ${formatCurrency(tesoreria.umbral)})`, ir: 'tesoreria' },
       puedeVer('facturacion') && problemasFacturas > 0 && { nivel: 'rojo', icono: '🧾', titulo: `${problemasFacturas} factura${problemasFacturas === 1 ? '' : 's'} con problemas`, detalle: 'No cuadran con su albarán, duplicadas o entregas sin factura', ir: 'facturacion' },
       pedidosAtrasados.length > 0 && { nivel: 'rojo', icono: '🚚', titulo: `${pedidosAtrasados.length} pedido${pedidosAtrasados.length === 1 ? '' : 's'} con la entrega pasada`, detalle: pedidosAtrasados.slice(0, 3).map(p => nombreCli(p.cliente_id)).join(', '), ir: 'pedidos' },
-      puedeVer('facturacion') && sinFacturar.n > 0 && { nivel: 'ambar', icono: '📄', titulo: `${sinFacturar.n} albarán${sinFacturar.n === 1 ? '' : 'es'} entregado${sinFacturar.n === 1 ? '' : 's'} sin facturar`, detalle: `${formatCurrency(sinFacturar.base)} sin IVA · el más antiguo del ${formatDate(sinFacturar.lista.map(x => x.fecha).sort()[0])}`, ir: 'albaranes' },
+      // V119: solo avisa de los albaranes atrasados; los de clientes con factura semanal/quincenal/mensual cuyo periodo no ha cerrado van aparte
+      puedeVer('facturacion') && sinFacturar.atrasados.n > 0 && { nivel: 'ambar', icono: '📄', titulo: `${sinFacturar.atrasados.n} albarán${sinFacturar.atrasados.n === 1 ? '' : 'es'} entregado${sinFacturar.atrasados.n === 1 ? '' : 's'} sin factura`, detalle: `${formatCurrency(sinFacturar.atrasados.base)} sin IVA · ${[...new Set(sinFacturar.atrasados.lista.map(x => nombreCli(x.albaran.cliente_id)))].slice(0, 3).join(', ')} · el más antiguo del ${formatDate(sinFacturar.atrasados.lista.map(x => x.fecha).sort()[0])}`, ir: 'albaranes', alAbrir: () => setAlbFiltro('atrasados') },
+      puedeVer('facturacion') && sinFacturar.enEspera.n > 0 && { nivel: 'azul', icono: '🗓️', titulo: `${sinFacturar.enEspera.n} albarán${sinFacturar.enEspera.n === 1 ? '' : 'es'} esperan su factura agrupada`, detalle: sinFacturar.enEspera.porCliente.map(c => `${nombreCli(c.cliente_id)} (${c.periodicidad}, ${formatDate(c.finPeriodo)})`).join(' · '), ir: 'albaranes', alAbrir: () => setAlbFiltro('sin_facturar') },
       puedeVer('facturacion') && movsRevisar > 0 && { nivel: 'ambar', icono: '🔎', titulo: `${movsRevisar} ingreso${movsRevisar === 1 ? '' : 's'} del banco por revisar`, detalle: 'Cobros que el ERP no ha podido casar solo con una factura', ir: 'facturacion' },
       puedeVer('tesoreria') && pendContab > 0 && { nivel: 'ambar', icono: '📒', titulo: `${pendContab} movimiento${pendContab === 1 ? '' : 's'} del banco por contabilizar o arreglar`, detalle: 'Tesorería → Contabilizar el banco', ir: 'tesoreria' },
       puedeVer('gastos') && gastosSinPagar.length > 0 && { nivel: 'azul', icono: '💳', titulo: `${gastosSinPagar.length} gasto${gastosSinPagar.length === 1 ? '' : 's'} sin pagar`, detalle: `${formatCurrency(gastosSinPagar.reduce((t, g) => t + (Number(g.importe) || 0), 0))} a proveedores`, ir: 'gastos' },
@@ -12160,7 +12162,7 @@ ${pedidoLinea ? `^FO260,258
             <h3 className="font-bold text-neutral-900 mb-3">⚡ Necesita atención</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
               {atencion.map(a => (
-                <button key={a.titulo} onClick={() => setActiveSection(a.ir)} className={`flex items-start gap-3 p-3 rounded-xl border text-left transition-colors ${COLOR_AT[a.nivel]}`}>
+                <button key={a.titulo} onClick={() => { a.alAbrir?.(); setActiveSection(a.ir); }} className={`flex items-start gap-3 p-3 rounded-xl border text-left transition-colors ${COLOR_AT[a.nivel]}`}>
                   <span className="text-xl leading-none">{a.icono}</span>
                   <span className="flex-1 min-w-0">
                     <span className="block font-bold text-sm">{a.titulo}</span>
@@ -17510,6 +17512,7 @@ ol { margin:3px 0 3px 18px; padding:0; } li { margin:1px 0; }
   // V58: pedido preseleccionado para generar albarán
   const [pedidoParaAlbaran, setPedidoParaAlbaran] = useState(null);
   const [busquedaAlbaranes, setBusquedaAlbaranes] = useState('');
+  const [albFiltro, setAlbFiltro] = useState('todos'); // V119: 'todos' | 'sin_facturar' | 'atrasados' | 'generado'
   // V64: estados inventario insumos
   const [insumoBusqueda, setInsumoBusqueda] = useState('');
   const [insumoCategoria, setInsumoCategoria] = useState('todos');
@@ -17973,8 +17976,20 @@ ${logoRootflow}^FS
       anulado:   { label: 'Anulado',   color: 'bg-red-100 text-red-700',       icon: '✗' },
     };
     
+    // V119: «sin facturar» con la misma regla que el Dashboard (agrupadas, factura de su pedido, entregas gratis y periodo de facturación)
+    const impAlbS = (a) => { try { return calcularImportesAlbaran(a, clientes.find(c => c.id === a.cliente_id)).base; } catch { return Number(a.base_imponible) || 0; } };
+    const pf = pendienteFacturar({ albaranes: albaranes.filter(a => enLineaFiltro(a.cliente_id)), facturas, albaranPedidos, importeDe: impAlbS, clientes, hoy: new Date().toISOString().slice(0, 10) });
+    const pfPorId = new globalThis.Map(pf.lista.map(x => [x.albaran.id, x])); // Map = icono de lucide en este archivo
+    const facturaDeAlb = (a) => {
+      if (a.numero_factura) return a.numero_factura;
+      const f = facturas.find(ff => ff.estado !== 'anulada' && ff.tipo !== 'anulada' && Array.isArray(ff.albaranes_ids) && ff.albaranes_ids.map(String).includes(String(a.id)));
+      if (f) return f.id;
+      const peds = albaranPedidos.filter(ap => ap.albaran_id === a.id).map(ap => ap.pedido_id);
+      return facturas.find(ff => ff.estado !== 'anulada' && ff.tipo !== 'anulada' && ff.pedido_id && peds.includes(ff.pedido_id))?.id || null;
+    };
     const albaranesFiltrados = albaranes
       .filter(a => enLineaFiltro(a.cliente_id)) // V84: filtro por línea
+      .filter(a => albFiltro === 'todos' ? true : albFiltro === 'generado' ? a.estado === 'generado' : albFiltro === 'atrasados' ? pfPorId.get(a.id)?.atrasado : pfPorId.has(a.id)) // V119
       .filter(a => {
         if (busquedaAlbaranes) {
           const q = busquedaAlbaranes.toLowerCase();
@@ -17988,7 +18003,7 @@ ${logoRootflow}^FS
     // KPIs
     const totalGenerados = albaranes.filter(a => a.estado === 'generado').length;
     const totalEntregados = albaranes.filter(a => a.estado === 'entregado').length;
-    const totalPendientesFacturar = albaranes.filter(a => a.estado === 'entregado' && !a.factura_semanal_id && !a.numero_factura).length;
+    const totalPendientesFacturar = pf.n; // V119: antes contaba también los ya facturados en agrupada o por su pedido
     const mesActual = new Date().toISOString().slice(0,7);
     const totalMesActual = albaranes.filter(a => a.fecha_emision?.startsWith(mesActual)).length;
     
@@ -18017,14 +18032,23 @@ ${logoRootflow}^FS
         
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Generados</p><p className="text-2xl font-black text-blue-600">{totalGenerados}</p></Card>
+          <Card className={`p-3 cursor-pointer ${albFiltro === 'generado' ? 'ring-2 ring-blue-400' : ''}`} onClick={() => setAlbFiltro(f => f === 'generado' ? 'todos' : 'generado')}><p className="text-xs text-neutral-500 uppercase font-bold">Generados</p><p className="text-2xl font-black text-blue-600">{totalGenerados}</p></Card>
           <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Entregados</p><p className="text-2xl font-black text-green-600">{totalEntregados}</p></Card>
-          <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Sin facturar</p><p className="text-2xl font-black text-amber-600">{totalPendientesFacturar}</p></Card>
+          <Card className={`p-3 cursor-pointer ${['sin_facturar', 'atrasados'].includes(albFiltro) ? 'ring-2 ring-amber-400' : ''}`} onClick={() => setAlbFiltro(f => f === 'sin_facturar' ? 'todos' : 'sin_facturar')}>{/* V119 */}
+            <p className="text-xs text-neutral-500 uppercase font-bold">Sin facturar</p>
+            <p className="text-2xl font-black text-amber-600">{totalPendientesFacturar} <span className="text-sm font-bold">{formatCurrency(pf.base)}</span></p>
+            <p className="text-[11px] text-neutral-600">{pf.atrasados.n > 0 ? <span className="text-red-600 font-semibold">{pf.atrasados.n} atrasado{pf.atrasados.n === 1 ? '' : 's'}</span> : 'ninguno atrasado'}{pf.enEspera.n > 0 ? ` · ${pf.enEspera.n} esperan factura agrupada` : ''}</p>
+          </Card>
           <Card className="p-3"><p className="text-xs text-neutral-500 uppercase font-bold">Mes actual</p><p className="text-2xl font-black">{totalMesActual}</p></Card>
         </div>
         
         {/* Buscador */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-1 p-1 rounded-xl bg-neutral-100">{/* V119: filtros */}
+            {[['todos', 'Todos'], ['sin_facturar', `Sin facturar (${pf.n})`], ['atrasados', `Atrasados (${pf.atrasados.n})`], ['generado', `Generados (${totalGenerados})`]].map(([k, l]) => (
+              <button key={k} onClick={() => setAlbFiltro(k)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${albFiltro === k ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-600 hover:text-neutral-900'}`}>{l}</button>
+            ))}
+          </div>
           <input
             type="text"
             value={busquedaAlbaranes}
@@ -18072,6 +18096,12 @@ ${logoRootflow}^FS
                         </td>
                         <td className="p-3 text-center">
                           <Badge className={cfg.color}>{cfg.icon} {cfg.label}</Badge>
+                          {(() => { // V119: ¿está facturado?
+                            const pend = pfPorId.get(alb.id);
+                            if (pend) return <p className={`text-[11px] mt-1 font-semibold ${pend.atrasado ? 'text-red-600' : 'text-sky-700'}`}>{pend.atrasado ? '⚠️ Sin factura' : `🗓️ Factura ${pend.periodicidad} · ${formatDate(pend.finPeriodo)}`}</p>;
+                            const fac = alb.estado === 'entregado' || alb.estado === 'facturado' ? facturaDeAlb(alb) : null;
+                            return fac ? <p className="text-[11px] mt-1 text-neutral-500">🧾 {fac}</p> : null;
+                          })()}
                         </td>
                         <td className="p-3">
                           <div className="flex justify-end gap-1">

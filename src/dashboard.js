@@ -80,20 +80,55 @@ export function resumenCobros(facturas, hoy) {
 /**
  * Albaranes entregados sin factura: ni están en una factura agrupada (albaranes_ids) ni su pedido tiene factura propia.
  * importeDe(albaran) = base sin IVA (en el ERP, calcularImportesAlbaran(a, cliente).base). desde: solo los entregados desde esa fecha.
+ * V119: con clientes y hoy, separa los que «esperan» su factura agrupada (semanal, quincenal o mensual, cuyo periodo aún no
+ * se ha cerrado) de los «atrasados» (por pedido sin factura, o periodo ya cerrado). Las entregas gratis (base 0) no cuentan.
  */
-export function pendienteFacturar({ albaranes = [], facturas = [], albaranPedidos = [], importeDe, desde = '0000-00-00' }) {
+export function pendienteFacturar({ albaranes = [], facturas = [], albaranPedidos = [], importeDe, desde = '0000-00-00', clientes = [], hoy = null }) {
   const vivas = facturas.filter((f) => f.estado !== 'anulada' && f.tipo !== 'anulada');
   const albEnFactura = new Set(vivas.flatMap((f) => (Array.isArray(f.albaranes_ids) ? f.albaranes_ids.map(String) : [])));
   const pedidosFacturados = new Set(vivas.filter((f) => f.pedido_id).map((f) => f.pedido_id));
   const lista = albaranes.filter((a) => {
     if (a.estado !== 'entregado' || albEnFactura.has(String(a.id))) return false;
     if (a.numero_factura || a.factura_semanal_id) return false;
+    if (Number(a.descuento_pct) >= 100) return false; // V119: entrega gratis
     const fecha = fechaAlbaran(a);
     if (fecha && fecha < desde) return false;
     const peds = albaranPedidos.filter((x) => String(x.albaran_id) === String(a.id)).map((x) => x.pedido_id);
     return !(peds.length && peds.every((p) => pedidosFacturados.has(p)));
-  }).map((a) => ({ albaran: a, fecha: fechaAlbaran(a), base: r2(importeDe ? importeDe(a) : Number(a.base_imponible) || 0) }));
-  return { lista, base: r2(lista.reduce((t, x) => t + x.base, 0)), n: lista.length };
+  }).map((a) => {
+    const fecha = fechaAlbaran(a);
+    const cli = clientes.find((c) => c.id === a.cliente_id);
+    const periodicidad = cli?.periodicidad_facturacion || 'por_pedido';
+    const fin = finPeriodoFacturacion(fecha, periodicidad, cli?.dia_corte_semanal);
+    const margen = periodicidad === 'por_pedido' ? 1 : 5; // días para hacer la factura tras cerrar el periodo
+    const atrasado = !hoy || !fin || diasEntre(hoy, fin) > margen;
+    return { albaran: a, fecha, periodicidad, finPeriodo: fin, atrasado, base: r2(importeDe ? importeDe(a) : Number(a.base_imponible) || 0) };
+  }).filter((x) => x.base > 0.004);
+  const resumen = (ls) => ({ lista: ls, n: ls.length, base: r2(ls.reduce((t, x) => t + x.base, 0)) });
+  const espera = lista.filter((x) => !x.atrasado);
+  const porCliente = {};
+  for (const x of espera) {
+    const k = x.albaran.cliente_id;
+    porCliente[k] = porCliente[k] || { cliente_id: k, periodicidad: x.periodicidad, n: 0, base: 0, finPeriodo: x.finPeriodo };
+    porCliente[k].n++; porCliente[k].base = r2(porCliente[k].base + x.base);
+    if (x.finPeriodo > porCliente[k].finPeriodo) porCliente[k].finPeriodo = x.finPeriodo;
+  }
+  return { ...resumen(lista), atrasados: resumen(lista.filter((x) => x.atrasado)), enEspera: { ...resumen(espera), porCliente: Object.values(porCliente) } };
+}
+
+/** V119: último día del periodo de facturación de una entrega (por pedido = el mismo día; semanal = el día de corte) */
+export function finPeriodoFacturacion(fecha, periodicidad, diaCorte = 5) {
+  if (!fecha) return null;
+  const [y, m, d] = dia(fecha).split('-').map(Number);
+  if (periodicidad === 'mensual') return finMes(y, m);
+  if (periodicidad === 'quincenal') return d <= 15 ? `${y}-${pad(m)}-15` : finMes(y, m);
+  if (periodicidad === 'semanal') {
+    const corte = Number.isFinite(Number(diaCorte)) ? Number(diaCorte) : 5;
+    const f = new Date(Date.UTC(y, m - 1, d));
+    while (f.getUTCDay() !== corte) f.setUTCDate(f.getUTCDate() + 1);
+    return f.toISOString().slice(0, 10);
+  }
+  return dia(fecha);
 }
 
 export const fechaAlbaran = (a) => dia(a.fecha_entrega_real || a.fecha_entrega_prevista || a.fecha_emision);
