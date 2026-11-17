@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V122**; la siguiente es **V123**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V123: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V123-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V123**; la siguiente es **V124**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V124: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V124-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V123 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V124 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V123: <resumen corto>`.
+- Mensaje de commit: `V124: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -56,7 +56,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - `src/equilibrio.js` (V118): `ventanaEquilibrio(hoy, 3)` (3 meses cerrados) y `calcularEquilibrio()` (kg/mes sin pérdidas y con sueldos, €/kg que deja cada kilo, g por bandeja, escenarios); lo calcula `equilibrioActual(aprov, linea)` (V120, también lo usa el Dashboard) y lo pinta `renderEquilibrio()` dentro de `renderRentabilidad()` con lo entregado (no lo facturado) y los costes de `calcularRentabilidad`. Supuestos en el estado `eqCfg` (localStorage `rf_equilibrio`).
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
-- Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`BotonFoto` V121: cámara del móvil, úsalo junto a cualquier subida de foto; `Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)` (V104: lee por páginas de 1.000, sin límite de filas).
+- Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`BotonFoto` V121: cámara del móvil, úsalo junto a cualquier subida de foto; `Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)` (V104: lee por páginas de 1.000, sin límite de filas; ⚠️ V123: `data` empieza como `[]`, no `null`: para saber si ya cargó usa su `loading`).
 - `AuthProvider` + `LoginPage` (Supabase Auth, dominio permitido `rootflow.es`).
 - **Usuarios y permisos (V105)**: `user_profiles` (rol, activo, permisos jsonb, socio). `ROLES_ERP` / `SECCIONES_ERP` / `seccionesDePerfil()` deciden qué secciones ve cada uno (`puedeVer(seccion)` oculta el menú y la sección). En la BD, todas las políticas exigen `usuario_activo()` (cuentas nuevas desactivadas hasta que un admin las active) y solo `es_admin()` cambia roles/permisos. Si añades una sección nueva, añádela a `SECCIONES_ERP` y a los roles que la deban ver. **Historial**: trigger `auditar_cambios()` en las tablas principales (añade el trigger a las tablas nuevas importantes); `registrarAuditoria()` solo para notas con explicación; se consulta en Ajustes → Historial (no con `useRealtime`).
 - `MainApp` (línea ~713) contiene **todo lo demás**: estados, datos, helpers, formularios y secciones. Navegación por `activeSection` (`dashboard`, `pedidos`, `albaranes`, `facturacion`, `gastos`, `contabilidad`, `produccion`, `planificacion`, `calendario`, `clientes`, `tarifas`, `leads`, `desarrollo`, …). Cada sección se pinta con una función `renderXxx()` y algunas tienen pestañas con su propio estado (p. ej. `gastosTab`).

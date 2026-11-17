@@ -1786,8 +1786,8 @@ const MainApp = () => {
   const { data: leadsData, setData: setLeadsData, refetch: refetchLeads } = useRealtime('leads');
   const { data: productosData, loading: l2, refetch: refetchProductos } = useRealtime('productos');
   const { data: pedidosData, loading: l3, refetch: refetchPedidos } = useRealtime('pedidos');
-  const { data: pedidoItemsData, refetch: refetchPedidoItems } = useRealtime('pedido_items');
-  const { data: facturasData, refetch: refetchFacturas } = useRealtime('facturas');
+  const { data: pedidoItemsData, loading: cargandoPedidoItems, refetch: refetchPedidoItems } = useRealtime('pedido_items');
+  const { data: facturasData, loading: cargandoFacturas, refetch: refetchFacturas } = useRealtime('facturas');
   const { data: gastosData, refetch: refetchGastos } = useRealtime('gastos');
   const { data: facturasRecibidasData, refetch: refetchFacturasRecibidas } = useRealtime('facturas_recibidas'); // V85
   const { data: movimientosBancoData, refetch: refetchMovimientosBanco } = useRealtime('movimientos_banco'); // V91
@@ -1864,8 +1864,8 @@ const MainApp = () => {
   // V56 - Slack
   const { data: configSlackData, refetch: refetchConfigSlack } = useRealtime('config_slack');
   // V58 - Albaranes
-  const { data: albaranesData, refetch: refetchAlbaranes } = useRealtime('albaranes');
-  const { data: albaranPedidosData, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
+  const { data: albaranesData, loading: cargandoAlbaranes, refetch: refetchAlbaranes } = useRealtime('albaranes');
+  const { data: albaranPedidosData, loading: cargandoAlbaranPedidos, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
   // V83 - Ajustes del sistema (envío automático de facturas)
   const { data: ajustesSistemaData, refetch: refetchAjustesSistema } = useRealtime('ajustes_sistema');
   // V82 - Solicitudes de ampliación enviadas desde el área de cliente
@@ -25411,9 +25411,13 @@ SELECT cron.schedule(
   const autoControlHechas = useRef(new Set());
   useEffect(() => {
     const arreglables = controlFacturas.descuadres.filter(d => !d.enviada && !facturaBloqueadaStripe(d.factura)
-      && String(d.factura.fecha || '') >= '2026-10-01' && !autoControlHechas.current.has(d.factura.id));
+      && String(d.factura.fecha || '') >= '2026-10-01' && !autoControlHechas.current.has(d.factura.id)
+      && !(d.esperado.fuente === 'pedido' && pedidos.find(p => p.id === d.factura.pedido_id)?.albaran_principal_id)); // V123: si el pedido tiene albarán, nunca se recalcula «con el pedido» en automático
     const clave = arreglables.map(d => `${d.factura.id}:${d.esperado.total}`).join('|');
-    if (!clave || autoControlEnCurso.current || autoControlFacturasRef.current === clave || !albaranesData || !albaranPedidosData || !pedidoItemsData) return;
+    // V123: useRealtime empieza con [] (no null): hay que esperar a que TODO esté cargado. Antes, con los albaranes aún
+    // vacíos, se recalculaba con las líneas del pedido (sin portes) y la factura iba y venía entre pedido y albarán.
+    const cargando = cargandoFacturas || cargandoAlbaranes || cargandoAlbaranPedidos || cargandoPedidoItems || l1 || l3;
+    if (cargando || !clave || autoControlEnCurso.current || autoControlFacturasRef.current === clave || !albaranesData || !albaranPedidosData || !pedidoItemsData) return;
     autoControlFacturasRef.current = clave;
     autoControlEnCurso.current = true;
     (async () => {
@@ -25421,7 +25425,7 @@ SELECT cron.schedule(
       finally { autoControlEnCurso.current = false; }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controlFacturas]);
+  }, [controlFacturas, cargandoFacturas, cargandoAlbaranes, cargandoAlbaranPedidos, cargandoPedidoItems, l1, l3]);
 
 
   // Fecha que decide el descuento de un albarán: la de entrega (es la que figura en la factura)
