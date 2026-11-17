@@ -11,7 +11,7 @@ import {
   Target, UserPlus, Upload, Map, Filter, Download, RefreshCw, Star, TrendingDown,
   Moon, Repeat, History, BellRing, XCircle, Settings, Navigation, ChevronDown,
   Archive, FolderDown, Tag, FileCheck, DollarSign, Percent, ClipboardList, Gift,
-  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles, Globe, ExternalLink, Inbox
+  Banknote, CalendarClock, PackageCheck, RotateCcw, Calculator, Sparkles, Globe, ExternalLink, Inbox, Camera
 } from 'lucide-react';
 import { Copy } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, ComposedChart, PieChart as RechartsPie, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
@@ -510,6 +510,36 @@ const categoriaProveedorConfig = {
 };
 
 // ==================== UI COMPONENTS ====================
+// V121: foto con la cámara del móvil. La reduce a 2.000 px en JPEG (las fotos del móvil pesan 4-10 MB y la lectura con IA
+// admite hasta 5 MB) y llama a onChange como si viniera de un <input type="file">. Solo se ve en pantallas pequeñas.
+const comprimirFoto = async (file, max = 2000, calidad = 0.85) => {
+  if (!file || !/^image\//.test(file.type)) return file;
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    if (k >= 1 && file.size < 3 * 1024 * 1024) return file;
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', calidad));
+    if (!blob) return file;
+    return new File([blob], `foto-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jpg`, { type: 'image/jpeg' });
+  } catch { return file; }
+};
+const BotonFoto = ({ onChange, disabled = false, texto = 'Hacer foto', className = '' }) => (
+  <label className={`md:hidden inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm cursor-pointer border-2 border-orange-300 bg-orange-50 text-orange-700 active:bg-orange-100 ${disabled ? 'opacity-50 pointer-events-none' : ''} ${className}`}>
+    <Camera size={18} />{texto}
+    <input type="file" accept="image/*" capture="environment" className="hidden" disabled={disabled}
+      onChange={async e => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        const foto = await comprimirFoto(f);
+        onChange({ target: { files: [foto], value: '' } });
+      }} />
+  </label>
+);
+
 const Card = ({ children, className = "", onClick }) => (
   <div onClick={onClick} className={`bg-white rounded-2xl border border-neutral-200 shadow-sm ${className}`}>
     {children}
@@ -595,6 +625,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['📷', 'Desde el móvil, el botón «Hacer foto» abre la cámara: haz la foto de la factura o del ticket y se sube sola (Gastos, Recibos TPV y reembolsos).'], // V121
   ['⚖️', 'En Rentabilidad, el panel «Punto de equilibrio» dice cuántos kg al mes hay que vender para no perder dinero y para pagar sueldos, con el ritmo de los 3 últimos meses.'], // V118
   ['🌙', 'Pulsa la luna de arriba a la derecha para el modo oscuro: se aplica a todo el ERP y se recuerda en este dispositivo.'], // V117
   ['🧾', 'Una factura enviada no se borra ni se edita: usa «↩️ Rectificar y reemitir» y el ERP hace la rectificativa y la nueva.'],
@@ -2845,6 +2876,7 @@ const MainApp = () => {
             <input type="file" multiple accept="application/pdf,image/jpeg,image/png,image/webp" className="hidden" disabled={subiendoFacturas}
               onChange={e => { subirFacturasRecibidas(e.target.files); e.target.value = ''; }} />
           </label>
+          <BotonFoto disabled={subiendoFacturas} texto="Foto de la factura" onChange={e => subirFacturasRecibidas(e.target.files)} />{/* V121 */}
         </div>
         {visibles.length > 0 && (
           <div className="mt-3 space-y-2">
@@ -9232,10 +9264,11 @@ ${pedidoLinea ? `^FO260,258
                 {uploading === 'factura' ? (
                   <><Loader2 size={24} className="animate-spin text-orange-500" /><span className="text-neutral-600">Subiendo...</span></>
                 ) : (
-                  <><Upload size={24} className="text-neutral-400" /><span className="text-neutral-600">Click para adjuntar PDF o imagen</span></>
+                  <><Upload size={24} className="text-neutral-400" /><span className="text-neutral-600">Adjuntar PDF o imagen</span></>
                 )}
               </label>
             )}
+            {!form.factura_url && <BotonFoto className="mt-2 w-full" disabled={uploading === 'factura'} texto="Hacer foto de la factura" onChange={(e) => uploadFile(e, 'factura')} />}{/* V121 */}
           </div>
           
           <div>
@@ -9259,6 +9292,7 @@ ${pedidoLinea ? `^FO260,258
                 )}
               </label>
             )}
+            {!form.justificante_pago_url && <BotonFoto className="mt-2 w-full" disabled={uploading === 'justificante'} texto="Hacer foto del justificante" onChange={(e) => uploadFile(e, 'justificante')} />}{/* V121 */}
             <p className="text-xs text-neutral-500 mt-1">💡 Útil para auditorías y deducción de IVA. Si todavía no has pagado, déjalo vacío.</p>
           </div>
         </div>
@@ -29471,6 +29505,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           ) : (
             <div>
               <input type="file" onChange={handleFileUpload} disabled={uploading} accept=".pdf,.jpg,.jpeg,.png,.webp" className="block w-full text-sm text-neutral-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-green-500 file:text-white file:font-semibold hover:file:bg-green-600 file:cursor-pointer" />
+              <BotonFoto className="mt-2 w-full" disabled={uploading} texto="Hacer foto del ticket" onChange={handleFileUpload} />{/* V121 */}
               {uploading && <p className="text-xs text-green-600 mt-2">⏳ Subiendo...</p>}
             </div>
           )}
@@ -29599,6 +29634,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           ) : (
             <div>
               <input type="file" onChange={handleFileUpload} disabled={uploading} accept=".pdf,.jpg,.jpeg,.png,.webp" className="block w-full text-sm text-neutral-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-violet-500 file:text-white file:font-semibold hover:file:bg-violet-600 file:cursor-pointer" />
+              <BotonFoto className="mt-2 w-full" disabled={uploading} texto="Hacer foto del ticket" onChange={handleFileUpload} />{/* V121 */}
               {uploading && <p className="text-xs text-violet-600 mt-2 font-medium">⏳ Subiendo...</p>}
               <p className="text-xs text-violet-700 mt-2">Foto del ticket o PDF. Máx 20 MB.</p>
             </div>
