@@ -12111,7 +12111,9 @@ ${pedidoLinea ? `^FO260,258
     // ==================== LO QUE NECESITA ATENCIÓN ====================
     // V122: una remesa del TPV con el mismo importe que un recibo TPV (venta directa) de 0-4 días antes ya está explicada
     const esRemesaDeReciboTpv = (m) => /remesa|tpv/i.test(`${m.concepto || ''}`) && recibosTpv.some(r => Math.abs((Number(r.importe) || 0) - Number(m.importe)) < 0.01 && String(r.fecha || '').slice(0, 10) <= String(m.fecha).slice(0, 10) && (Date.parse(String(m.fecha).slice(0, 10)) - Date.parse(String(r.fecha).slice(0, 10))) <= 4 * 86400000);
-    const movsRevisar = movimientosBanco.filter(m => Number(m.importe) > 0 && ['sugerido', 'sin_casar'].includes(m.estado) && !esRemesaDeReciboTpv(m)).length;
+    // V124: transferencias de Stripe (ya sin comisión) casadas con su asiento STR en Tesorería
+    const movsStripe = new Set((planBanco?.filas || []).filter(f => f.estado === 'asiento' && /Stripe/.test(f.detalle || '')).map(f => f.mov.id));
+    const movsRevisar = movimientosBanco.filter(m => Number(m.importe) > 0 && ['sugerido', 'sin_casar'].includes(m.estado) && !esRemesaDeReciboTpv(m) && !movsStripe.has(m.id)).length;
     const problemasFacturas = (controlFacturas?.descuadres?.length || 0) + (controlFacturas?.duplicadas?.length || 0) + (controlFacturas?.sinFactura?.length || 0);
     const pendContab = (planBanco?.pendientes?.length || 0) + (planBanco?.revisar?.length || 0);
     const atencion = [
