@@ -306,7 +306,9 @@ export function planContabilizarBanco({ movs = [], gastos = [], aportaciones = [
     if (refs.has(`BAN-${m.id}`)) { filas.push({ ...fila, estado: 'asiento', detalle: `Asiento BAN-${m.id}` }); continue; }
     if (['conciliado', 'ya_cobrada'].includes(m.estado) && (m.factura_ids || []).length) { m.factura_ids.forEach(id => casados.add(`COB-${id}`)); filas.push({ ...fila, estado: 'cobro', detalle: `Cobro de ${(m.factura_ids || []).join(', ')}` }); continue; }
     if (compensados.has(m.id)) { filas.push({ ...fila, estado: 'compensado', detalle: imp > 0 ? 'Devolución de un adeudo: se anula con su cargo' : 'Adeudo devuelto: se anula con su devolución' }); continue; }
-    if (imp > 0 && tipo === 'stripe') {
+    // V124: la transferencia de Stripe llega ya sin la comisión y el BBVA no siempre pone «Stripe» en el concepto
+    // («ABONO POR TRANSFERENCIA A SU FAVOR RECIBIDA EN EUROS»): se casa con el asiento STR por importe y fecha, sea cual sea el tipo.
+    if (imp > 0) {
       const s = strLineas.find(x => !x.usado && Math.abs(x.importe - imp) < 0.011 && Math.abs(diasEntre(x.fecha, m.fecha)) <= 6);
       if (s) { s.usado = true; filas.push({ ...fila, estado: 'asiento', detalle: 'Transferencia de Stripe (asiento STR)' }); continue; }
     }
