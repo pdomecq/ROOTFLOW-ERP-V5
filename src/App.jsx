@@ -626,6 +626,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['🗂️', 'Al presentar un modelo (303, 111, 115, 390, 347, 200, cuentas…), sube su PDF en Contabilidad → Impuestos → «Modelos presentados»: queda guardado con quién y cuándo.'], // V126
   ['🏛️', 'Contabilidad → Impuestos (AEAT) te da las casillas del 303, 111 y 115 de cada periodo, los libros de IVA en Excel y los plazos. En «Cierre» están las cuentas anuales para el Registro.'], // V125
   ['📷', 'Desde el móvil, el botón «Hacer foto» abre la cámara: haz la foto de la factura o del ticket y se sube sola (Gastos, Recibos TPV y reembolsos).'], // V121
   ['⚖️', 'En Rentabilidad, el panel «Punto de equilibrio» dice cuántos kg al mes hay que vender para no perder dinero y para pagar sueldos, con el ritmo de los 3 últimos meses.'], // V118
@@ -30893,7 +30894,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
   const fiscalPresentados = (() => { try { return JSON.parse(ajusteSistema('fiscal_presentados', '{}') || '{}'); } catch { return {}; } })();
   const marcarPresentado = async (clave, datos) => {
     const nuevo = { ...fiscalPresentados };
-    if (datos) nuevo[clave] = { ...datos, por: user?.email || '', el: new Date().toISOString().slice(0, 10) }; else delete nuevo[clave];
+    if (datos) nuevo[clave] = { ...(nuevo[clave] || {}), ...datos, por: user?.email || '', el: new Date().toISOString().slice(0, 10) }; else delete nuevo[clave]; // V126: conserva los documentos subidos
     await guardarAjusteSistema('fiscal_presentados', JSON.stringify(nuevo));
   };
   const vidaUtilGasto = (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10;
@@ -30933,6 +30934,62 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       ['Facturas expedidas', ex.map(f => ({ 'Fecha expedición': f.fecha, 'Fecha operación': f.fecha, 'Tipo factura': f.tipoFactura, 'Número': f.numero, 'Factura rectificada': f.rectifica || '', 'NIF destinatario': f.nif, 'Nombre destinatario': f.cliente, 'Base imponible': f.base, 'Tipo IVA %': f.tipo, 'Cuota IVA': f.cuota, 'Tipo RE %': f.reTipo || '', 'Cuota RE': f.reCuota || '', 'Total factura': f.total }))],
       ['Facturas recibidas', re.map(g => ({ 'Fecha expedición': g.fecha, 'Fecha registro': g.fecha, 'Número factura': g.numero, 'NIF emisor': g.nif, 'Nombre emisor': g.proveedor, 'Concepto': g.concepto, 'Cuenta': g.cuenta, 'Base imponible': g.base, 'Tipo IVA %': g.tipo, 'Cuota soportada': g.cuota, 'Cuota deducible': g.cuota, 'Bien de inversión': g.inversion ? 'Sí' : '', 'Retención %': g.retencionPct || '', 'Retención': g.retencion || '', 'Total factura': g.total, 'Avisos': [g.sinFactura ? 'Sin factura adjunta' : '', g.intracom ? 'Proveedor de otro país de la UE' : '', g.abono ? 'Abono' : ''].filter(Boolean).join(' · ') }))],
     ], `Libros-IVA-${p.clave}.xlsx`);
+  };
+
+  // V126: archivo de cada modelo presentado (PDF de la AEAT, justificante de pago, depósito de cuentas…) guardado en el ERP
+  const claveObligacion = (o, anio) => o.modelo === '303' ? `303|${o.periodo}` : o.modelo === '111 · 115' ? `111-115|${o.periodo}` : `${o.modelo}|${anio}`;
+  const subirDocumentoModelo = async (clave, file, anio) => {
+    if (!file) return;
+    const url = await subirArchivoFacturasGastos(file, `modelos/${anio}/${clave.replace(/[|·\s]+/g, '-')}`);
+    if (!url) return;
+    const previo = fiscalPresentados[clave] || {};
+    const archivos = [...(previo.archivos || []), { url, nombre: file.name, subido: new Date().toISOString().slice(0, 10), por: user?.email || '' }];
+    const nuevo = { ...fiscalPresentados, [clave]: { ...previo, el: previo.el || new Date().toISOString().slice(0, 10), por: previo.por || user?.email || '', archivos } };
+    await guardarAjusteSistema('fiscal_presentados', JSON.stringify(nuevo));
+  };
+  const quitarDocumentoModelo = async (clave, idx) => {
+    if (!window.confirm('¿Quitar este documento de la lista? (el archivo sigue guardado en el almacén)')) return;
+    const previo = fiscalPresentados[clave] || {};
+    const archivos = (previo.archivos || []).filter((_, i) => i !== idx);
+    await guardarAjusteSistema('fiscal_presentados', JSON.stringify({ ...fiscalPresentados, [clave]: { ...previo, archivos } }));
+  };
+  const renderDocumentosPresentados = (anio, soloMercantil = false) => {
+    const hoy = new Date().toISOString().slice(0, 10);
+    const MERCANTIL = ['Cuentas', 'Registro', 'Junta', 'Depósito', '200'];
+    const lista = calendarioObligaciones(anio, ajusteSistema('iva_mensual_desde', ''))
+      .filter(o => soloMercantil ? MERCANTIL.includes(o.modelo) : !MERCANTIL.includes(o.modelo) || o.modelo === '200');
+    return (
+      <Card className="p-4">
+        <h3 className="font-bold text-neutral-900">🗂️ {soloMercantil ? 'Documentos del cierre y del Registro' : 'Modelos presentados'} · {anio}</h3>
+        <p className="text-sm text-neutral-600 mb-3">Sube aquí el PDF de cada modelo presentado (y el justificante de pago o de presentación): queda guardado con quién y cuándo lo subió.</p>
+        <div className="space-y-1.5">
+          {lista.map(o => {
+            const clave = claveObligacion(o, anio);
+            const reg = fiscalPresentados[clave];
+            const docs = reg?.archivos || [];
+            const presentado = !!reg && (reg.importe !== undefined || docs.length);
+            return (
+              <div key={clave + o.texto} className={`flex flex-wrap items-center gap-2 p-2.5 rounded-xl border ${presentado ? 'bg-emerald-50 border-emerald-200' : o.fecha < hoy ? 'bg-red-50 border-red-200' : 'bg-neutral-50 border-neutral-200'}`}>
+                <span className="font-mono text-xs font-bold px-2 py-1 rounded-lg bg-white border min-w-[4.5rem] text-center">{o.modelo}</span>
+                <span className="flex-1 min-w-[12rem] text-sm">{o.texto}<span className="block text-xs text-neutral-500">Plazo: {formatDate(o.fecha)}{presentado ? ` · ✓ ${reg.importe !== undefined && reg.importe !== null ? `${formatCurrency(reg.importe)} · ` : ''}${reg.nrc ? `${reg.nrc} · ` : ''}${reg.el ? formatDate(reg.el) : ''}${reg.por ? ` · ${reg.por.split('@')[0]}` : ''}` : o.fecha < hoy ? ' · ⚠️ sin presentar' : ''}</span></span>
+                <span className="flex flex-wrap items-center gap-1.5">
+                  {docs.map((d, i) => (
+                    <span key={d.url} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border text-xs">
+                      <a href={d.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline max-w-[10rem] truncate">📄 {d.nombre}</a>
+                      <button onClick={() => quitarDocumentoModelo(clave, i)} className="text-neutral-400 hover:text-red-600" title="Quitar">×</button>
+                    </span>
+                  ))}
+                  <label className="px-2 py-1 rounded-lg border bg-white text-xs font-semibold cursor-pointer hover:bg-neutral-50">📎 Subir
+                    <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; subirDocumentoModelo(clave, f, anio); }} />
+                  </label>
+                  <BotonFoto texto="Foto" className="!px-2 !py-1 !text-xs !border" onChange={e => subirDocumentoModelo(clave, e.target.files?.[0], anio)} />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+    );
   };
 
   const renderImpuestosAEAT = () => {
@@ -31050,7 +31107,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" onClick={() => excelLibrosIVA(fd, sel)}><Download size={14} />Libros de IVA (Excel)</Button>
               {fiscalPresentados[`303|${sel.clave}`]
-                ? <Button size="sm" variant="secondary" onClick={() => { if (window.confirm('¿Quitar la marca de presentado?')) marcarPresentado(`303|${sel.clave}`, null); }}>✓ Presentado{fiscalPresentados[`303|${sel.clave}`].nrc ? ` · ${fiscalPresentados[`303|${sel.clave}`].nrc}` : ''}</Button>
+                ? <Button size="sm" variant="secondary" onClick={() => { if (window.confirm('¿Quitar la marca de presentado? (también se quita la lista de documentos subidos)')) marcarPresentado(`303|${sel.clave}`, null); }}>✓ Presentado{fiscalPresentados[`303|${sel.clave}`].nrc ? ` · ${fiscalPresentados[`303|${sel.clave}`].nrc}` : ''}</Button>
                 : <Button size="sm" onClick={() => presentar(`303|${sel.clave}`, sel.importe)}>Marcar como presentado</Button>}
               {existeAsiento(refLiq)
                 ? <Button size="sm" variant="secondary" onClick={() => deshacerAsientoBanco(refLiq, 'Se podrá volver a crear.')}>Borrar asiento de liquidación</Button>
@@ -31155,6 +31212,8 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             </div>
           </div>
         </Card>
+        {renderDocumentosPresentados(fiscalAnio)}{/* V126 */}
+        {fiscalAnio === new Date().getFullYear() && [...facturas, ...gastos].some(x => String(x.fecha || '').startsWith(String(fiscalAnio - 1))) && renderDocumentosPresentados(fiscalAnio - 1)}{/* el año anterior, solo si hubo actividad */}
       </div>
     );
   };
@@ -31295,6 +31354,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </div>
           <p className="text-xs text-neutral-500 mt-2">💡 Legalización: libro diario y libro de inventarios y cuentas anuales (están en el Excel), más el libro de actas y el registro de socios, en la web de Registradores (Legalia) con el certificado del administrador. Depósito de cuentas: con el programa D2 del Registro o la gestoría, con el balance y la PyG abreviados de aquí, la memoria abreviada y el certificado de aprobación de la junta.</p>
         </Card>
+        {renderDocumentosPresentados(anio, true)}{/* V126 */}
       </div>
     );
   };
