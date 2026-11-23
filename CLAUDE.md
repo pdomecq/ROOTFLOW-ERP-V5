@@ -28,14 +28,14 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 
 ## Versionado (seguir siempre)
 
-- Cada entrega es una versión **Vnn**. La última es **V124**; la siguiente es **V125**. Apúntala en `docs/HISTORIAL.md`.
-- Marca el código nuevo o cambiado con comentarios `// V125: ...` (igual que el resto del archivo).
-- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V125-<NOMBRE>.sql`:
+- Cada entrega es una versión **Vnn**. La última es **V125**; la siguiente es **V126**. Apúntala en `docs/HISTORIAL.md`.
+- Marca el código nuevo o cambiado con comentarios `// V126: ...` (igual que el resto del archivo).
+- Si el cambio necesita base de datos, crea `supabase/sql/ROOTFLOW-SQL-V126-<NOMBRE>.sql`:
   - idempotente (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` antes de `CREATE POLICY`);
   - tabla nueva = columna `created_at TIMESTAMPTZ DEFAULT NOW()` (obligatoria: `useRealtime` ordena por ella y sin ella la tabla carga sin ordenar) + RLS activado + política `FOR ALL TO authenticated USING (true) WITH CHECK (true)` (**sin `anon`**, aunque los SQL antiguos lo pusieran: ver PENDIENTES) + añadirla a la publicación `supabase_realtime` (copia el bloque `DO $$ … $$` de `supabase/sql/historico/ROOTFLOW-SQL-V80-COMPRAS-PARTICULARES.sql`);
-  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V125 OK — …' AS resultado;`.
+  - termina con `NOTIFY pgrst, 'reload schema';` y `SELECT 'V126 OK — …' AS resultado;`.
 - El SQL lo ejecuta Peri en el SQL Editor de Supabase (salvo que tengas una herramienta de Supabase conectada y te lo pida). Díselo siempre al final.
-- Mensaje de commit: `V125: <resumen corto>`.
+- Mensaje de commit: `V126: <resumen corto>`.
 
 ## Arquitectura de `src/App.jsx`
 
@@ -54,6 +54,7 @@ No hay tests automáticos. Para lógica nueva no trivial (cálculos de importes,
 - `src/dashboard.js` (V109): cifras del Dashboard (`periodoDashboard`, `ventasEntregadas` por fecha de entrega, `resumenVentas` facturado, `cobradoEntre`, `resumenCobros` por cobrar con antigüedad, `pendienteFacturar` — V119: separa `atrasados` de `enEspera` de su factura agrupada según `clientes.periodicidad_facturacion`; úsala para cualquier «sin facturar», también en Albaranes). `renderDashboard()` las junta con el `useMemo` `dashRent` (Rentabilidad del periodo y 12 meses, solo con el Dashboard abierto). Una factura cobrable = `esFacturaVenta(f)` y estado `pendiente`/`vencida` (no existe `estado_pago`).
 - `src/graficosRentabilidad.js` (V110): `puenteBeneficio` (EBITDA anterior → actual por volumen, precio, portes y costes), `puenteResultados`, `barrasCascada` y `rioCaja` (Sankey de los movimientos del banco); los pintan `renderCascada()` y `renderRio()` (SVG) en Rentabilidad. V111: en el río la tarjeta es un paso intermedio (salen las compras con `tarjeta_empresa` por categoría) y los gastos `socio_*` entran como «Pagado por los socios»; CAPEX aparte. Consejos de la pantalla de carga: `CONSEJOS_ERP` (añade uno cuando hagas una función nueva). ⚠️ En `App.jsx` `Map` es el icono de lucide: usa `new globalThis.Map(...)` o un objeto.
 - `src/equilibrio.js` (V118): `ventanaEquilibrio(hoy, 3)` (3 meses cerrados) y `calcularEquilibrio()` (kg/mes sin pérdidas y con sueldos, €/kg que deja cada kilo, g por bandeja, escenarios); lo calcula `equilibrioActual(aprov, linea)` (V120, también lo usa el Dashboard) y lo pinta `renderEquilibrio()` dentro de `renderRentabilidad()` con lo entregado (no lo facturado) y los costes de `calcularRentabilidad`. Supuestos en el estado `eqCfg` (localStorage `rf_equilibrio`).
+- `src/fiscal.js` (V125): libros registro de IVA (`libroExpedidas` con facturas y tickets TPV, `libroRecibidas` con gastos), `periodosIVA` (trimestral o mensual desde `iva_mensual_desde`), `modelos303Anio` (casillas y compensaciones), `modelo111y115`, `resumenAnual` (390/180/190), `modelo347`, `saldosCuentas`, `amortizacionAnual`, `impuestoSociedades`, `asientosCierre` (REG/CIE/APE), `cuentasAnuales` (abreviadas), `calendarioObligaciones`. Lo pintan `renderImpuestosAEAT()` y `renderCierreEjercicio()` (pestañas de Contabilidad, estado `contaTab`). Presentados en el ajuste `fiscal_presentados` (JSON). Referencias de asientos: LIQ-303-<periodo>, AMO-, IS-, REG-, CIE-, APE-.
 - `src/rentabilidad.js` (V86): cálculo puro de la cuenta de resultados analítica (margen bruto, EBITDA, EBIT) por mes, variedad, línea y cliente; lo usa `renderRentabilidad()`. Si añades una categoría de gasto, clasifícala en `CLASIFICACION_PYG`. Pruébalo en Node con datos reales antes de tocarlo.
 - `portal-cliente` (V83) también genera los PDF de facturas y albaranes y envía las facturas por email (Resend, con el PDF adjunto); el ERP la llama con `invocarPortal({ accion: 'admin_…' })`. Lleva una copia de `EMPRESA`: si cambias `src/empresa.js`, cámbiala también allí.
 - Arriba de `App.jsx` (fuera de componentes): constantes globales `SOCIOS`, `TIPOS_IVA`, `IVA_VENTAS = 4`, `RE_VENTAS = 0.5`, `categoriasGasto`, `categoriaProveedorConfig`, componentes UI (`BotonFoto` V121: cámara del móvil, úsalo junto a cualquier subida de foto; `Card`, `Button`, `Input`, `Select`, `Badge`, `Modal`, `StatCard`, `EmptyState`) y el hook `useRealtime(tabla)` (V104: lee por páginas de 1.000, sin límite de filas; ⚠️ V123: `data` empieza como `[]`, no `null`: para saber si ya cargó usa su `loading`).
