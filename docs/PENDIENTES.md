@@ -2,6 +2,16 @@
 
 Revisado el 22-oct-2026 contra el código (V80), Supabase y Vercel. Ordenado por prioridad. Al cerrar un punto, bórralo de aquí y anótalo en `HISTORIAL.md`.
 
+## 0. 🔴 Contabilidad e impuestos (V125)
+
+- **IVA mensual desde enero (REDEME)**: el administrador tiene que presentar el **modelo 036** pidiendo el alta en el Registro de Devolución Mensual **antes del 30 de noviembre** para que valga desde el 1-ene-2027. Obliga a llevar el **SII** (libros de IVA enviados a la AEAT en 4 días): decidir con la gestoría quién lo envía. Con el alta, poner en Contabilidad → Impuestos «IVA mensual desde 2027-01».
+- **Capital social**: no hay cuenta 100 en la contabilidad. Apuntar el asiento de constitución (importe de la escritura).
+- **Patrimonio neto negativo** (~−7.000 € a nov-2026): decidir con la gestoría si las aportaciones de los socios (551, ~14.400 €) pasan a la 118 (aportaciones a fondos propios) para no estar en causa de disolución.
+- **NIF de proveedores**: casi ninguno tiene CIF en el ERP (hace falta en los libros de IVA y en el 347).
+- **Proveedores de la UE** (MP Seeds en Polonia, Anthropic en Irlanda): darse de alta en el ROI (NIF-IVA intracomunitario), pedir facturas sin IVA y autoliquidar (303 casillas 10-13 y 36-37 + modelo 349). Hoy su IVA está como deducible y no lo es.
+- **22 gastos con IVA sin factura adjunta** (240 € de IVA): adjuntarlas o no deducir ese IVA.
+- Marcar en Impuestos los 303 / 111 / 115 ya presentados (1T-3T 2026) con su NRC.
+
 ## 1. 🟠 Seguridad: lo que queda tras la V104
 
 - ✅ (V104) Las tablas ya solo se leen y modifican con sesión iniciada.

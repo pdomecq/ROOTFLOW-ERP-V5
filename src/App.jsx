@@ -22,6 +22,7 @@ import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { periodoAnterior, puenteBeneficio, puenteResultados, barrasCascada, rioCaja } from './graficosRentabilidad.js'; // V110
 import { ventanaEquilibrio, calcularEquilibrio } from './equilibrio.js'; // V118
+import { periodosIVA, periodosRetenciones, libroExpedidas, libroRecibidas, modelos303Anio, modelo111y115, resumenAnual, modelo347, saldosCuentas, resultadoContable, amortizacionAnual, impuestoSociedades, asientosCierre, cuentasAnuales, asientosDescuadrados, calendarioObligaciones } from './fiscal.js'; // V125
 import { periodoDashboard, resumenVentas, resumenCobros, pendienteFacturar, cobradoEntre, ventasEntregadas, variacion } from './dashboard.js'; // V109
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
 import { calcularAprovisionamientos, TIPOS_MATERIAL } from './aprovisionamientos.js'; // V88
@@ -625,6 +626,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['🏛️', 'Contabilidad → Impuestos (AEAT) te da las casillas del 303, 111 y 115 de cada periodo, los libros de IVA en Excel y los plazos. En «Cierre» están las cuentas anuales para el Registro.'], // V125
   ['📷', 'Desde el móvil, el botón «Hacer foto» abre la cámara: haz la foto de la factura o del ticket y se sube sola (Gastos, Recibos TPV y reembolsos).'], // V121
   ['⚖️', 'En Rentabilidad, el panel «Punto de equilibrio» dice cuántos kg al mes hay que vender para no perder dinero y para pagar sueldos, con el ritmo de los 3 últimos meses.'], // V118
   ['🌙', 'Pulsa la luna de arriba a la derecha para el modo oscuro: se aplica a todo el ERP y se recuerda en este dispositivo.'], // V117
@@ -903,6 +905,11 @@ const MainApp = () => {
   // V118: supuestos del panel de punto de equilibrio (sueldo por socio, nº de socios y objetivo de g por bandeja), recordados en el dispositivo
   const [eqCfg, setEqCfg] = useState(() => { try { return { sueldoSocio: 1500, socios: 3, objetivoG: 250, ...JSON.parse(localStorage.getItem('rf_equilibrio') || '{}') }; } catch { return { sueldoSocio: 1500, socios: 3, objetivoG: 250 }; } });
   const cambiarEqCfg = (campo, valor) => setEqCfg(c => { const n = { ...c, [campo]: Math.max(0, Number(valor) || 0) }; try { localStorage.setItem('rf_equilibrio', JSON.stringify(n)); } catch { /* sin almacenamiento */ } return n; });
+  // V125: Contabilidad → pestañas Impuestos (AEAT) y Cierre
+  const [contaTab, setContaTab] = useState('resumen');
+  const [fiscalAnio, setFiscalAnio] = useState(() => new Date().getFullYear());
+  const [fiscalPeriodo, setFiscalPeriodo] = useState('');
+  const [cierreTrabajando, setCierreTrabajando] = useState(false);
   const [rentVerPuente, setRentVerPuente] = useState(false); // V114: el puente de beneficio va plegado
   const [rentVerTabla, setRentVerTabla] = useState({}); // V110: ver los gráficos como tabla
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
@@ -1399,6 +1406,17 @@ const MainApp = () => {
   const PLAN_CUENTAS = {
     // Grupo 1 - Financiación básica
     '100': { nombre: 'Capital social', tipo: 'P', grupo: '1' },
+    // V125: cuentas de los asientos de impuestos y cierre
+    '118': { nombre: 'Aportaciones de socios o propietarios', tipo: 'P', grupo: '1' },
+    '2812': { nombre: 'Amortización acumulada de instalaciones técnicas', tipo: 'A', grupo: '2' },
+    '2813': { nombre: 'Amortización acumulada de maquinaria', tipo: 'A', grupo: '2' },
+    '2816': { nombre: 'Amortización acumulada de mobiliario', tipo: 'A', grupo: '2' },
+    '2817': { nombre: 'Amortización acumulada de equipos informáticos', tipo: 'A', grupo: '2' },
+    '2818': { nombre: 'Amortización acumulada de elementos de transporte', tipo: 'A', grupo: '2' },
+    '2819': { nombre: 'Amortización acumulada de otro inmovilizado material', tipo: 'A', grupo: '2' },
+    '4700': { nombre: 'H.P. deudora por IVA', tipo: 'A', grupo: '4' },
+    '4752': { nombre: 'H.P. acreedora por impuesto sobre sociedades', tipo: 'P', grupo: '4' },
+    '6300': { nombre: 'Impuesto corriente', tipo: 'G', grupo: '6' },
     '112': { nombre: 'Reserva legal', tipo: 'P', grupo: '1' },
     '113': { nombre: 'Reservas voluntarias', tipo: 'P', grupo: '1' },
     '120': { nombre: 'Remanente', tipo: 'P', grupo: '1' },
@@ -2662,8 +2680,8 @@ const MainApp = () => {
         { asiento_id: nuevoAsiento.id, cuenta: cuentaGasto, concepto: nombreCuenta, debe: base, haber: 0 },
       ];
       
-      // Solo añadir línea de IVA si hay IVA
-      if (iva > 0) {
+      // Solo añadir línea de IVA si hay IVA (V125: también si es negativo, en un abono del proveedor)
+      if (Math.abs(iva) >= 0.005) {
         lineas.push({ asiento_id: nuevoAsiento.id, cuenta: '472', concepto: desglose.explicito ? 'H.P. IVA Soportado' : `H.P. IVA Soportado (${ivaPorcentaje}%)`, debe: iva, haber: 0 });
       }
       
@@ -2674,6 +2692,8 @@ const MainApp = () => {
       
       lineas.push({ asiento_id: nuevoAsiento.id, cuenta: cuentaPago, concepto: conceptoPago, debe: 0, haber: importeTotal });
       
+      // V125: un abono (importe negativo) da importes negativos: se pasan al lado contrario para que el asiento cuadre
+      lineas.forEach(l => { if (l.debe < 0 || l.haber < 0) { const d = l.debe, h = l.haber; l.debe = h < 0 ? -h : 0; l.haber = d < 0 ? -d : 0; if (d > 0) l.debe = d; if (h > 0) l.haber = h; } });
       console.log('Insertando líneas de gasto:', lineas);
       
       const { data: lineasCreadas, error: errorLineas } = await supabase.from('asiento_lineas').insert(lineas).select();
@@ -30865,6 +30885,420 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
   };
 
   // ==================== CONTABILIDAD ====================
+  // ==================== V125: IMPUESTOS (AEAT) Y CIERRE DEL EJERCICIO ====================
+  // Cálculo en src/fiscal.js (probado en Node). Libros registro de IVA desde las facturas, los tickets del TPV y los
+  // gastos; casillas de los modelos 303, 111, 115, 390, 180, 190 y 347; estimación del 200; asientos de liquidación
+  // del IVA, amortización, impuesto, regularización, cierre y apertura; cuentas anuales abreviadas para el Registro.
+  const r2f = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const fiscalPresentados = (() => { try { return JSON.parse(ajusteSistema('fiscal_presentados', '{}') || '{}'); } catch { return {}; } })();
+  const marcarPresentado = async (clave, datos) => {
+    const nuevo = { ...fiscalPresentados };
+    if (datos) nuevo[clave] = { ...datos, por: user?.email || '', el: new Date().toISOString().slice(0, 10) }; else delete nuevo[clave];
+    await guardarAjusteSistema('fiscal_presentados', JSON.stringify(nuevo));
+  };
+  const vidaUtilGasto = (g) => g.vida_util_anios || categoriasGasto[g.categoria]?.amortizacion || 10;
+  const datosFiscales = (anio) => {
+    const mensualDesde = ajusteSistema('iva_mensual_desde', '');
+    const desde = `${anio}-01-01`, hasta = `${anio}-12-31`;
+    const expedidas = libroExpedidas({ facturas, clientes, recibosTpv, desde, hasta });
+    const recibidas = libroRecibidas({ gastos, proveedores, categorias: categoriasGasto, desglose: desgloseGasto, desde, hasta });
+    // Lo pendiente de compensar del año anterior (si en su último periodo no se pidió la devolución)
+    const exAnt = libroExpedidas({ facturas, clientes, recibosTpv, desde: `${anio - 1}-01-01`, hasta: `${anio - 1}-12-31` });
+    const reAnt = libroRecibidas({ gastos, proveedores, categorias: categoriasGasto, desglose: desgloseGasto, desde: `${anio - 1}-01-01`, hasta: `${anio - 1}-12-31` });
+    const cadAnt = exAnt.length || reAnt.length ? modelos303Anio({ periodos: periodosIVA(anio - 1, mensualDesde), expedidas: exAnt, recibidas: reAnt, redemeDesde: mensualDesde }) : [];
+    const aCompensarInicial = cadAnt.length ? cadAnt[cadAnt.length - 1].aCompensarDespues : 0;
+    const periodos = periodosIVA(anio, mensualDesde);
+    const cadena = modelos303Anio({ periodos, expedidas, recibidas, aCompensarInicial, redemeDesde: mensualDesde });
+    const retenciones = periodosRetenciones(anio).map(p => ({ ...p, ...modelo111y115(recibidas.filter(g => g.fecha >= p.desde && g.fecha <= p.hasta)) }));
+    return { anio, mensualDesde, expedidas, recibidas, cadena, retenciones, anual: resumenAnual({ expedidas, recibidas, cadena303: cadena }), m347: modelo347({ expedidas, recibidas }) };
+  };
+  const crearAsientoFiscal = async (datos) => {
+    const num = await generarIdSecuencial('asientos_contables', 'A', 1, 'numero');
+    const r = await crearAsientoBanco(datos, num);
+    refetchAsientos(); refetchAsientoLineas();
+    if (!r.ok) { alert('❌ No se pudo crear el asiento: ' + r.error); return false; }
+    if (r.omitido) { alert(`El asiento ${datos.referencia} ya existe. Bórralo primero si quieres rehacerlo.`); return false; }
+    return true;
+  };
+  const existeAsiento = (ref) => asientosDB.some(a => a.referencia === ref);
+  const exportarExcel = (hojas, nombre) => {
+    const wb = XLSX.utils.book_new();
+    for (const [titulo, filas] of hojas) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas.length ? filas : [{ '': 'Sin datos' }]), titulo.slice(0, 31));
+    XLSX.writeFile(wb, nombre);
+  };
+  const excelLibrosIVA = (fd, p) => {
+    const ex = fd.expedidas.filter(f => f.fecha >= p.desde && f.fecha <= p.hasta);
+    const re = fd.recibidas.filter(g => g.fecha >= p.desde && g.fecha <= p.hasta);
+    exportarExcel([
+      ['Facturas expedidas', ex.map(f => ({ 'Fecha expedición': f.fecha, 'Fecha operación': f.fecha, 'Tipo factura': f.tipoFactura, 'Número': f.numero, 'Factura rectificada': f.rectifica || '', 'NIF destinatario': f.nif, 'Nombre destinatario': f.cliente, 'Base imponible': f.base, 'Tipo IVA %': f.tipo, 'Cuota IVA': f.cuota, 'Tipo RE %': f.reTipo || '', 'Cuota RE': f.reCuota || '', 'Total factura': f.total }))],
+      ['Facturas recibidas', re.map(g => ({ 'Fecha expedición': g.fecha, 'Fecha registro': g.fecha, 'Número factura': g.numero, 'NIF emisor': g.nif, 'Nombre emisor': g.proveedor, 'Concepto': g.concepto, 'Cuenta': g.cuenta, 'Base imponible': g.base, 'Tipo IVA %': g.tipo, 'Cuota soportada': g.cuota, 'Cuota deducible': g.cuota, 'Bien de inversión': g.inversion ? 'Sí' : '', 'Retención %': g.retencionPct || '', 'Retención': g.retencion || '', 'Total factura': g.total, 'Avisos': [g.sinFactura ? 'Sin factura adjunta' : '', g.intracom ? 'Proveedor de otro país de la UE' : '', g.abono ? 'Abono' : ''].filter(Boolean).join(' · ') }))],
+    ], `Libros-IVA-${p.clave}.xlsx`);
+  };
+
+  const renderImpuestosAEAT = () => {
+    const fd = datosFiscales(fiscalAnio);
+    const hoy = new Date().toISOString().slice(0, 10);
+    const eur = (n) => formatCurrency(n || 0);
+    const sel = fd.cadena.find(p => p.clave === fiscalPeriodo) || fd.cadena.find(p => p.plazo >= hoy) || fd.cadena[fd.cadena.length - 1];
+    const estadoDe = (clave, plazo) => fiscalPresentados[clave] ? { txt: '✓ Presentado', cls: 'text-emerald-700' } : plazo < hoy ? { txt: '⚠️ Fuera de plazo', cls: 'text-red-600 font-semibold' } : { txt: 'Pendiente', cls: 'text-neutral-600' };
+    const exP = fd.expedidas.filter(f => f.fecha >= sel.desde && f.fecha <= sel.hasta);
+    const reP = fd.recibidas.filter(g => g.fecha >= sel.desde && g.fecha <= sel.hasta);
+    const sinFactura = reP.filter(g => g.sinFactura && g.cuota);
+    const intracom = reP.filter(g => g.intracom);
+    const sinNif = [...new Set([...exP.filter(f => f.tipoFactura !== 'F2' && !f.nif).map(f => f.cliente), ...reP.filter(g => !g.nif).map(g => g.proveedor)])];
+    // Cuadre con la contabilidad: IVA del 303 frente a las cuentas 477 y 472 del periodo (sin la liquidación)
+    const sP = saldosCuentas(asientosDB, asientoLineasDB, { desde: sel.desde, hasta: sel.hasta, excluirRefs: ['LIQ-303', 'REG-', 'CIE-', 'APE-'] });
+    const c477 = -(sP['477'] || 0), c472 = sP['472'] || 0;
+    const cas = sel.casillas;
+    const refLiq = `LIQ-303-${sel.clave}`;
+    const proximas = calendarioObligaciones(fiscalAnio, fd.mensualDesde).concat(calendarioObligaciones(fiscalAnio - 1, fd.mensualDesde)).filter(o => o.fecha >= hoy).sort((a, b) => a.fecha.localeCompare(b.fecha)).slice(0, 6);
+    const Cas = ({ n, label, v, fuerte }) => (
+      <div className={`flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg ${fuerte ? 'bg-neutral-100 font-bold' : ''}`}>
+        <span className="text-sm"><span className="inline-block min-w-[2.2rem] font-mono text-xs text-neutral-500">[{n}]</span>{label}</span>
+        <span className="tabular-nums text-sm">{typeof v === 'number' ? (String(n) === '02' || String(n) === '05' || String(n) === '08' || String(n) === '17' ? `${v} %` : eur(v)) : v}</span>
+      </div>
+    );
+    const contabilizarLiquidacion = async () => {
+      const dev = r2f(cas['27']), ded = r2f(cas['45']), res = r2f(dev - ded);
+      if (!window.confirm(`Asiento de liquidación del IVA de ${sel.label} (${refLiq}):\n\n477 IVA repercutido: ${eur(dev)} (debe)\n472 IVA soportado: ${eur(ded)} (haber)\n${res >= 0 ? `4750 H.P. acreedora por IVA: ${eur(res)} (haber)` : `4700 H.P. deudora por IVA: ${eur(-res)} (debe)`}\n\n¿Crear?`)) return;
+      const lineas = [
+        { cuenta: '477', concepto: 'H.P. IVA repercutido', debe: dev, haber: 0 },
+        { cuenta: '472', concepto: 'H.P. IVA soportado', debe: 0, haber: ded },
+        res >= 0 ? { cuenta: '4750', concepto: 'H.P. acreedora por IVA', debe: 0, haber: res } : { cuenta: '4700', concepto: 'H.P. deudora por IVA', debe: -res, haber: 0 },
+      ].filter(l => l.debe || l.haber);
+      if (await crearAsientoFiscal({ fecha: sel.hasta, concepto: `Liquidación del IVA ${sel.label} (modelo 303)`, referencia: refLiq, lineas })) alert('✅ Asiento de liquidación creado.');
+    };
+    const presentar = async (clave, importePropuesto) => {
+      const importe = window.prompt(`Importe del modelo ${clave.split('|')[0]} presentado (negativo si sale a devolver o compensar):`, String(importePropuesto ?? ''));
+      if (importe === null) return;
+      const nrc = window.prompt('Número de justificante o NRC (opcional):', '') || '';
+      await marcarPresentado(clave, { importe: Number(String(importe).replace(',', '.')) || 0, nrc });
+    };
+    const mensual = !!fd.mensualDesde;
+    return (
+      <div className="space-y-5">
+        <Card className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-neutral-900">🏛️ Impuestos {fiscalAnio}</h3>
+              <p className="text-sm text-neutral-600">IVA {mensual ? `mensual desde ${fd.mensualDesde}` : 'trimestral'} · retenciones (111 y 115) trimestrales · todo sale de las facturas, los tickets del TPV y los gastos del ERP</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <select value={fiscalAnio} onChange={e => { setFiscalAnio(Number(e.target.value)); setFiscalPeriodo(''); }} className="px-3 py-2 rounded-xl border bg-white">
+                {[0, 1, 2].map(k => new Date().getFullYear() + 1 - k).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <label className="flex items-center gap-1">IVA mensual desde
+                <input type="month" value={fd.mensualDesde} onChange={e => guardarAjusteSistema('iva_mensual_desde', e.target.value)} className="px-2 py-1.5 rounded-xl border bg-white" />
+              </label>
+              {mensual && <button onClick={() => guardarAjusteSistema('iva_mensual_desde', '')} className="text-xs text-neutral-500 underline">volver a trimestral</button>}
+            </div>
+          </div>
+          <div className="mt-3 p-3 rounded-xl bg-sky-50 border border-sky-200 text-sm text-sky-900 space-y-1">
+            <p><strong>IVA cada mes (REDEME):</strong> os conviene porque casi siempre os sale a devolver (compráis con IVA del 21 % y vendéis al 4 %). Hoy lo que sobra se acumula y Hacienda solo lo devuelve tras el 4.º trimestre; en el REDEME se pide la devolución <strong>cada mes</strong>.</p>
+            <p>Cómo: el administrador (Nico) presenta el <strong>modelo 036</strong> pidiendo el alta en el Registro de Devolución Mensual; si se pide en <strong>noviembre</strong>, vale desde el 1 de enero. ⚠️ Obliga a llevar los libros de IVA por el <strong>SII</strong> (enviar cada factura a la AEAT en 4 días hábiles): lo puede hacer la gestoría o un programa con SII. Cuando os den el alta, pon arriba «IVA mensual desde 2027-01».</p>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">📅 Próximas obligaciones</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {proximas.map(o => {
+              const dias = Math.round((Date.parse(o.fecha) - Date.parse(hoy)) / 86400000);
+              const hecho = o.periodo && (fiscalPresentados[`303|${o.periodo}`] && o.modelo === '303' || fiscalPresentados[`111-115|${o.periodo}`] && o.modelo !== '303');
+              return (
+                <div key={`${o.modelo}-${o.fecha}-${o.texto}`} className={`flex items-center gap-3 p-2.5 rounded-xl border ${hecho ? 'bg-emerald-50 border-emerald-200' : dias <= 10 ? 'bg-amber-50 border-amber-200' : 'bg-neutral-50 border-neutral-200'}`}>
+                  <span className="font-mono text-xs font-bold px-2 py-1 rounded-lg bg-white border min-w-[4.5rem] text-center">{o.modelo}</span>
+                  <span className="flex-1 text-sm">{o.texto}</span>
+                  <span className="text-xs text-right whitespace-nowrap">{formatDate(o.fecha)}<br /><span className={hecho ? 'text-emerald-700' : dias <= 10 ? 'text-amber-700 font-semibold' : 'text-neutral-500'}>{hecho ? '✓ hecho' : `en ${dias} días`}</span></span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">🧾 IVA · modelo 303</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs text-neutral-500 border-b border-neutral-200"><th className="py-2 pr-2">Periodo</th><th className="py-2 px-2">Plazo</th><th className="py-2 px-2 text-right">IVA ventas [27]</th><th className="py-2 px-2 text-right">IVA compras [45]</th><th className="py-2 px-2 text-right">Resultado [71]</th><th className="py-2 px-2">Estado</th><th></th></tr></thead>
+              <tbody>
+                {fd.cadena.map(p => {
+                  const e = estadoDe(`303|${p.clave}`, p.plazo);
+                  return (
+                    <tr key={p.clave} className={`border-b border-neutral-100 ${p.clave === sel.clave ? 'bg-orange-50' : ''}`}>
+                      <td className="py-2 pr-2 font-semibold capitalize">{p.label}</td>
+                      <td className="py-2 px-2">{formatDate(p.plazo)}</td>
+                      <td className="py-2 px-2 text-right tabular-nums">{eur(p.casillas['27'])}</td>
+                      <td className="py-2 px-2 text-right tabular-nums">{eur(p.casillas['45'])}</td>
+                      <td className={`py-2 px-2 text-right tabular-nums font-bold ${p.resultado === 'ingresar' ? 'text-red-600' : 'text-emerald-700'}`}>{eur(Math.abs(p.importe))} <span className="text-xs font-normal">{p.resultado === 'ingresar' ? 'a pagar' : p.resultado === 'devolver' ? 'a devolver' : p.resultado === 'compensar' ? 'a compensar' : ''}</span></td>
+                      <td className={`py-2 px-2 ${e.cls}`}>{e.txt}</td>
+                      <td className="py-2 pl-2 text-right"><button onClick={() => setFiscalPeriodo(p.clave)} className="px-2 py-1 rounded-lg border text-xs font-semibold hover:bg-neutral-50">Ver</button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <Card className="p-4 border-2 border-orange-200">
+          <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+            <div>
+              <h3 className="font-bold text-neutral-900 capitalize">Modelo 303 · {sel.label}</h3>
+              <p className="text-sm text-neutral-600">{exP.length} facturas y tickets emitidos · {reP.length} facturas recibidas · plazo hasta el {formatDate(sel.plazo)}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" onClick={() => excelLibrosIVA(fd, sel)}><Download size={14} />Libros de IVA (Excel)</Button>
+              {fiscalPresentados[`303|${sel.clave}`]
+                ? <Button size="sm" variant="secondary" onClick={() => { if (window.confirm('¿Quitar la marca de presentado?')) marcarPresentado(`303|${sel.clave}`, null); }}>✓ Presentado{fiscalPresentados[`303|${sel.clave}`].nrc ? ` · ${fiscalPresentados[`303|${sel.clave}`].nrc}` : ''}</Button>
+                : <Button size="sm" onClick={() => presentar(`303|${sel.clave}`, sel.importe)}>Marcar como presentado</Button>}
+              {existeAsiento(refLiq)
+                ? <Button size="sm" variant="secondary" onClick={() => deshacerAsientoBanco(refLiq, 'Se podrá volver a crear.')}>Borrar asiento de liquidación</Button>
+                : <Button size="sm" variant="secondary" onClick={contabilizarLiquidacion}>Contabilizar la liquidación</Button>}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-neutral-500 mb-1">IVA devengado (ventas)</p>
+              {cas['01'] != null && <><Cas n="01" label="Base al 4 %" v={cas['01']} /><Cas n="03" label="Cuota al 4 %" v={cas['03']} /></>}
+              {cas['04'] != null && <><Cas n="04" label="Base al 10 %" v={cas['04']} /><Cas n="06" label="Cuota al 10 %" v={cas['06']} /></>}
+              {cas['07'] != null && <><Cas n="07" label="Base al 21 %" v={cas['07']} /><Cas n="09" label="Cuota al 21 %" v={cas['09']} /></>}
+              {cas['14'] != null && <><Cas n="14" label="Modificación de bases (rectificativas)" v={cas['14']} /><Cas n="15" label="Modificación de cuotas" v={cas['15']} /></>}
+              {cas['16'] != null && <><Cas n="16" label="Recargo de equivalencia: base al 0,5 %" v={cas['16']} /><Cas n="18" label="Cuota del recargo" v={cas['18']} /></>}
+              <Cas n="27" label="Total cuota devengada" v={cas['27']} fuerte />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-neutral-500 mb-1">IVA deducible (compras)</p>
+              <Cas n="28" label="Operaciones interiores corrientes: base" v={cas['28'] || 0} /><Cas n="29" label="Cuota" v={cas['29'] || 0} />
+              {cas['30'] != null && <><Cas n="30" label="Bienes de inversión: base" v={cas['30']} /><Cas n="31" label="Cuota" v={cas['31']} /></>}
+              {cas['40'] != null && <><Cas n="40" label="Rectificación de deducciones (abonos): base" v={cas['40']} /><Cas n="41" label="Cuota" v={cas['41']} /></>}
+              <Cas n="45" label="Total a deducir" v={cas['45']} fuerte />
+              <div className="mt-2 pt-2 border-t border-neutral-200">
+                <Cas n="46" label="Resultado del régimen general" v={cas['46']} />
+                <Cas n="110" label="Cuotas a compensar de periodos anteriores" v={cas['110']} />
+                <Cas n="78" label="Cuotas a compensar aplicadas en este periodo" v={cas['78']} />
+                <Cas n="87" label="Cuotas a compensar para periodos posteriores" v={sel.aCompensarDespues} />
+                <Cas n="71" label={sel.resultado === 'ingresar' ? 'Resultado: a ingresar' : sel.resultado === 'devolver' ? 'Resultado: a devolver (casilla 73)' : sel.resultado === 'compensar' ? 'Resultado: a compensar (casilla 72)' : 'Resultado: cero (se presenta igual)'} v={cas['71']} fuerte />
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 space-y-1.5 text-sm">
+            {Math.abs(c477 - cas['27']) > 0.05 || Math.abs(c472 - cas['45']) > 0.05
+              ? <p className="text-amber-700">⚠️ La contabilidad del periodo no cuadra con el 303: 477 = {eur(c477)} (303: {eur(cas['27'])}), 472 = {eur(c472)} (303: {eur(cas['45'])}). Revisa asientos sin factura o facturas sin asiento antes de presentar.</p>
+              : <p className="text-emerald-700">✓ Cuadra con la contabilidad (cuentas 477 y 472 del periodo).</p>}
+            {sinFactura.length > 0 && <p className="text-amber-700">⚠️ {sinFactura.length} gasto(s) con IVA sin la factura adjunta ({eur(sinFactura.reduce((t, g) => t + g.cuota, 0))} de IVA): sin factura no se puede deducir. Adjúntala en Gastos: {sinFactura.slice(0, 4).map(g => `${formatDate(g.fecha)} ${g.proveedor}`).join(' · ')}{sinFactura.length > 4 ? '…' : ''}</p>}
+            {intracom.length > 0 && <p className="text-amber-700">⚠️ {intracom.length} factura(s) de proveedores de otro país de la UE ({[...new Set(intracom.map(g => g.proveedor))].join(', ')}): el IVA extranjero no se deduce en España. Con el NIF-IVA (ROI) se piden sin IVA y se autoliquidan (casillas 10-13 y 36-37) y van en el modelo 349. Consúltalo con la gestoría.</p>}
+            {sinNif.length > 0 && <p className="text-amber-700">⚠️ Sin NIF/CIF (hace falta en los libros y en el 347): {sinNif.slice(0, 8).join(', ')}{sinNif.length > 8 ? ` y ${sinNif.length - 8} más` : ''}. Rellénalo en Clientes y Proveedores.</p>}
+          </div>
+          <p className="text-xs text-neutral-500 mt-2">💡 Casillas del modelo 303 de la AEAT: pásalas en la Sede electrónica (Presentación → formulario 303) o envía el Excel de libros a la gestoría. Tras presentarlo, márcalo y pulsa «Contabilizar la liquidación»: el IVA del periodo pasa de las cuentas 477 y 472 a la 4750 (a pagar) o la 4700 (a devolver o compensar); el pago o la devolución en el banco se contabiliza contra esa cuenta.</p>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">👥 Retenciones · modelos 111 (profesionales) y 115 (alquiler)</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs text-neutral-500 border-b border-neutral-200"><th className="py-2 pr-2">Trimestre</th><th className="py-2 px-2">Plazo</th><th className="py-2 px-2 text-right">115: base [02]</th><th className="py-2 px-2 text-right">115: a ingresar [03]</th><th className="py-2 px-2 text-right">111: base [08]</th><th className="py-2 px-2 text-right">111: a ingresar [09]</th><th className="py-2 px-2">Estado</th><th></th></tr></thead>
+              <tbody>
+                {fd.retenciones.map(p => {
+                  const clave = `111-115|${p.clave}`;
+                  const vacio = !p.m115['03'] && !p.m111['09'];
+                  const e = vacio ? { txt: 'Sin retenciones', cls: 'text-neutral-400' } : estadoDe(clave, p.plazo);
+                  return (
+                    <tr key={p.clave} className="border-b border-neutral-100">
+                      <td className="py-2 pr-2 font-semibold">{p.label}</td>
+                      <td className="py-2 px-2">{formatDate(p.plazo)}</td>
+                      <td className="py-2 px-2 text-right tabular-nums">{eur(p.m115['02'])}</td>
+                      <td className="py-2 px-2 text-right tabular-nums font-semibold">{eur(p.m115['03'])}</td>
+                      <td className="py-2 px-2 text-right tabular-nums">{eur(p.m111['08'])}</td>
+                      <td className="py-2 px-2 text-right tabular-nums font-semibold">{eur(p.m111['09'])}</td>
+                      <td className={`py-2 px-2 ${e.cls}`}>{e.txt}</td>
+                      <td className="py-2 pl-2 text-right">{!vacio && (fiscalPresentados[clave]
+                        ? <button onClick={() => { if (window.confirm('¿Quitar la marca de presentado?')) marcarPresentado(clave, null); }} className="px-2 py-1 rounded-lg border text-xs">Desmarcar</button>
+                        : <button onClick={() => presentar(clave, r2f(p.m115['03'] + p.m111['09']))} className="px-2 py-1 rounded-lg border text-xs font-semibold hover:bg-neutral-50">Presentado</button>)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-neutral-500 mt-2">💡 115: casilla 01 = nº de arrendadores (1: Bellbro). 111: casilla 07 = nº de profesionales. La retención se apunta en la 4751 al registrar el gasto; el pago a Hacienda en el banco va contra la 4751.</p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+            <h3 className="font-bold text-neutral-900">📆 Resúmenes anuales {fiscalAnio}</h3>
+            <Button size="sm" variant="secondary" onClick={() => exportarExcel([
+              ['390 resumen IVA', [fd.anual.m390].map(m => ({ 'Base ventas': m.baseVentas, 'IVA devengado': m.cuotaVentas, 'Base compras': m.baseCompras, 'IVA deducible': m.cuotaDeducible, 'Volumen de operaciones': m.volumenOperaciones, 'Ingresado en el año': m.ingresado, 'A devolver': m.aDevolver, 'A compensar al año siguiente': m.aCompensarFinal }))],
+              ['347 terceros', fd.m347.map(x => ({ Clave: x.clave, NIF: x.nif, Nombre: x.nombre, Provincia: x.provincia, 'Importe anual': x.total, '1T': x.trimestres[0], '2T': x.trimestres[1], '3T': x.trimestres[2], '4T': x.trimestres[3] }))],
+              ['180 alquiler', fd.anual.m180.map(x => ({ NIF: x.nif, Arrendador: x.nombre, Base: x.base, Retención: x.retencion }))],
+              ['190 profesionales', fd.anual.m190.map(x => ({ NIF: x.nif, Perceptor: x.nombre, Clave: 'G', Base: x.base, Retención: x.retencion }))],
+              ['Libro expedidas año', fd.expedidas.map(f => ({ Fecha: f.fecha, Tipo: f.tipoFactura, Número: f.numero, NIF: f.nif, Cliente: f.cliente, Base: f.base, 'IVA %': f.tipo, Cuota: f.cuota, RE: f.reCuota || '', Total: f.total }))],
+              ['Libro recibidas año', fd.recibidas.map(g => ({ Fecha: g.fecha, Número: g.numero, NIF: g.nif, Proveedor: g.proveedor, Concepto: g.concepto, Base: g.base, 'IVA %': g.tipo, Cuota: g.cuota, Retención: g.retencion || '', Total: g.total }))],
+            ], `Resumenes-anuales-${fiscalAnio}.xlsx`)}><Download size={14} />Excel (390, 347, 180, 190 y libros)</Button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+              <p className="font-bold mb-1">390 · resumen anual del IVA</p>
+              <p>Ventas: {eur(fd.anual.m390.baseVentas)} · IVA {eur(fd.anual.m390.cuotaVentas)}</p>
+              <p>Compras: {eur(fd.anual.m390.baseCompras)} · IVA {eur(fd.anual.m390.cuotaDeducible)}</p>
+              <p>Pagado en el año: {eur(fd.anual.m390.ingresado)} · a devolver: <strong>{eur(fd.anual.m390.aDevolver)}</strong></p>
+            </div>
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+              <p className="font-bold mb-1">347 · terceros de más de 3.005,06 €</p>
+              {fd.m347.length ? fd.m347.map(x => <p key={x.clave + x.nombre}>{x.clave === 'B' ? 'Cliente' : 'Proveedor'}: {x.nombre} · {eur(x.total)}{!x.nif ? <span className="text-amber-700"> · falta NIF</span> : ''}</p>) : <p className="text-neutral-500">Nadie supera el límite.</p>}
+            </div>
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+              <p className="font-bold mb-1">180 y 190 · retenciones del año</p>
+              {fd.anual.m180.map(x => <p key={'a' + x.nombre}>180 · {x.nombre}: {eur(x.base)} · ret. {eur(x.retencion)}</p>)}
+              {fd.anual.m190.map(x => <p key={'p' + x.nombre}>190 · {x.nombre}: {eur(x.base)} · ret. {eur(x.retencion)}</p>)}
+              {!fd.anual.m180.length && !fd.anual.m190.length && <p className="text-neutral-500">Sin retenciones.</p>}
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderCierreEjercicio = () => {
+    const anio = fiscalAnio;
+    const hoy = new Date().toISOString().slice(0, 10);
+    const eur = (n) => formatCurrency(n || 0);
+    const fin = `${anio}-12-31`;
+    // Saldos del año sin los asientos de cierre (y los acumulados hasta el 31-dic, sin cierre ni apertura posteriores)
+    const sinCierre = ['REG-', 'CIE-', 'APE-'];
+    const sAnio = saldosCuentas(asientosDB, asientoLineasDB, { desde: `${anio}-01-01`, hasta: fin, excluirRefs: sinCierre });
+    const sAcum = saldosCuentas(asientosDB, asientoLineasDB, { hasta: fin, excluirRefs: ['CIE-', 'APE-', `REG-${anio}`] });
+    const amort = amortizacionAnual({ gastos, categorias: categoriasGasto, desglose: desgloseGasto, anio, vidaUtil: vidaUtilGasto });
+    const amortHecha = existeAsiento(`AMO-${anio}`);
+    const resultadoAntes = r2f(resultadoContable(sAnio) - (amortHecha ? 0 : amort.total) + (sAnio['6300'] || 0) + (sAnio['630'] || 0));
+    const tipoIS = Number(ajusteSistema('is_tipo', '15')) || 15;
+    const binPrevias = Number(ajusteSistema(`is_bin_${anio}`, '0')) || 0;
+    const is = impuestoSociedades({ resultadoAntes, binPendientes: binPrevias, tipo: tipoIS });
+    const ca = cuentasAnuales(sAcum, sAnio);
+    const desc = asientosDescuadrados(asientosDB.filter(a => String(a.fecha).slice(0, 4) === String(anio)), asientoLineasDB);
+    const sinCapital = !Object.keys(sAcum).some(c => /^10/.test(c));
+    const pasos = [
+      { ref: `AMO-${anio}`, titulo: '1. Amortización del inmovilizado', detalle: `${amort.filas.length} inversiones · ${eur(amort.total)} (681 contra ${Object.keys(amort.porCuenta).join(', ') || '281x'})`, crear: () => crearAsientoFiscal({ fecha: fin, concepto: `Amortización del inmovilizado ${anio}`, referencia: `AMO-${anio}`, lineas: [
+        { cuenta: '681', concepto: 'Amortización del inmovilizado material', debe: amort.total, haber: 0 },
+        ...Object.entries(amort.porCuenta).map(([c, v]) => ({ cuenta: c, concepto: 'Amortización acumulada del inmovilizado material', debe: 0, haber: v })),
+      ] }), puede: amort.total > 0 },
+      { ref: `IS-${anio}`, titulo: '2. Impuesto sobre Sociedades', detalle: is.cuota > 0 ? `Cuota ${eur(is.cuota)} (6300 contra 4752)` : `Sin cuota: ${is.binNueva ? `pérdida de ${eur(is.binNueva)} a compensar en los próximos años` : 'base cero'}`, crear: () => crearAsientoFiscal({ fecha: fin, concepto: `Impuesto sobre Sociedades ${anio}`, referencia: `IS-${anio}`, lineas: [
+        { cuenta: '6300', concepto: 'Impuesto corriente', debe: is.cuota, haber: 0 }, { cuenta: '4752', concepto: 'H.P. acreedora por impuesto sobre sociedades', debe: 0, haber: is.cuota },
+      ] }), puede: is.cuota > 0 },
+      { ref: `REG-${anio}`, titulo: '3. Regularización (gastos e ingresos a resultados)', detalle: 'Lleva los saldos de los grupos 6 y 7 a la 129', crear: () => { const c = asientosCierre(saldosCuentas(asientosDB, asientoLineasDB, { desde: `${anio}-01-01`, hasta: fin, excluirRefs: sinCierre }), anio); return crearAsientoFiscal(c.reg); }, puede: true },
+      { ref: `CIE-${anio}`, titulo: '4. Asiento de cierre', detalle: 'Deja todas las cuentas a cero a 31 de diciembre', crear: () => { const c = asientosCierre(saldosCuentas(asientosDB, asientoLineasDB, { hasta: fin, excluirRefs: ['CIE-', 'APE-'] }), anio); return crearAsientoFiscal(c.cie); }, puede: true },
+      { ref: `APE-${anio + 1}`, titulo: '5. Asiento de apertura', detalle: `Reabre los saldos el 1 de enero de ${anio + 1}`, crear: () => { const c = asientosCierre(saldosCuentas(asientosDB, asientoLineasDB, { hasta: fin, excluirRefs: ['CIE-', 'APE-'] }), anio); return crearAsientoFiscal(c.ape); }, puede: true },
+    ];
+    const B = ca.balance, P = ca.pyg;
+    const Fila = ({ t, v, fuerte, sangria }) => <div className={`flex justify-between gap-2 py-1 ${fuerte ? 'font-bold border-t border-neutral-200 mt-1 pt-1.5' : ''} ${sangria ? 'pl-4 text-neutral-700' : ''}`}><span>{t}</span><span className="tabular-nums">{eur(v)}</span></div>;
+    const excelCuentas = () => exportarExcel([
+      ['Balance abreviado', [
+        ['A) ACTIVO NO CORRIENTE', B.activoNC.total], ['I. Inmovilizado intangible', B.activoNC.intangible], ['II. Inmovilizado material', B.activoNC.material], ['V. Inversiones financieras a largo plazo', B.activoNC.financieroLP],
+        ['B) ACTIVO CORRIENTE', B.activoC.total], ['II. Existencias', B.activoC.existencias], ['III. Deudores comerciales: clientes', B.activoC.clientes], ['III. Otros deudores', B.activoC.otrosDeudores], ['VI. Efectivo', B.activoC.efectivo],
+        ['TOTAL ACTIVO', B.sumaActivo],
+        ['A) PATRIMONIO NETO', B.patrimonio.total], ['A-1) Fondos propios', B.patrimonio.fondosPropios], ['I. Capital', B.patrimonio.capital], ['III. Reservas', B.patrimonio.reservas], ['V. Resultados de ejercicios anteriores', B.patrimonio.anteriores], ['VII. Resultado del ejercicio', B.patrimonio.resultado], ['A-3) Subvenciones', B.patrimonio.subvenciones],
+        ['B) PASIVO NO CORRIENTE', B.pasivoNC.total], ['II. Deudas a largo plazo', B.pasivoNC.deudasLP],
+        ['C) PASIVO CORRIENTE', B.pasivoC.total], ['II. Deudas a corto plazo', B.pasivoC.deudasCP], ['IV. Acreedores comerciales: proveedores', B.pasivoC.proveedores], ['IV. Otros acreedores', B.pasivoC.otrosAcreedores],
+        ['TOTAL PATRIMONIO NETO Y PASIVO', B.sumaPNP],
+      ].map(([Partida, Importe]) => ({ Partida, Importe }))],
+      ['PyG abreviada', [
+        ['1. Importe neto de la cifra de negocios', P.cifraNegocios], ['4. Aprovisionamientos', P.aprovisionamientos], ['5. Otros ingresos de explotación', P.otrosIngresos], ['6. Gastos de personal', P.personal], ['7. Otros gastos de explotación', P.otrosGastos], ['8. Amortización del inmovilizado', P.amortizacion], ['Otros resultados', P.otrosResultados],
+        ['A.1) RESULTADO DE EXPLOTACIÓN', P.explotacion], ['12. Ingresos financieros', P.ingresosFinancieros], ['13. Gastos financieros', P.gastosFinancieros], ['A.2) RESULTADO FINANCIERO', P.financiero],
+        ['A.3) RESULTADO ANTES DE IMPUESTOS', P.antesImpuestos], ['17. Impuesto sobre beneficios', P.impuesto], ['A.5) RESULTADO DEL EJERCICIO', P.resultado],
+      ].map(([Partida, Importe]) => ({ Partida, Importe }))],
+      ['Sumas y saldos', Object.entries(sAcum).sort().map(([c, v]) => ({ Cuenta: c, Nombre: PLAN_CUENTAS[c]?.nombre || '', 'Saldo deudor': v > 0 ? v : 0, 'Saldo acreedor': v < 0 ? -v : 0 }))],
+      ['Libro diario', asientosDB.filter(a => String(a.fecha).slice(0, 4) === String(anio)).sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || String(a.numero).localeCompare(String(b.numero), 'es', { numeric: true }))
+        .flatMap(a => asientoLineasDB.filter(l => l.asiento_id === a.id).map(l => ({ Asiento: a.numero, Fecha: String(a.fecha).slice(0, 10), Concepto: a.concepto, Referencia: a.referencia || '', Cuenta: l.cuenta, 'Nombre cuenta': PLAN_CUENTAS[l.cuenta]?.nombre || '', Debe: Number(l.debe) || 0, Haber: Number(l.haber) || 0 })))],
+    ], `Cuentas-anuales-y-libros-${anio}.xlsx`);
+    return (
+      <div className="space-y-5">
+        <Card className="p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-neutral-900">📕 Cierre del ejercicio {anio}</h3>
+              <p className="text-sm text-neutral-600">Hazlo en enero, con el banco y las facturas de diciembre ya metidos. Los asientos se crean en orden y se pueden borrar y rehacer.</p>
+            </div>
+            <div className="flex gap-2 items-center">
+              <select value={fiscalAnio} onChange={e => setFiscalAnio(Number(e.target.value))} className="px-3 py-2 rounded-xl border bg-white text-sm">
+                {[0, 1, 2].map(k => new Date().getFullYear() + 1 - k).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <Button size="sm" variant="secondary" onClick={excelCuentas}><Download size={14} />Cuentas anuales y libros (Excel)</Button>
+            </div>
+          </div>
+          {fin > hoy && <p className="mt-2 text-sm text-amber-700">⚠️ El ejercicio {anio} aún no ha terminado: las cifras son provisionales. No hagas el cierre hasta enero.</p>}
+          {desc.length > 0 && <p className="mt-2 text-sm text-red-600">❌ {desc.length} asiento(s) no cuadran (debe ≠ haber): {desc.slice(0, 5).map(a => `${a.numero} (${eur(a.diferencia)})`).join(', ')}. Arréglalos antes del cierre.</p>}
+          {sinCapital && <p className="mt-2 text-sm text-amber-700">⚠️ No hay capital social en la contabilidad (cuenta 100). Apunta el asiento de constitución (lo que pone la escritura: 100 Capital social contra el banco o los socios); si no, el balance sale con patrimonio negativo.</p>}
+          <div className="mt-3 space-y-2">
+            {pasos.map(p => {
+              const hecho = existeAsiento(p.ref);
+              return (
+                <div key={p.ref} className={`flex flex-wrap items-center gap-3 p-3 rounded-xl border ${hecho ? 'bg-emerald-50 border-emerald-200' : 'bg-neutral-50 border-neutral-200'}`}>
+                  <span className="flex-1 min-w-[14rem]"><span className="font-semibold">{p.titulo}</span><span className="block text-xs text-neutral-600">{p.detalle} · <span className="font-mono">{p.ref}</span></span></span>
+                  {hecho
+                    ? <><span className="text-emerald-700 text-sm font-semibold">✓ Hecho</span><button onClick={() => deshacerAsientoBanco(p.ref, 'Se podrá volver a crear.')} className="px-2 py-1 rounded-lg border bg-white text-xs">Borrar</button></>
+                    : p.puede ? <Button size="sm" disabled={cierreTrabajando} onClick={async () => { setCierreTrabajando(true); try { await p.crear(); } finally { setCierreTrabajando(false); } }}>Crear asiento</Button> : <span className="text-xs text-neutral-500">No hace falta</span>}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">🧮 Impuesto sobre Sociedades {anio} (modelo 200, estimación)</h3>
+          <div className="flex flex-wrap gap-3 text-sm items-center mb-2">
+            <label className="flex items-center gap-1">Tipo <input type="number" defaultValue={tipoIS} onBlur={e => guardarAjusteSistema('is_tipo', e.target.value)} className="w-16 px-2 py-1 rounded-lg border text-right" /> %</label>
+            <label className="flex items-center gap-1">Pérdidas de años anteriores por compensar <input type="number" defaultValue={binPrevias} onBlur={e => guardarAjusteSistema(`is_bin_${anio}`, e.target.value)} className="w-24 px-2 py-1 rounded-lg border text-right" /> €</label>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200"><p className="text-xs text-neutral-500">Resultado antes de impuestos{amortHecha ? '' : ' (con la amortización)'}</p><p className={`text-lg font-black ${resultadoAntes < 0 ? 'text-red-600' : ''}`}>{eur(resultadoAntes)}</p></div>
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200"><p className="text-xs text-neutral-500">Base imponible</p><p className="text-lg font-black">{eur(is.baseImponible)}</p></div>
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200"><p className="text-xs text-neutral-500">Cuota ({tipoIS} %)</p><p className="text-lg font-black">{eur(is.cuota)}</p></div>
+            <div className="p-3 rounded-xl bg-neutral-50 border border-neutral-200"><p className="text-xs text-neutral-500">Pérdidas a compensar después</p><p className="text-lg font-black">{eur(is.binRestante)}</p></div>
+          </div>
+          <p className="text-xs text-neutral-500 mt-2">💡 Las sociedades de nueva creación tributan al 15 % el primer año con beneficio y el siguiente. Las pérdidas de este año se compensan con los beneficios de los próximos: apúntalas el año que viene en «Pérdidas de años anteriores». Se presenta del 1 al 25 de julio. Ajustes fiscales (multas, gastos no deducibles…) los hace la gestoría.</p>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">🏛️ Cuentas anuales abreviadas a 31-12-{anio} (Registro Mercantil)</h3>
+          {Math.abs(B.descuadre) > 0.009 && <p className="text-sm text-red-600 mb-2">❌ El balance descuadra {eur(B.descuadre)}: hay asientos que no cuadran.</p>}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-sm">
+            <div>
+              <p className="font-bold mb-1">Activo</p>
+              <Fila t="A) Activo no corriente" v={B.activoNC.total} fuerte /><Fila t="Inmovilizado material" v={B.activoNC.material} sangria />{B.activoNC.intangible ? <Fila t="Inmovilizado intangible" v={B.activoNC.intangible} sangria /> : null}
+              <Fila t="B) Activo corriente" v={B.activoC.total} fuerte /><Fila t="Existencias" v={B.activoC.existencias} sangria /><Fila t="Clientes" v={B.activoC.clientes} sangria /><Fila t="Otros deudores (Hacienda, tarjeta…)" v={B.activoC.otrosDeudores} sangria /><Fila t="Efectivo" v={B.activoC.efectivo} sangria />
+              <Fila t="TOTAL ACTIVO" v={B.sumaActivo} fuerte />
+            </div>
+            <div>
+              <p className="font-bold mb-1">Patrimonio neto y pasivo</p>
+              <Fila t="A) Patrimonio neto" v={B.patrimonio.total} fuerte /><Fila t="Capital" v={B.patrimonio.capital} sangria /><Fila t="Reservas" v={B.patrimonio.reservas} sangria /><Fila t="Resultados de años anteriores" v={B.patrimonio.anteriores} sangria /><Fila t="Resultado del ejercicio" v={B.patrimonio.resultado} sangria />
+              <Fila t="B) Pasivo no corriente" v={B.pasivoNC.total} fuerte />
+              <Fila t="C) Pasivo corriente" v={B.pasivoC.total} fuerte /><Fila t="Deudas a corto (socios, tarjeta)" v={B.pasivoC.deudasCP} sangria /><Fila t="Proveedores" v={B.pasivoC.proveedores} sangria /><Fila t="Otros acreedores (Hacienda…)" v={B.pasivoC.otrosAcreedores} sangria />
+              <Fila t="TOTAL PN Y PASIVO" v={B.sumaPNP} fuerte />
+            </div>
+            <div>
+              <p className="font-bold mb-1">Pérdidas y ganancias</p>
+              <Fila t="1. Cifra de negocios" v={P.cifraNegocios} /><Fila t="4. Aprovisionamientos" v={P.aprovisionamientos} /><Fila t="5. Otros ingresos" v={P.otrosIngresos} /><Fila t="6. Gastos de personal" v={P.personal} /><Fila t="7. Otros gastos de explotación" v={P.otrosGastos} /><Fila t="8. Amortización" v={P.amortizacion} />
+              <Fila t="Resultado de explotación" v={P.explotacion} fuerte /><Fila t="Resultado financiero" v={P.financiero} />
+              <Fila t="Resultado antes de impuestos" v={P.antesImpuestos} fuerte /><Fila t="17. Impuesto sobre beneficios" v={P.impuesto} />
+              <Fila t="RESULTADO DEL EJERCICIO" v={P.resultado} fuerte />
+            </div>
+          </div>
+          {B.patrimonio.total < 0 && <p className="text-sm text-amber-700 mt-2">⚠️ Patrimonio neto negativo. Si al cerrar queda por debajo de la mitad del capital, la ley obliga a reequilibrarlo (aportaciones de los socios a fondos propios, cuenta 118) o a reducir capital. Las aportaciones que hoy están en la 551 (préstamo de los socios) pueden pasar a la 118 si no se van a devolver: decidid con la gestoría.</p>}
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="font-bold text-neutral-900 mb-2">🗂️ Registro Mercantil: qué toca y cuándo</h3>
+          <div className="space-y-1.5 text-sm">
+            {calendarioObligaciones(anio, ajusteSistema('iva_mensual_desde', '')).filter(o => ['Cuentas', 'Registro', 'Junta', 'Depósito', '200'].includes(o.modelo)).map(o => (
+              <div key={o.texto} className="flex gap-3"><span className="font-mono text-xs w-24 shrink-0 pt-0.5">{formatDate(o.fecha)}</span><span>{o.texto}</span></div>
+            ))}
+          </div>
+          <p className="text-xs text-neutral-500 mt-2">💡 Legalización: libro diario y libro de inventarios y cuentas anuales (están en el Excel), más el libro de actas y el registro de socios, en la web de Registradores (Legalia) con el certificado del administrador. Depósito de cuentas: con el programa D2 del Registro o la gestoría, con el balance y la PyG abreviados de aquí, la memoria abreviada y el certificado de aprobación de la junta.</p>
+        </Card>
+      </div>
+    );
+  };
+
   const renderContabilidad = () => {
     const year = new Date().getFullYear();
     const trimestres = [
@@ -31262,6 +31696,25 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
       });
     }
 
+    // V125: pestañas
+    const tabsContabilidad = (
+      <div className="flex flex-wrap gap-1 p-1 rounded-xl bg-neutral-100 w-fit">
+        {[['resumen', '📊 Resumen y libros'], ['impuestos', '🏛️ Impuestos (AEAT)'], ['cierre', '📕 Cierre y cuentas anuales']].map(([k, l]) => (
+          <button key={k} onClick={() => setContaTab(k)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${contaTab === k ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-600 hover:text-neutral-900'}`}>{l}</button>
+        ))}
+      </div>
+    );
+    if (contaTab !== 'resumen') return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-black text-neutral-900">Contabilidad</h1>
+          <p className="text-neutral-500 font-medium">{contaTab === 'impuestos' ? 'IVA, retenciones y modelos de la AEAT' : 'Cierre del ejercicio, impuesto de sociedades y cuentas anuales'}</p>
+        </div>
+        {tabsContabilidad}
+        {contaTab === 'impuestos' ? renderImpuestosAEAT() : renderCierreEjercicio()}
+      </div>
+    );
+
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-4">
@@ -31273,6 +31726,7 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
             <Settings size={16} /> Ajustes
           </Button>
         </div>
+        {tabsContabilidad}{/* V125 */}
 
         {/* Alertas de asesoría */}
         {alertasAsesoria.length > 0 && (
