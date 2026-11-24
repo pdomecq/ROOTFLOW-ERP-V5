@@ -17,7 +17,9 @@ const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', '
 /** Plazo de presentación de un modelo periódico (303, 111, 115) de un periodo que termina en (anio, mesFin) */
 export function plazoPeriodo(anio, mesFin, mensual) {
   if (mesFin === 12) return `${anio + 1}-01-30`;
-  if (mensual && mesFin === 7) return `${anio}-09-20`; // julio (mensuales): agosto y hasta el 20 de septiembre
+  // V127: el IVA mensual del REDEME obliga al SII, y con SII el 303 se presenta en los 30 primeros días del mes
+  // siguiente (el de enero, hasta el último día de febrero)
+  if (mensual) return mesFin === 1 ? finMes(anio, 2) : `${anio}-${pad(mesFin + 1)}-30`;
   return `${anio}-${pad(mesFin + 1)}-20`;
 }
 
@@ -342,9 +344,11 @@ export function calendarioObligaciones(anio, mensualDesde = '') {
   const out = [];
   for (const p of periodosIVA(anio, mensualDesde)) out.push({ fecha: p.plazo, modelo: '303', texto: `IVA ${p.label}`, periodo: p.clave });
   for (const p of periodosRetenciones(anio)) out.push({ fecha: p.plazo, modelo: '111 · 115', texto: `Retenciones ${p.label} (profesionales y alquiler)`, periodo: p.clave });
-  out.push({ fecha: `${anio + 1}-01-30`, modelo: '390', texto: `Resumen anual de IVA ${anio}` });
+  // V127: con el SII todo el año (IVA mensual desde enero) no se presentan el 390 ni el 347
+  const siiTodoElAnio = !!mensualDesde && mensualDesde <= `${anio}-01`;
+  if (!siiTodoElAnio) out.push({ fecha: `${anio + 1}-01-30`, modelo: '390', texto: `Resumen anual de IVA ${anio}` });
   out.push({ fecha: `${anio + 1}-01-31`, modelo: '180 · 190', texto: `Resúmenes anuales de retenciones ${anio}` });
-  out.push({ fecha: `${anio + 1}-02-28`, modelo: '347', texto: `Operaciones con terceros de ${anio} (más de 3.005,06 €)` });
+  if (!siiTodoElAnio) out.push({ fecha: `${anio + 1}-02-28`, modelo: '347', texto: `Operaciones con terceros de ${anio} (más de 3.005,06 €)` });
   out.push({ fecha: `${anio + 1}-03-31`, modelo: 'Cuentas', texto: `Formular las cuentas anuales de ${anio} (el administrador)` });
   out.push({ fecha: `${anio + 1}-04-30`, modelo: 'Registro', texto: `Legalizar los libros de ${anio} en el Registro Mercantil (diario, inventarios y cuentas anuales, actas y socios)` });
   out.push({ fecha: `${anio + 1}-06-30`, modelo: 'Junta', texto: `Junta general: aprobar las cuentas de ${anio} y el reparto del resultado` });
