@@ -22,6 +22,7 @@ import { EMPRESA, LOGO_URL, PORTAL_CLIENTE_URL } from './empresa.js'; // V82
 import { calcularRentabilidad, mesesEntre } from './rentabilidad.js'; // V86
 import { periodoAnterior, puenteBeneficio, puenteResultados, barrasCascada, rioCaja } from './graficosRentabilidad.js'; // V110
 import { ventanaEquilibrio, calcularEquilibrio } from './equilibrio.js'; // V118
+import { plazoSII, registroEmitida, registroRecibida, xmlEmitidas, xmlRecibidas } from './sii.js'; // V127
 import { periodosIVA, periodosRetenciones, libroExpedidas, libroRecibidas, modelos303Anio, modelo111y115, resumenAnual, modelo347, saldosCuentas, resultadoContable, amortizacionAnual, impuestoSociedades, asientosCierre, cuentasAnuales, asientosDescuadrados, calendarioObligaciones } from './fiscal.js'; // V125
 import { periodoDashboard, resumenVentas, resumenCobros, pendienteFacturar, cobradoEntre, ventasEntregadas, variacion } from './dashboard.js'; // V109
 import { analizarSerie, cuadreVentas, esUltimaDeSuSerie, esNumeroAnulado, esRectificativa, datosRectificativa } from './serieFacturas.js'; // V87
@@ -626,6 +627,7 @@ const Modal = ({ title, children, onClose, size = "max-w-2xl" }) => (
 
 // V111: consejos de uso del ERP en la pantalla de carga (uno al azar, cambia cada 6 s si tarda)
 const CONSEJOS_ERP = [
+  ['📡', 'Con el IVA mensual, cada factura va a Hacienda por el SII en 4 días hábiles: Contabilidad → Impuestos → «📡 SII» te dice qué falta y lo envía.'], // V127
   ['🗂️', 'Al presentar un modelo (303, 111, 115, 390, 347, 200, cuentas…), sube su PDF en Contabilidad → Impuestos → «Modelos presentados»: queda guardado con quién y cuándo.'], // V126
   ['🏛️', 'Contabilidad → Impuestos (AEAT) te da las casillas del 303, 111 y 115 de cada periodo, los libros de IVA en Excel y los plazos. En «Cierre» están las cuentas anuales para el Registro.'], // V125
   ['📷', 'Desde el móvil, el botón «Hacer foto» abre la cámara: haz la foto de la factura o del ticket y se sube sola (Gastos, Recibos TPV y reembolsos).'], // V121
@@ -911,6 +913,11 @@ const MainApp = () => {
   const [fiscalAnio, setFiscalAnio] = useState(() => new Date().getFullYear());
   const [fiscalPeriodo, setFiscalPeriodo] = useState('');
   const [cierreTrabajando, setCierreTrabajando] = useState(false);
+  // V127: SII
+  const [siiEntorno, setSiiEntorno] = useState('pruebas');
+  const [siiMes, setSiiMes] = useState(() => new Date().toISOString().slice(0, 7));
+  const [siiEnviando, setSiiEnviando] = useState(false);
+  const [siiCert, setSiiCert] = useState(null);
   const [rentVerPuente, setRentVerPuente] = useState(false); // V114: el puente de beneficio va plegado
   const [rentVerTabla, setRentVerTabla] = useState({}); // V110: ver los gráficos como tabla
   // V99: todas las tablas se pueden ordenar, filtrar y elegir columnas; las notas explicativas van en un icono ⓘ
@@ -1885,6 +1892,7 @@ const MainApp = () => {
   // V58 - Albaranes
   const { data: albaranesData, loading: cargandoAlbaranes, refetch: refetchAlbaranes } = useRealtime('albaranes');
   const { data: albaranPedidosData, loading: cargandoAlbaranPedidos, refetch: refetchAlbaranPedidos } = useRealtime('albaran_pedidos');
+  const { data: siiEnviosData, refetch: refetchSiiEnvios } = useRealtime('sii_envios'); // V127 (sin el SQL V127 llega vacía)
   // V83 - Ajustes del sistema (envío automático de facturas)
   const { data: ajustesSistemaData, refetch: refetchAjustesSistema } = useRealtime('ajustes_sistema');
   // V82 - Solicitudes de ampliación enviadas desde el área de cliente
@@ -30992,6 +31000,121 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
     );
   };
 
+  // ==================== V127: SII ====================
+  // Prepara cada factura del mes en el formato del SII (src/sii.js), enseña su plazo (4 días hábiles) y lo que le
+  // falta, y la envía a la AEAT con la función de Vercel /api/sii (certificado electrónico de la empresa).
+  const llamarSII = async (cuerpo) => {
+    const { data: ses } = await supabase.auth.getSession();
+    const r = await fetch('/api/sii', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ses?.session?.access_token || ''}` }, body: JSON.stringify(cuerpo) });
+    let j = {};
+    try { j = await r.json(); } catch { j = { error: `La función del SII no responde (HTTP ${r.status}). ¿Está desplegada en Vercel?` }; }
+    if (!r.ok && !j.error) j.error = `HTTP ${r.status}`;
+    return j;
+  };
+  const renderSII = (fd) => {
+    const titular = { nif: EMPRESA.cif, nombre: EMPRESA.nombre };
+    const hoy = new Date().toISOString().slice(0, 10);
+    const [y, m] = siiMes.split('-').map(Number);
+    const desde = `${siiMes}-01`, hasta = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    const envios = siiEnviosData || [];
+    const ultimo = (tipo, id) => envios.find(e => e.ref_tipo === tipo && String(e.ref_id) === String(id) && e.entorno === siiEntorno);
+    const fechaFactura = (id) => facturas.find(f => f.id === id)?.fecha || null;
+    const emitidas = fd.expedidas.filter(f => f.fecha >= desde && f.fecha <= hasta).map(f => {
+      const tipo = f.tipoFactura === 'F2' ? 'tpv' : 'factura';
+      const id = tipo === 'tpv' ? String(f.numero).replace('TPV-', '') : f.numero;
+      const { registro, errores } = registroEmitida({ ...f, fechaRectificada: f.rectifica ? fechaFactura(f.rectifica) : null }, titular);
+      return { libro: 'emitidas', tipo, id, numero: f.numero, fecha: f.fecha, quien: f.cliente, total: f.total, registro, errores, plazo: plazoSII(f.fecha), envio: ultimo(tipo, id) };
+    });
+    const recibidas = fd.recibidas.filter(g => g.fecha >= desde && g.fecha <= hasta && (g.cuota || g.base)).map(g => {
+      const { registro, errores } = registroRecibida(g);
+      return { libro: 'recibidas', tipo: 'gasto', id: g.gasto_id, numero: registro.numero, fecha: g.fecha, quien: g.proveedor, total: g.total, registro, errores, plazo: plazoSII(g.fecha), envio: ultimo('gasto', g.gasto_id) };
+    });
+    const todas = [...emitidas, ...recibidas];
+    const ok = (x) => ['Correcto', 'AceptadoConErrores'].includes(x.envio?.estado);
+    const pendientes = (libro) => todas.filter(x => x.libro === libro && !ok(x) && !x.errores.length);
+    const enviar = async (libro) => {
+      const lista = pendientes(libro);
+      if (!lista.length) return;
+      if (siiEntorno === 'produccion' && !window.confirm(`Vas a enviar ${lista.length} factura(s) ${libro} a la AEAT de verdad (no es una prueba). ¿Seguir?`)) return;
+      setSiiEnviando(true);
+      try {
+        const xml = libro === 'emitidas' ? xmlEmitidas(lista.map(x => x.registro), titular) : xmlRecibidas(lista.map(x => x.registro), titular);
+        const r = await llamarSII({ accion: 'enviar', libro, entorno: siiEntorno, xml, refs: lista.map(x => ({ tipo: x.tipo, id: x.id, numero: x.numero, periodo: siiMes })) });
+        refetchSiiEnvios();
+        if (r.error) alert('❌ ' + r.error);
+        else alert(`${r.estadoEnvio === 'Correcto' ? '✅' : '⚠️'} AEAT: ${r.estadoEnvio}${r.csv ? ` · CSV ${r.csv}` : ''}${r.fallo ? `\n${r.fallo}` : ''}${(r.lineas || []).filter(l => l.estado !== 'Correcto').map(l => `\n• ${l.numero}: ${l.estado} ${l.codigo || ''} ${l.descripcion || ''}`).join('')}${r.avisoGuardado ? `\n\n${r.avisoGuardado}` : ''}`);
+      } finally { setSiiEnviando(false); }
+    };
+    const descargarXml = (libro) => {
+      const lista = todas.filter(x => x.libro === libro && !x.errores.length);
+      const xml = libro === 'emitidas' ? xmlEmitidas(lista.map(x => x.registro), titular) : xmlRecibidas(lista.map(x => x.registro), titular);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([xml], { type: 'text/xml' }));
+      a.download = `SII-${libro}-${siiMes}.xml`; a.click();
+    };
+    const estadoTxt = (x) => {
+      if (ok(x)) return <span className="text-emerald-700 font-semibold">✓ {x.envio.estado === 'Correcto' ? 'Aceptada' : 'Aceptada con errores'}</span>;
+      if (x.envio) return <span className="text-red-600 font-semibold" title={x.envio.descripcion || ''}>❌ {x.envio.estado}{x.envio.codigo ? ` ${x.envio.codigo}` : ''}</span>;
+      if (x.errores.length) return <span className="text-amber-700">⚠️ {x.errores[0]}</span>;
+      return <span className={x.plazo < hoy ? 'text-red-600 font-semibold' : 'text-neutral-600'}>{x.plazo < hoy ? '⚠️ Fuera de plazo' : 'Pendiente'}</span>;
+    };
+    const mensual = !!fd.mensualDesde;
+    return (
+      <Card className="p-4">
+        <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
+          <div>
+            <h3 className="font-bold text-neutral-900">📡 SII · libros de IVA en la AEAT</h3>
+            <p className="text-sm text-neutral-600">{mensual ? `Obligatorio desde ${fd.mensualDesde}: cada factura en 4 días hábiles.` : 'Se activa con el IVA mensual (REDEME). Mientras, puedes preparar y probar los envíos en el entorno de pruebas de la AEAT.'}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <input type="month" value={siiMes} onChange={e => setSiiMes(e.target.value)} className="px-2 py-1.5 rounded-xl border bg-white" />
+            <select value={siiEntorno} onChange={e => setSiiEntorno(e.target.value)} className="px-2 py-1.5 rounded-xl border bg-white">
+              <option value="pruebas">Entorno de pruebas</option>
+              <option value="produccion">Envío real</option>
+            </select>
+            <Button size="sm" variant="secondary" onClick={async () => setSiiCert(await llamarSII({ accion: 'estado' }))}>Comprobar certificado</Button>
+          </div>
+        </div>
+        {siiCert && <p className={`text-sm mb-2 ${siiCert.ok ? 'text-emerald-700' : 'text-red-600'}`}>{siiCert.ok ? `✓ Certificado listo · envíos reales ${siiCert.produccion ? 'activados' : 'desactivados (solo pruebas)'}` : `❌ ${siiCert.error}`}</p>}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+          {['emitidas', 'recibidas'].map(l => {
+            const del = todas.filter(x => x.libro === l);
+            return (
+              <div key={l} className="p-2.5 rounded-xl bg-neutral-50 border border-neutral-200 col-span-1 md:col-span-2 flex flex-wrap items-center justify-between gap-2">
+                <span><strong className="capitalize">{l}</strong>: {del.filter(ok).length}/{del.length} aceptadas · {del.filter(x => x.errores.length).length} con datos por completar</span>
+                <span className="flex gap-1.5">
+                  <Button size="sm" variant="secondary" onClick={() => descargarXml(l)}><Download size={14} />XML</Button>
+                  <Button size="sm" disabled={siiEnviando || !pendientes(l).length} onClick={() => enviar(l)}>{siiEnviando ? 'Enviando…' : `Enviar ${pendientes(l).length}`}</Button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {todas.length === 0 ? <p className="text-sm text-neutral-500">No hay facturas en {siiMes}.</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs text-neutral-500 border-b border-neutral-200"><th className="py-2 pr-2">Libro</th><th className="py-2 px-2">Factura</th><th className="py-2 px-2">Fecha</th><th className="py-2 px-2">Cliente / proveedor</th><th className="py-2 px-2 text-right">Total</th><th className="py-2 px-2">Plazo SII</th><th className="py-2 pl-2">Estado</th></tr></thead>
+              <tbody>
+                {todas.sort((a, b) => a.fecha.localeCompare(b.fecha)).map(x => (
+                  <tr key={`${x.tipo}-${x.id}`} className="border-b border-neutral-100">
+                    <td className="py-1.5 pr-2 text-xs">{x.libro === 'emitidas' ? '↗ Emitida' : '↙ Recibida'}</td>
+                    <td className="py-1.5 px-2 font-mono text-xs">{x.numero || '—'}</td>
+                    <td className="py-1.5 px-2">{formatDate(x.fecha)}</td>
+                    <td className="py-1.5 px-2">{x.quien}</td>
+                    <td className="py-1.5 px-2 text-right tabular-nums">{formatCurrency(x.total)}</td>
+                    <td className="py-1.5 px-2">{formatDate(x.plazo)}</td>
+                    <td className="py-1.5 pl-2 text-xs">{estadoTxt(x)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-xs text-neutral-500 mt-2">💡 Para enviar hace falta el certificado electrónico de la empresa en Vercel (SII_CERT_P12 y SII_CERT_PASSWORD) y la clave service_role de Supabase (SUPABASE_SERVICE_ROLE_KEY). Primero en «Entorno de pruebas»; cuando todo salga aceptado, se activa SII_PRODUCCION=si. A las facturas de proveedor les hace falta el número de factura y el NIF del proveedor.</p>
+      </Card>
+    );
+  };
+
   const renderImpuestosAEAT = () => {
     const fd = datosFiscales(fiscalAnio);
     const hoy = new Date().toISOString().slice(0, 10);
@@ -31052,9 +31175,11 @@ h1.title-en { text-align: center; font-size: 9pt; font-style: italic; color: #66
           </div>
           <div className="mt-3 p-3 rounded-xl bg-sky-50 border border-sky-200 text-sm text-sky-900 space-y-1">
             <p><strong>IVA cada mes (REDEME):</strong> os conviene porque casi siempre os sale a devolver (compráis con IVA del 21 % y vendéis al 4 %). Hoy lo que sobra se acumula y Hacienda solo lo devuelve tras el 4.º trimestre; en el REDEME se pide la devolución <strong>cada mes</strong>.</p>
-            <p>Cómo: el administrador (Nico) presenta el <strong>modelo 036</strong> pidiendo el alta en el Registro de Devolución Mensual; si se pide en <strong>noviembre</strong>, vale desde el 1 de enero. ⚠️ Obliga a llevar los libros de IVA por el <strong>SII</strong> (enviar cada factura a la AEAT en 4 días hábiles): lo puede hacer la gestoría o un programa con SII. Cuando os den el alta, pon arriba «IVA mensual desde 2027-01».</p>
+            <p>Cómo: el administrador (Nico) presenta el <strong>modelo 036</strong> pidiendo el alta en el Registro de Devolución Mensual; si se pide en <strong>noviembre</strong>, vale desde el 1 de enero. ⚠️ Obliga a llevar los libros de IVA por el <strong>SII</strong> (enviar cada factura a la AEAT en 4 días hábiles): lo envía el ERP desde la tarjeta «📡 SII» de abajo (pasos en docs/SII.md). Cuando os den el alta, pon arriba «IVA mensual desde 2027-01».</p>
           </div>
         </Card>
+
+        {renderSII(fd)}{/* V127 */}
 
         <Card className="p-4">
           <h3 className="font-bold text-neutral-900 mb-2">📅 Próximas obligaciones</h3>
